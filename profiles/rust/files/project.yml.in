@@ -1,0 +1,28 @@
+name: Rust project checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      # CI explicitly provisions tools; initialization/local checks never install them.
+      - name: Prepare Rust toolchain and quality components
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Run strict project checks
+        run: python scripts/check.py --strict-project
+      - name: Check Release behavior
+        run: python scripts/rust_check.py --release

@@ -1,0 +1,18 @@
+{
+  "files": {
+    "CMakeLists.txt": "files/CMakeLists.txt.in",
+    "CMakePresets.json": "files/CMakePresets.json.in",
+    ".clang-format": "files/clang-format.in",
+    ".clang-tidy": "files/clang-tidy.in",
+    "include/starter/project.hpp": "files/project.hpp.in",
+    "src/project.cpp": "files/project.cpp.in",
+    "src/main.cpp": "files/main.cpp.in",
+    "tests/cpp/project_test.cpp": "files/project_test.cpp.in",
+    "scripts/cpp_check.py": "files/cpp_check.py.in",
+    "scripts/cpp_format.py": "files/cpp_format.py.in",
+    ".github/workflows/project.yml": "files/project.yml.in"
+  },
+  "quality_commands": [
+    {"name": "C++ configure, build and CTest", "argv": ["python", "scripts/cpp_check.py"], "timeout_seconds": 900}
+  ]
+}

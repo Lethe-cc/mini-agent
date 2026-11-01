@@ -1,0 +1,20 @@
+[package]
+name = "starter-app"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+# Stable starter identifiers avoid deriving Rust identifiers from repository slugs.
+[lib]
+name = "starter_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "starter-cli"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -1,0 +1,6 @@
+# Dependency-free starter lockfile; update with Cargo when the package changes.
+version = 3
+
+[[package]]
+name = "starter-app"
+version = "0.1.0"

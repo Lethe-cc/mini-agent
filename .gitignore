@@ -1,0 +1,44 @@
+# Local credentials and environments
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Third-party reference checkouts (read-only by convention, not sandboxed)
+.references/
+
+# Python and tool outputs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Common build outputs
+node_modules/
+dist/
+build/
+coverage/
+
+# Rust artifacts and explicit Go binary outputs; keep Cargo.lock tracked
+/target/
+/bin/
+
+# Local C++ configuration and IDE outputs
+CMakeUserPresets.json
+compile_commands.json
+
+# Local agent state and OS metadata
+.pi/
+.DS_Store
+
+# Windows / Visual Studio artifacts.
+# Windows is NOT a supported target platform as of template 0.4 (see
+# docs/template-maintenance.md). These patterns are kept only so that a
+# contributor working from Windows cannot accidentally commit local editor
+# or OS metadata. They are not Windows build support.
+.vs/
+*.user
+*.suo
+Thumbs.db

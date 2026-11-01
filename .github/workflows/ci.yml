@@ -1,0 +1,33 @@
+name: Template checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Baseline (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Diagnose template environment
+        run: python scripts/doctor.py
+      - name: Run template tooling only
+        # Language profiles generate project.yml with separate strict project gates.
+        # Generic projects must add business CI; this job is NOT business validation.
+        run: python scripts/check.py --tooling-only

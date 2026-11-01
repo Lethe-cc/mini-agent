@@ -1,0 +1,32 @@
+name: Linux C++ project checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  cpp:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [linux-gcc-debug, linux-gcc-release, linux-clang-debug, linux-clang-release]
+    env:
+      CPP_PRESET: ${{ matrix.preset }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      # Hosted runner toolchains are used; verify image versions against project policy.
+      - name: Inspect CMake
+        run: cmake --version
+      - name: Inspect Ninja
+        run: ninja --version
+      - name: Record GCC version
+        run: g++ --version
+      - name: Record Clang version
+        run: clang++ --version
+      - name: Run strict project checks
+        run: python scripts/check.py --strict-project

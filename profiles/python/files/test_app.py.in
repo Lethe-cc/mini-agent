@@ -1,0 +1,21 @@
+import contextlib
+import io
+import unittest
+
+from app import project_name
+from app.__main__ import main
+
+
+class AppTests(unittest.TestCase):
+    def test_project_name(self):
+        self.assertEqual(project_name(), "@@PROJECT_NAME@@")
+
+    def test_cli_output(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(), 0)
+        self.assertEqual(output.getvalue(), "@@PROJECT_NAME@@\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

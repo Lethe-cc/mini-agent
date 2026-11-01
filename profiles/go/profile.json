@@ -1,0 +1,13 @@
+{
+  "files": {
+    "go.mod": "files/go.mod.in",
+    "cmd/starter/main.go": "files/main.go.in",
+    "internal/project/name.go": "files/name.go.in",
+    "internal/project/name_test.go": "files/name_test.go.in",
+    "scripts/go_check.py": "files/go_check.py.in",
+    ".github/workflows/project.yml": "files/project.yml.in"
+  },
+  "quality_commands": [
+    {"name": "Go formatting, vet, tests and build", "argv": ["python", "scripts/go_check.py"], "timeout_seconds": 900}
+  ]
+}

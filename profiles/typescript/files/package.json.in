@@ -1,0 +1,13 @@
+{
+  "name": "@@PROJECT_NAME@@",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "node scripts/ts_check.mjs"
+  },
+  "devDependencies": {"typescript": "5.7.3"}
+}

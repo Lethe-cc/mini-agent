@@ -1,0 +1,5 @@
+"""Minimal application package; replace this starter with business behavior."""
+
+
+def project_name() -> str:
+    return "@@PROJECT_NAME@@"

@@ -1,0 +1,65 @@
+"""Check Go sources without rewriting them or downloading modules/toolchains."""
+
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+SKIP_DIRS = {".git", ".references", ".pi", ".venv", "venv", "vendor", "node_modules", "target", "build", "dist"}
+
+
+def source_files():
+    files = []
+    for directory, dirs, names in os.walk(ROOT, followlinks=False):
+        base = Path(directory)
+        dirs[:] = sorted(name for name in dirs if name not in SKIP_DIRS and not (base / name).is_symlink())
+        for name in sorted(names):
+            path = base / name
+            if path.suffix == ".go" and not path.is_symlink():
+                files.append(str(path.relative_to(ROOT)))
+    return files
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--race", action="store_true", help="enable race tests; requires a supported target and C toolchain")
+    args = parser.parse_args()
+    env = dict(os.environ, GOTOOLCHAIN="local", GOPROXY="off", GOSUMDB="off", GOWORK="off")
+    files = source_files()
+    if not files:
+        print("FAIL: no first-party Go source files found", file=sys.stderr)
+        return 1
+    try:
+        # Chunk paths to stay below command-line length limits.
+        for offset in range(0, len(files), 32):
+            command = ["gofmt", "-l", *files[offset:offset + 32]]
+            print(f"RUN {command!r}", flush=True)
+            result = subprocess.run(command, cwd=ROOT, env=env, shell=False, check=False,
+                                    capture_output=True, text=True, timeout=120)
+            if result.returncode or result.stdout.strip():
+                print(result.stdout + result.stderr, file=sys.stderr)
+                print("FAIL: gofmt errors or unformatted files (nothing rewritten)", file=sys.stderr)
+                return result.returncode or 1
+        test = ["go", "test", "-mod=readonly", "-count=1", "-timeout=120s"]
+        if args.race:
+            test.append("-race")
+        commands = [
+            ["go", "vet", "-mod=readonly", "./..."],
+            [*test, "./..."],
+            ["go", "build", "-mod=readonly", "./..."],
+        ]
+        for command in commands:
+            print(f"RUN {command!r}", flush=True)
+            result = subprocess.run(command, cwd=ROOT, env=env, shell=False, check=False, timeout=240)
+            if result.returncode:
+                return result.returncode
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

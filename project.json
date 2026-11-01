@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "template_version": "0.4.0",
+  "initialized": true,
+  "language": "cpp",
+  "name": "mini-agent",
+  "description": "a mini ai agent",
+  "stack": "C++",
+  "quality_commands": [
+    {
+      "name": "C++ configure, build and CTest",
+      "argv": [
+        "python",
+        "scripts/cpp_check.py"
+      ],
+      "timeout_seconds": 900
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "files": {
+    "package.json": "files/package.json.in",
+    "tsconfig.json": "files/tsconfig.json.in",
+    "src/index.ts": "files/index.ts.in",
+    "test/project.test.mjs": "files/project.test.mjs.in",
+    "scripts/ts_check.mjs": "files/ts_check.mjs.in",
+    ".github/workflows/project.yml": "files/project.yml.in"
+  },
+  "quality_commands": [
+    {"name": "TypeScript typecheck, build and tests", "argv": ["node", "scripts/ts_check.mjs"], "timeout_seconds": 600}
+  ]
+}

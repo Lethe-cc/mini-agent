@@ -1,0 +1,65 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {"major": 3, "minor": 23, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Ninja Debug (compiler must be available)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "BUILD_TESTING": "ON"}
+    },
+    {
+      "name": "release",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    },
+    {
+      "name": "linux-gcc-debug",
+      "displayName": "Linux GCC Debug",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/linux-gcc-debug",
+      "condition": {"type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux"},
+      "cacheVariables": {"CMAKE_CXX_COMPILER": "g++", "CMAKE_BUILD_TYPE": "Debug"}
+    },
+    {
+      "name": "linux-gcc-release",
+      "displayName": "Linux GCC Release",
+      "inherits": "linux-gcc-debug",
+      "binaryDir": "${sourceDir}/build/linux-gcc-release",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    },
+    {
+      "name": "linux-clang-debug",
+      "displayName": "Linux Clang Debug",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/linux-clang-debug",
+      "condition": {"type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux"},
+      "cacheVariables": {"CMAKE_CXX_COMPILER": "clang++", "CMAKE_BUILD_TYPE": "Debug"}
+    },
+    {
+      "name": "linux-clang-release",
+      "displayName": "Linux Clang Release",
+      "inherits": "linux-clang-debug",
+      "binaryDir": "${sourceDir}/build/linux-clang-release",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    }
+  ],
+  "buildPresets": [
+    {"name": "dev", "configurePreset": "dev"},
+    {"name": "release", "configurePreset": "release"},
+    {"name": "linux-gcc-debug", "configurePreset": "linux-gcc-debug"},
+    {"name": "linux-gcc-release", "configurePreset": "linux-gcc-release"},
+    {"name": "linux-clang-debug", "configurePreset": "linux-clang-debug"},
+    {"name": "linux-clang-release", "configurePreset": "linux-clang-release"}
+  ],
+  "testPresets": [
+    {"name": "dev", "configurePreset": "dev", "output": {"outputOnFailure": true}},
+    {"name": "release", "configurePreset": "release", "output": {"outputOnFailure": true}},
+    {"name": "linux-gcc-debug", "configurePreset": "linux-gcc-debug", "output": {"outputOnFailure": true}},
+    {"name": "linux-gcc-release", "configurePreset": "linux-gcc-release", "output": {"outputOnFailure": true}},
+    {"name": "linux-clang-debug", "configurePreset": "linux-clang-debug", "output": {"outputOnFailure": true}},
+    {"name": "linux-clang-release", "configurePreset": "linux-clang-release", "output": {"outputOnFailure": true}}
+  ]
+}

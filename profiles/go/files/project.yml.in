@@ -1,0 +1,31 @@
+name: Go project checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  go:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+      # No external modules in the starter. Add a reviewed dependency-fetch step when needed.
+      - name: Run strict project checks
+        run: python scripts/check.py --strict-project
+      - name: Race detection on supported Linux runner
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: '1'
+        run: python scripts/go_check.py --race

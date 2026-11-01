@@ -1,0 +1,12 @@
+use std::process::Command;
+
+#[test]
+fn cli_prints_project_name() {
+    let output = Command::new(env!("CARGO_BIN_EXE_starter-cli"))
+        .output()
+        .expect("starter CLI should run");
+    assert!(output.status.success());
+    let name = "@@PROJECT_NAME@@";
+    let expected = format!("{name}\n");
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+}

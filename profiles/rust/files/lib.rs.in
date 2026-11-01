@@ -1,0 +1,19 @@
+/// Returns the configured project name using static storage.
+///
+/// ```
+/// assert!(!starter_core::project_name().is_empty());
+/// ```
+pub fn project_name() -> &'static str {
+    "@@PROJECT_NAME@@"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_name;
+
+    #[test]
+    fn name_matches_configuration() {
+        let expected = "@@PROJECT_NAME@@";
+        assert_eq!(project_name(), expected);
+    }
+}

@@ -1,0 +1,7 @@
+// Package project exposes the starter application's identity.
+package project
+
+// Name returns the configured project name.
+func Name() string {
+	return "@@PROJECT_NAME@@"
+}

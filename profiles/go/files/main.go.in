@@ -1,0 +1,11 @@
+package main
+
+import (
+	"fmt"
+
+	"example.com/@@PROJECT_NAME@@/internal/project"
+)
+
+func main() {
+	fmt.Println(project.Name())
+}

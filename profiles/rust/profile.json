@@ -1,0 +1,15 @@
+{
+  "files": {
+    "Cargo.toml": "files/Cargo.toml.in",
+    "Cargo.lock": "files/Cargo.lock.in",
+    "rustfmt.toml": "files/rustfmt.toml.in",
+    "src/lib.rs": "files/lib.rs.in",
+    "src/main.rs": "files/main.rs.in",
+    "tests/cli.rs": "files/cli.rs.in",
+    "scripts/rust_check.py": "files/rust_check.py.in",
+    ".github/workflows/project.yml": "files/project.yml.in"
+  },
+  "quality_commands": [
+    {"name": "Rust formatting, Clippy, tests and build", "argv": ["python", "scripts/rust_check.py"], "timeout_seconds": 1200}
+  ]
+}

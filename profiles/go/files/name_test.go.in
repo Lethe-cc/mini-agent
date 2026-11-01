@@ -1,0 +1,13 @@
+package project_test
+
+import (
+	"testing"
+
+	"example.com/@@PROJECT_NAME@@/internal/project"
+)
+
+func TestName(t *testing.T) {
+	if got, want := project.Name(), "@@PROJECT_NAME@@"; got != want {
+		t.Fatalf("Name() = %q, want %q", got, want)
+	}
+}

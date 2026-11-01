@@ -1,0 +1,10 @@
+from . import project_name
+
+
+def main() -> int:
+    print(project_name())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

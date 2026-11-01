@@ -1,0 +1,14 @@
+#include "starter/project.hpp"
+
+#include <cstdlib>
+#include <iostream>
+
+int main() {
+    // Do not use assert here: release builds may define NDEBUG.
+    constexpr auto expected = "@@PROJECT_NAME@@";
+    if (starter::project_name() != expected) {
+        std::cerr << "project_name did not match the configured name\n";
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}

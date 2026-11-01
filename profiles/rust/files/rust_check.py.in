@@ -1,0 +1,43 @@
+"""Run fail-fast Cargo gates offline, preserving the committed lockfile."""
+
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--release", action="store_true", help="also use release mode for lint, test and build")
+    args = parser.parse_args()
+    if not (ROOT / "Cargo.lock").is_file():
+        print("FAIL: Cargo.lock is missing; generate and review it explicitly before checking", file=sys.stderr)
+        return 1
+    env = dict(os.environ, CARGO_NET_OFFLINE="true", RUSTUP_AUTO_INSTALL="0")
+    flags = ["--offline", "--locked", "--all-features"]
+    if args.release:
+        flags.append("--release")
+    commands = [
+        ["cargo", "fmt", "--all", "--", "--check"],
+        ["cargo", "clippy", *flags, "--all-targets", "--", "-D", "warnings"],
+        # Default cargo test includes unit, integration and documentation tests.
+        ["cargo", "test", *flags],
+        ["cargo", "build", *flags, "--all-targets"],
+    ]
+    for command in commands:
+        print(f"RUN {command!r}", flush=True)
+        try:
+            result = subprocess.run(command, cwd=ROOT, env=env, shell=False, check=False, timeout=240)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
+        if result.returncode:
+            return result.returncode
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
