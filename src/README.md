@@ -5,13 +5,13 @@ mini-agent v1 的全部 C++ 实现。构建目标见根目录 `CMakeLists.txt`�
 | 文件 | 头文件 | 职责 |
 | --- | --- | --- |
 | `chat.cpp` | `include/mini_agent/chat.hpp` | `Message`/`Chat` 模型与 JSON 序列化（`schema_version`、Role 含 Tool 预留位） |
-| `provider_openai.cpp` | `provider.hpp` | OpenAI 兼容 Chat Completions：libcurl HTTPS + SSE 逐行解析、流式 on_delta、ShouldAbort 中断轮询、`ProviderError` 分类 |
+| `provider_openai.cpp` | `provider.hpp` | OpenAI 兼容 Chat Completions：libcurl HTTPS + SSE 逐行解析、流式 on_delta、ShouldAbort 中断轮询、`ProviderError` 分类；`list_models()`（`GET {base_url}/models`）+ 纯函数 `parse_models_json`（排序去重、失败关闭）；`ProviderError` 携带 `http_status()` 以供登录状态判定 |
 | `loop.cpp` | `loop.hpp` | `run_turn(Chat&, Provider&)` 纯函数式单轮会话（参数注入、无全局单例） |
 | `session.cpp` | `session.hpp` | session 存储：加载/校验、`.json.tmp` + rename 原子写（0600）、`<id>.json.lock` 防同 id 并发打开 |
 | `config.cpp` | `config.hpp` | 配置合并：env（`MINI_AGENT_*`）优先于 `~/.config/mini-agent/config.json`；原子保存 0600 |
 | `md.cpp` | `md.hpp` | ANSI 感知的显示宽度/硬换行 `wrap`/单行 `clip`；Markdown 渲染（`third_party/md4c` 解析 + 自写 SGR writer，ADR 004） |
-| `log.cpp` | `log.hpp` | spdlog 包装的诊断日志：key=value 元数据，密钥与消息正文零输出 |
-| `tui.cpp` | `tui.hpp` | 自绘 TUI（ADR 003）：termios RAII、poll ≤50ms 帧循环、live 块行级 diff + CSI 2026 同步输出、UTF-8 光标编辑 + ↑/↓ 历史、斜杠命令与 Tab 补全菜单 |
+| `log.cpp` | `log.hpp` | spdlog 包装的诊断日志：key=value 元数据，密钥与消息正文零输出；`redact_url` 剥离 URL userinfo |
+| `tui.cpp` | `tui.hpp` | 自绘 TUI（ADR 003）：termios RAII、poll ≤50ms 帧循环、live 块行级 diff + CSI 2026 同步输出、UTF-8 光标编辑 + ↑/↓ 历史、斜杠命令与 Tab 补全菜单；模型选取（`/provider`+`/login` 后自动列模型、`/models` 重列、编号选择，见 007 §5.6 规则 7）与分批配置提示 `config_next_hint`（规则 8）、登录状态展示 `auth_status_line` / `AuthProbe`（规则 9）与提示符连通标志 `connection_state` / `prompt_marker`（输入提示符即标志，规则 10）|
 | `cli_main.cpp` | — | 子命令 `ask` / `run` / `session list|rm`，退出码 0/1/2 契约 |
 | `project.cpp` | `starter/project.hpp` | 模板骨架遗留（starter_test 使用），非业务代码 |
 

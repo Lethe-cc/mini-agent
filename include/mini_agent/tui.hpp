@@ -36,6 +36,66 @@ std::size_t utf8_append(std::string& line, std::string_view bytes);
 bool utf8_backspace(std::string& line) noexcept;
 // Display width in codepoints (not columns; CJK width mapping is v2).
 std::size_t utf8_codepoints(std::string_view text) noexcept;
+// Resolve a numbered selection against a fetched model list (design 007
+// model-picker). `input` is the composer text at Enter while the list is
+// shown: a 1-based index returns that model's id; an exact id match is
+// accepted too; anything else (out of range, non-numeric, unknown id) is
+// nullopt so the caller can keep picking or fall through to /model <name>.
+std::optional<std::string> model_choice(const std::vector<std::string>& models,
+                                        std::string_view input);
+// Numbered menu rows for a fetched model list: a header, one `N. id` row per
+// model (the `current` id tagged `<- current`), and a footer explaining the
+// keys. Empty when the list is empty. Committed to the history area once the
+// fetch completes; the user types a number (or /model <name>) to choose.
+std::vector<std::string> model_menu_rows(const std::vector<std::string>& models,
+                                         std::string_view current);
+// Incremental configuration guidance for batched entry (2026-11-02 request):
+// reports how many of base_url/api_key/model are set and names only the NEXT
+// missing step in provider -> key -> model order, never the full command list
+// (listing all three reads as "enter everything at once"). Returns
+// `config 3/3 · ready` when complete. Values are never echoed -- only which
+// fields are present -- so the api_key cannot leak through a hint line.
+std::string config_next_hint(const AppConfig& config);
+
+// Login/auth status. The model-list request fired right after /provider and
+// /login doubles as an auth probe (no extra request): a provider that rejects
+// the key answers 401/403, and any 2xx means the credentials were accepted
+// even when the body shape then failed to parse. Deliberately NOT a second
+// network call -- probing at every startup would burn the cold-start budget.
+struct AuthProbe {
+    bool attempted = false;     // a model-list or chat attempt has completed
+    bool fetch_ok = false;      // it produced a usable response
+    int http_status = 0;        // status code if one was received, else 0
+    bool network_error = false; // failed before any response arrived
+    std::size_t model_count = 0;
+};
+
+// One-line, user-facing (English per design 007 section 5.6) auth status.
+// Never echoes any part of the key.
+std::string auth_status_line(const AuthProbe& probe);
+// Single log token: untried | verified | rejected | unreachable | refused.
+std::string_view auth_log_token(const AuthProbe& probe);
+
+// Provider connection state, derived (never probed) from the config plus the
+// last model-list probe and whether a probe is in flight (2026-11-02 maintainer
+// request: the `>` prompt itself should carry the connectivity indicator).
+enum class ConnState {
+    Unconfigured, // base_url or api_key missing
+    Checking,     // a probe request is in flight right now
+    Verified,     // last probe accepted the credentials
+    Rejected,     // last probe answered 401/403
+    Unreachable,  // probed, but no usable response arrived at all
+    Unverified,   // configured but not probed yet (or a non-auth status code)
+};
+ConnState connection_state(const AppConfig& config, const AuthProbe& probe, bool listing) noexcept;
+// The styled composer prompt marker shown in place of the plain `>` (one
+// display column, so the hard-wrap row accounting of 5.6 rule 2 is unaffected:
+// md::wrap treats SGR as zero width). Glyph AND colour encode the state, so
+// monochrome terminals and colour-blind users still get the signal:
+//   `?` dim unconfigured · `?` yellow unverified · `~` cyan checking ·
+//   `>` green verified · `!` red rejected · `x` magenta unreachable.
+// Carries no text at all, so no endpoint, key, or status code can leak here.
+std::string prompt_marker(ConnState state) noexcept;
 // Cursor-aware editing (2026-11-01 arrow-key request): pos is a byte
 // offset always kept at a codepoint boundary; next/prev snap past
 // continuation bytes. insert writes bytes at pos and advances pos.

@@ -254,7 +254,304 @@ void test_config_round_trip_and_precedence() {
     ::unsetenv("MINI_AGENT_CONFIG");
 }
 
+void test_models_listing() {
+    std::string error;
+    // Happy path: sorted and deduplicated ids.
+    const auto ok = mini_agent::parse_models_json(
+        R"({"object":"list","data":[{"id":"z-model"},{"id":"a-model"},{"id":"z-model"}]})", &error);
+    check(ok.has_value(), "valid models body parsed");
+    check(ok->size() == 2, "duplicate id collapsed");
+    check((*ok)[0] == "a-model" && (*ok)[1] == "z-model", "ids sorted");
+
+    // Entries without a usable id are skipped rather than failing the list.
+    const auto partial = mini_agent::parse_models_json(
+        R"({"data":[{"id":"keep"},{"name":"no-id"},7,{"id":42}]})", &error);
+    check(partial.has_value() && partial->size() == 1 && (*partial)[0] == "keep",
+          "only string ids kept");
+
+    // Fail-closed shapes (design 007 section 5.5).
+    check(!mini_agent::parse_models_json("not json", &error).has_value(), "garbage rejected");
+    check(!mini_agent::parse_models_json("[]", &error).has_value(), "non-object root rejected");
+    check(!mini_agent::parse_models_json(R"({"models":[]})", &error).has_value(),
+          "missing data array rejected");
+    check(!mini_agent::parse_models_json(R"({"data":"nope"})", &error).has_value(),
+          "non-array data rejected");
+    check(!error.empty(), "rejection carries an explanation");
+    // An empty-but-valid list is a success, not an error.
+    check(mini_agent::parse_models_json(R"({"data":[]})", &error)->empty(),
+          "empty data array is a valid empty list");
+
+    // Providers that do not implement the endpoint surface a Protocol error
+    // instead of silently returning nothing (FakeProvider does not override).
+    FakeProvider unsupported({"x"});
+    bool threw = false;
+    try {
+        (void)unsupported.list_models();
+    } catch (const mini_agent::ProviderError& e) {
+        threw = e.kind() == mini_agent::ProviderErrorKind::Protocol;
+    }
+    check(threw, "unsupported list_models throws Protocol");
+
+    // Incomplete config is rejected before any network attempt, and the error
+    // text never carries the key (design 007 section 6).
+    mini_agent::OpenAiProvider unconfigured(mini_agent::ProviderConfig{});
+    std::string message;
+    try {
+        (void)unconfigured.list_models();
+    } catch (const mini_agent::ProviderError& e) {
+        message = e.what();
+    }
+    check(!message.empty(), "unconfigured list_models throws");
+    check(message.find("api_key") == std::string::npos, "config error names the field, no secret");
+
+    // Menu rendering and selection.
+    const std::vector<std::string> models = {"a-model", "b-model", "c-model"};
+    const auto rows = mini_agent::tui::model_menu_rows(models, "b-model");
+    check(rows.size() == models.size() + 2, "menu is header + rows + footer");
+    check(rows[1] == "  1. a-model", "first row numbered 1");
+    check(rows[2].find("<- current") != std::string::npos, "current model tagged");
+    check(mini_agent::tui::model_menu_rows({}, "").empty(), "empty list renders no menu");
+
+    check(mini_agent::tui::model_choice(models, "1") == "a-model", "index 1 is first");
+    check(mini_agent::tui::model_choice(models, "3") == "c-model", "index N is last");
+    check(!mini_agent::tui::model_choice(models, "4").has_value(), "index past end rejected");
+    check(!mini_agent::tui::model_choice(models, "0").has_value(), "index 0 rejected");
+    check(!mini_agent::tui::model_choice(models, "999999999999999999999").has_value(),
+          "overflowing index rejected without wrapping");
+    check(!mini_agent::tui::model_choice(models, "hello").has_value(), "non-numeric rejected");
+    check(mini_agent::tui::model_choice(models, "b-model") == "b-model", "exact id accepted");
+    check(!mini_agent::tui::model_choice(models, "").has_value(), "empty input rejected");
+    check(!mini_agent::tui::model_choice({}, "1").has_value(), "no models to pick from");
+}
+
+void test_config_batched_hint() {
+    // Batched entry (2026-11-02 request): each command saves independently,
+    // so the hint must name only the NEXT missing step, never all three.
+    mini_agent::AppConfig empty;
+    check(mini_agent::tui::config_next_hint(empty) == "config 0/3 · next: /provider <url>",
+          "nothing set points at /provider only");
+
+    mini_agent::AppConfig has_url;
+    has_url.base_url = "https://x.test/v1";
+    check(mini_agent::tui::config_next_hint(has_url) == "config 1/3 · next: /login <key>",
+          "url set points at /login only");
+
+    // Order independence: a key without a url must still ask for the url.
+    mini_agent::AppConfig has_key;
+    has_key.api_key = "k";
+    check(mini_agent::tui::config_next_hint(has_key) == "config 1/3 · next: /provider <url>",
+          "key-only still points at /provider first");
+
+    mini_agent::AppConfig url_and_key;
+    url_and_key.base_url = "https://x.test/v1";
+    url_and_key.api_key = "k";
+    check(mini_agent::tui::config_next_hint(url_and_key) ==
+              "config 2/3 · next: /models (list & pick) or /model <name>",
+          "url+key points at model discovery");
+
+    mini_agent::AppConfig model_only;
+    model_only.model = "m";
+    check(mini_agent::tui::config_next_hint(model_only) == "config 1/3 · next: /provider <url>",
+          "model-only points at /provider");
+
+    mini_agent::AppConfig full;
+    full.base_url = "https://x.test/v1";
+    full.api_key = "k";
+    full.model = "m";
+    check(mini_agent::tui::config_next_hint(full) == "config 3/3 · ready", "complete says ready");
+    check(full.complete(), "hint agrees with complete()");
+
+    // A hint line must never carry the key value itself.
+    mini_agent::AppConfig secrety;
+    secrety.api_key = "do-not-leak-this";
+    check(mini_agent::tui::config_next_hint(secrety).find("do-not-leak-this") == std::string::npos,
+          "hint reports presence, never the key value");
+}
+
+void test_login_status() {
+    using mini_agent::tui::AuthProbe;
+    // Never probed yet.
+    AuthProbe untouched;
+    check(mini_agent::tui::auth_log_token(untouched) == "untried", "untried token");
+    check(mini_agent::tui::auth_status_line(untouched).find("unverified") != std::string::npos,
+          "untried line explains how to check");
+
+    AuthProbe verified;
+    verified.attempted = true;
+    verified.fetch_ok = true;
+    verified.http_status = 200;
+    verified.model_count = 2;
+    check(mini_agent::tui::auth_log_token(verified) == "verified", "success is verified");
+    check(mini_agent::tui::auth_status_line(verified).find("login verified") != std::string::npos,
+          "verified line");
+    check(mini_agent::tui::auth_status_line(verified).find("2 model") != std::string::npos,
+          "verified line reports the reachable count");
+
+    // A 2xx whose body failed to parse still proves the key was accepted.
+    AuthProbe parsed_bad;
+    parsed_bad.attempted = true;
+    parsed_bad.http_status = 200;
+    check(mini_agent::tui::auth_log_token(parsed_bad) == "verified",
+          "2xx with unusable body still counts as an accepted key");
+
+    for (const int code : {401, 403}) {
+        AuthProbe rejected;
+        rejected.attempted = true;
+        rejected.http_status = code;
+        check(mini_agent::tui::auth_log_token(rejected) == "rejected", "401/403 is rejected");
+        const auto line = mini_agent::tui::auth_status_line(rejected);
+        check(line.find("REJECTED") != std::string::npos &&
+                  line.find(std::to_string(code)) != std::string::npos,
+              "rejected line names the status code");
+    }
+
+    AuthProbe refused;
+    refused.attempted = true;
+    refused.http_status = 503;
+    check(mini_agent::tui::auth_log_token(refused) == "refused", "other status is refused");
+
+    AuthProbe unreachable;
+    unreachable.attempted = true;
+    unreachable.network_error = true;
+    check(mini_agent::tui::auth_log_token(unreachable) == "unreachable",
+          "no response is unreachable");
+    check(mini_agent::tui::auth_status_line(unreachable).find("unreachable") != std::string::npos,
+          "unreachable line points at /provider");
+
+    // A chat completion feeds the same verdict vocabulary: 2026-11-02 report --
+    // chat worked fine but the prompt stayed yellow because only /models was
+    // ever read as evidence.
+    AuthProbe chat_ok;
+    chat_ok.attempted = true;
+    chat_ok.fetch_ok = true;
+    check(mini_agent::tui::auth_log_token(chat_ok) == "verified",
+          "a chat reply verifies the key with no /models involved");
+
+    AuthProbe chat_refused;
+    chat_refused.attempted = true;
+    chat_refused.http_status = 403;
+    check(mini_agent::tui::auth_log_token(chat_refused) == "rejected",
+          "a 403 chat turn reads as a refused key");
+
+    // No auth status line may ever leak the key value.
+    AuthProbe leak_probe;
+    leak_probe.attempted = true;
+    leak_probe.http_status = 401;
+    check(mini_agent::tui::auth_status_line(verified).find("Bearer") == std::string::npos &&
+              mini_agent::tui::auth_status_line(leak_probe).find("Bearer") == std::string::npos,
+          "auth lines never mention the Authorization scheme or a key");
+}
+
+void test_connection_prompt() {
+    // The composer prompt carries the provider connection state
+    // (2026-11-02 request): derived state, then its styled marker.
+    using mini_agent::tui::AuthProbe;
+    using mini_agent::tui::ConnState;
+
+    mini_agent::AppConfig empty;
+    check(mini_agent::tui::connection_state(empty, AuthProbe{}, false) == ConnState::Unconfigured,
+          "no config reads as unconfigured");
+
+    mini_agent::AppConfig url_only;
+    url_only.base_url = "https://api.test/v1";
+    check(mini_agent::tui::connection_state(url_only, AuthProbe{}, false) ==
+              ConnState::Unconfigured,
+          "an endpoint without a key is not connectable");
+
+    mini_agent::AppConfig cfg;
+    cfg.base_url = "https://api.test/v1";
+    cfg.api_key = "do-not-leak-this";
+    const AuthProbe untouched;
+    check(mini_agent::tui::connection_state(cfg, untouched, false) == ConnState::Unverified,
+          "configured but unprobed never reads as healthy");
+    check(mini_agent::tui::connection_state(cfg, untouched, true) == ConnState::Checking,
+          "a probe in flight reads as checking");
+
+    AuthProbe verified;
+    verified.attempted = true;
+    verified.fetch_ok = true;
+    verified.model_count = 2;
+    check(mini_agent::tui::connection_state(cfg, verified, false) == ConnState::Verified,
+          "an accepted probe reads as verified");
+
+    AuthProbe parsed_bad;
+    parsed_bad.attempted = true;
+    parsed_bad.http_status = 200;
+    check(mini_agent::tui::connection_state(cfg, parsed_bad, false) == ConnState::Verified,
+          "2xx with an unusable body still proves the key");
+
+    for (const int code : {401, 403}) {
+        AuthProbe rejected;
+        rejected.attempted = true;
+        rejected.http_status = code;
+        check(mini_agent::tui::connection_state(cfg, rejected, false) == ConnState::Rejected,
+              "401/403 reads as rejected");
+    }
+
+    AuthProbe refused;
+    refused.attempted = true;
+    refused.http_status = 503;
+    check(mini_agent::tui::connection_state(cfg, refused, false) == ConnState::Unverified,
+          "a non-auth status leaves the key unverified, not rejected");
+
+    AuthProbe unreachable;
+    unreachable.attempted = true;
+    unreachable.network_error = true;
+    check(mini_agent::tui::connection_state(cfg, unreachable, false) == ConnState::Unreachable,
+          "no response reads as unreachable");
+
+    AuthProbe via_chat;
+    via_chat.attempted = true;
+    via_chat.fetch_ok = true;
+    check(mini_agent::tui::connection_state(cfg, via_chat, false) == ConnState::Verified,
+          "a chat reply turns the prompt green even with no model listing");
+
+    // Markers: distinct glyph AND colour per state, reset-terminated, and
+    // exactly one display column wide so the row accounting (5.6 rule 2) holds.
+    struct Expected {
+        ConnState state;
+        const char* marker;
+    };
+    const Expected expected[] = {
+        {ConnState::Unconfigured, "\x1b[2m?\x1b[0m"}, {ConnState::Unverified, "\x1b[33m?\x1b[0m"},
+        {ConnState::Checking, "\x1b[36m~\x1b[0m"},    {ConnState::Verified, "\x1b[1;32m>\x1b[0m"},
+        {ConnState::Rejected, "\x1b[1;31m!\x1b[0m"},  {ConnState::Unreachable, "\x1b[35mx\x1b[0m"},
+    };
+    for (const auto& e : expected) {
+        const auto marker = mini_agent::tui::prompt_marker(e.state);
+        check(marker == e.marker, "marker matches its state");
+        check(marker.find("do-not-leak-this") == std::string::npos &&
+                  marker.find("api.test") == std::string::npos,
+              "marker carries no endpoint or key text");
+        check(mini_agent::md::display_width(marker) == 1,
+              "marker occupies exactly one display column");
+    }
+    // Colour alone is never the only difference: dim/yellow `?` differ in
+    // colour but pair with the rest of the alphabet so states stay separable
+    // by glyph everywhere except the two `?` variants, which the /help legend
+    // covers.
+    check(mini_agent::tui::prompt_marker(ConnState::Verified) !=
+              mini_agent::tui::prompt_marker(ConnState::Rejected),
+          "healthy and refused prompts are visibly different");
+}
+
 void test_logger() {
+    // URL userinfo redaction: a base_url carrying curl-style credentials must
+    // not leak them into the diagnostics file (design 007 section 6).
+    check(mini_agent::Logger::redact_url("https://api.test/v1") == "https://api.test/v1",
+          "url without userinfo unchanged");
+    const auto redacted = mini_agent::Logger::redact_url("https://user:pw@api.test/v1");
+    check(redacted == "https://***@api.test/v1", "userinfo replaced, host kept");
+    check(redacted.find("pw") == std::string::npos, "credential absent from redacted url");
+    check(mini_agent::Logger::redact_url("http://u:p@h.test:8931/v1?a=b") ==
+              "http://***@h.test:8931/v1?a=b",
+          "port and query preserved through redaction");
+    check(mini_agent::Logger::redact_url("https://api.test/a@b/v1") == "https://api.test/a@b/v1",
+          "'@' after the path is not userinfo");
+    check(mini_agent::Logger::redact_url("not a url") == "not a url",
+          "non-url value passed through");
+    check(mini_agent::Logger::redact_url("").empty(), "empty url safe");
+
     const auto dir = std::filesystem::temp_directory_path() /
                      ("mini_agent_log_" + mini_agent::generate_session_id());
     std::string error;
@@ -475,6 +772,10 @@ int main() {
     test_loop_success_and_failure();
     test_loop_failure_leaves_history();
     test_config_round_trip_and_precedence();
+    test_models_listing();
+    test_config_batched_hint();
+    test_login_status();
+    test_connection_prompt();
     test_logger();
     test_md_width_and_wrap();
     test_md_render_subset();

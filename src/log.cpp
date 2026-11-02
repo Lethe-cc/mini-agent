@@ -68,6 +68,26 @@ std::string_view Logger::turn_status_name(TurnStatus status) noexcept {
     return "unknown";
 }
 
+std::string Logger::redact_url(std::string_view url) {
+    const auto scheme = url.find("://");
+    if (scheme == std::string_view::npos)
+        return std::string(url); // not a URL we understand: keep as-is
+    const std::size_t authority_begin = scheme + 3;
+    // Authority ends at the first '/', '?' or '#'; anything before it may
+    // carry `user:password@`.
+    const auto authority_end = url.find_first_of("/?#", authority_begin);
+    const auto authority = url.substr(authority_begin, authority_end - authority_begin);
+    const auto at = authority.rfind('@');
+    if (at == std::string_view::npos)
+        return std::string(url); // no userinfo
+    std::string out(url.substr(0, authority_begin));
+    out += "***@";
+    out.append(authority.substr(at + 1));
+    if (authority_end != std::string_view::npos)
+        out.append(url.substr(authority_end));
+    return out;
+}
+
 void Logger::event(std::string_view name,
                    const std::vector<std::pair<std::string, std::string>>& fields) {
     if (!sink_ || !sink_->log)

@@ -29,7 +29,7 @@ package "agent_core (静态库)" {
   [loop.cpp\n会话循环 run_turn()] as LOOP
   [chat.cpp\nMessage / Chat 模型] as CHAT
   [session.cpp\n加载 / 原子写 / 文件锁] as SESSION
-  [provider_openai.cpp\nSSE 流式 + 中断轮询] as PROVIDER
+  [provider_openai.cpp\nSSE 流式 + 中断轮询\nlist_models: GET /models] as PROVIDER
   [config.cpp\nenv + 配置文件合并] as CONFIG
   [md.cpp\n宽度 / wrap / clip + Markdown] as MD
   [log.cpp\nspdlog 包装（脱敏）] as LOG
@@ -120,7 +120,10 @@ stop
 
 - `Chat`：`system` + `user|assistant|toolResult` 消息序列；JSON 序列化含 `schema_version`（当前 1）；Role 预留 `Tool`、Message 预留恒空 `tool_calls`（工具调用扩展点）。
 - session 文件：`<sessions>/<id>.json`，元信息（id/title/model/时间）+ 消息历史；写路径 `tmp + rename` 原子替换，`.lock` 文件防同 id 并发打开（ADR 001）。
-- 配置合并：env > `config.json`；`/login`/`/model`/`/provider` 在 TUI 内写回文件（0600）。密钥在任何 stdout/日志面零输出（掩码显示 `***set***`）。
+- 配置合并：env > `config.json`；`/login`/`/model`/`/provider` 在 TUI 内写回文件（0600）。密钥在任何 stdout/日志面零输出（掩码显示 `***set***`）。三条命令**各自独立保存**，可任意顺序、分属不同进程分批录入；提示行统一走 `config_next_hint()`，只报 `config N/3 · next: <下一步>`而不重列全部命令，也不回显字段值（见 007 §5.6 规则 8）。日志侧 `Logger::redact_url()` 会将 `https://user:token@host` 的 userinfo 剥为 `***@`，防止将凭据内嵌到 base_url 时泄入日志。
+- 模型发现（2026-11-02）：`/provider <url>` 与 `/login <key>` 保存后，若 base_url+api_key 齐备则自动 `GET {base_url}/models`（独立 worker、15 s 上限），`/models` 可手动重列。返回 id 排序去重后以编号菜单呈现，输序号即选定（也可继续用 `/model <name>`，Esc dismiss）。日志记 `models_list status=start|ok|error count= elapsed_ms=` 与 `model_select model= source=menu`，仅元数据；密钥不入菜单也不入错误文本。
+- 登录状态（2026-11-02）：上述同一次 `GET /models` 兼作认证探针（**零额外请求**），`ProviderError::http_status()` 用于区分“密钥被拒”（401/403 → rejected）与“未连上”（unreachable）；`auth_status_line` / `auth_log_token` 分类 verified / rejected / refused / unreachable / unverified，展示于历史区与 `/config` 的 `login=` 行。凭据一变即重置结论；启动不探测（不击穿冷启动预算）；日志 `login status=… models=N [http_status=N]`（见 007 §5.6 规则 9）。**聊天请求也作为认证探针**（2026-11-02 修复）：`AuthProbe::source` 区分 Models/Chat，回合结束时把 `chat/completions` 的结果折叠进结论（成功=verified，401/403=rejected），因此不跑 `/models`、或 provider 不开放 `/models` 时也能正确显示连通；verdict 变化只记一条 `login … source=chat` 日志，不再往历史区打 `[auth]` 行（提示符即反馈），abort 不改变结论。
+- provider 连通状态标志（2026-11-02）：输入提示符本身即状态标志——`connection_state()` 从配置 + 上一次 `AuthProbe` 推导出 `ConnState`，`prompt_marker()` 将其渲染为带样式的 1 列前缀（`?` 跳色未配置 / `?` 黄未验证 / `~` 青探测中 / `>` 绿已验证 / `!` 红被拒 / `x` 品红不可达）。零额外请求与零额外行，marker 不含文本因此不可能泄露 endpoint 或密钥；图形与颜色双重编码，`/help` 提供图例（见 007 §5.6 规则 10）。
 
 ## 错误处理与安全边界
 

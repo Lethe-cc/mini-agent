@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <sstream>
 
@@ -56,6 +57,12 @@ size_t curl_write(char* ptr, size_t size, size_t nmemb, void* userdata) {
     }
     ctx->lines->feed(std::string_view(ptr, bytes));
     return bytes;
+}
+
+// Sink for non-streaming GETs (e.g. /models): accumulate the whole body.
+size_t curl_accumulate(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    static_cast<std::string*>(userdata)->append(ptr, size * nmemb);
+    return size * nmemb;
 }
 
 // Extracts content delta text from one SSE JSON payload. Returns nullopt
@@ -177,9 +184,101 @@ std::string OpenAiProvider::complete(const Chat& chat,
     }
     if (status < 200 || status >= 300) {
         http_error = "HTTP status " + std::to_string(status);
-        throw ProviderError(ProviderErrorKind::HttpStatus, http_error);
+        throw ProviderError(ProviderErrorKind::HttpStatus, http_error, static_cast<int>(status));
     }
     return full;
+}
+
+std::optional<std::vector<std::string>> parse_models_json(std::string_view body,
+                                                          std::string* error) {
+    auto parsed = nlohmann::json::parse(body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        if (error)
+            *error = "models response is not a JSON object";
+        return std::nullopt;
+    }
+    const auto data = parsed.find("data");
+    if (data == parsed.end() || !data->is_array()) {
+        if (error)
+            *error = "models response missing data array";
+        return std::nullopt;
+    }
+    std::vector<std::string> ids;
+    for (const auto& entry : *data) {
+        if (!entry.is_object())
+            continue; // skip malformed entries
+        const auto id = entry.find("id");
+        if (id != entry.end() && id->is_string())
+            ids.push_back(id->get<std::string>());
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
+}
+
+std::vector<std::string> Provider::list_models() {
+    throw ProviderError(ProviderErrorKind::Protocol, "provider does not support model listing");
+}
+
+std::vector<std::string> OpenAiProvider::list_models() {
+    if (config_.base_url.empty() || config_.api_key.empty()) {
+        throw ProviderError(ProviderErrorKind::Protocol, "provider config incomplete");
+    }
+    CURL* curl = ::curl_easy_init();
+    if (!curl) {
+        throw ProviderError(ProviderErrorKind::Network, "curl init failed");
+    }
+    const std::string url = config_.base_url;
+    const auto trimmed = url.find_last_not_of('/');
+    std::string endpoint = trimmed == std::string::npos ? url : url.substr(0, trimmed + 1);
+    endpoint += "/models";
+
+    const std::string auth = "Authorization: Bearer " + config_.api_key;
+    const std::string accept = "Accept: application/json";
+    struct curl_slist* headers = nullptr;
+    headers = ::curl_slist_append(headers, auth.c_str());
+    headers = ::curl_slist_append(headers, accept.c_str());
+
+    std::string body;
+    char error_buffer[CURL_ERROR_SIZE] = {0};
+    ::curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+    ::curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    ::curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    ::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_accumulate);
+    ::curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    ::curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
+    ::curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
+                       static_cast<long>(config_.connect_timeout_seconds));
+    ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(config_.total_timeout_seconds));
+    ::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    // Never enable CURLOPT_VERBOSE here: it would echo the Authorization
+    // header (design 007 section 6).
+
+    const CURLcode code = ::curl_easy_perform(curl);
+    long status = 0;
+    ::curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    ::curl_slist_free_all(headers);
+    ::curl_easy_cleanup(curl);
+
+    if (code != CURLE_OK) {
+        const std::string detail = error_buffer[0] ? error_buffer : ::curl_easy_strerror(code);
+        throw ProviderError(ProviderErrorKind::Network, "network error: " + detail);
+    }
+    if (status < 200 || status >= 300) {
+        throw ProviderError(ProviderErrorKind::HttpStatus, "HTTP status " + std::to_string(status),
+                            static_cast<int>(status));
+    }
+    std::string parse_error;
+    auto ids = parse_models_json(body, &parse_error);
+    if (!ids) {
+        // 2xx means the credentials were accepted even though the body was
+        // unusable: carry the status so the caller can still report the key
+        // as verified rather than as a login failure.
+        throw ProviderError(ProviderErrorKind::Protocol, parse_error, static_cast<int>(status));
+    }
+    return *ids;
 }
 
 } // namespace mini_agent

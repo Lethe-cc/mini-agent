@@ -31,8 +31,8 @@
 namespace mini_agent::tui {
 namespace {
 
-constexpr std::string_view kCommands[] = {"/config", "/exit",     "/help",    "/login",
-                                          "/model",  "/provider", "/sessions"};
+constexpr std::string_view kCommands[] = {"/config", "/exit",   "/help",     "/login",
+                                          "/model",  "/models", "/provider", "/sessions"};
 
 class RawMode {
   public:
@@ -102,6 +102,11 @@ struct TurnResult {
     bool aborted = false;
     std::string reply;
     std::string error;
+    // Credential evidence from the completion request. The worker fills these
+    // in and the main thread folds them into `auth` (the worker must never
+    // touch main-thread state such as `auth`, `logger` or `screen`).
+    int http_status = 0;
+    bool network_error = false;
 };
 
 } // namespace
@@ -213,6 +218,137 @@ bool utf8_erase_at(std::string& line, std::size_t& pos) noexcept {
     return true;
 }
 
+std::optional<std::string> model_choice(const std::vector<std::string>& models,
+                                        std::string_view input) {
+    if (models.empty() || input.empty())
+        return std::nullopt;
+    // Exact id match wins: ids are opaque and may legitimately be numeric.
+    for (const auto& id : models)
+        if (id == input)
+            return id;
+    for (const char ch : input)
+        if (ch < '0' || ch > '9')
+            return std::nullopt;
+    std::size_t index = 0;
+    for (const char ch : input) {
+        index = index * 10 + static_cast<std::size_t>(ch - '0');
+        if (index > models.size())
+            return std::nullopt; // reject early: also guards overflow
+    }
+    if (index == 0)
+        return std::nullopt;
+    return models[index - 1];
+}
+
+std::vector<std::string> model_menu_rows(const std::vector<std::string>& models,
+                                         std::string_view current) {
+    std::vector<std::string> rows;
+    if (models.empty())
+        return rows;
+    rows.push_back("models (" + std::to_string(models.size()) +
+                   "): type a number, or /model <name>");
+    for (std::size_t i = 0; i < models.size(); ++i) {
+        std::string row = "  " + std::to_string(i + 1) + ". " + models[i];
+        if (!current.empty() && models[i] == current)
+            row += "  <- current";
+        rows.push_back(std::move(row));
+    }
+    rows.push_back("Enter picks; Esc dismisses; /model <name> still works");
+    return rows;
+}
+
+std::string config_next_hint(const AppConfig& config) {
+    const int set = (config.base_url.empty() ? 0 : 1) + (config.api_key.empty() ? 0 : 1) +
+                    (config.model.empty() ? 0 : 1);
+    // Only the next step, in provider -> key -> model order: each command is
+    // independently saved, so any of them can be supplied in its own sitting
+    // (or from a different process) and this line reflects what is left.
+    std::string next;
+    if (config.base_url.empty())
+        next = "/provider <url>";
+    else if (config.api_key.empty())
+        next = "/login <key>";
+    else if (config.model.empty())
+        next = "/models (list & pick) or /model <name>";
+    const std::string progress = "config " + std::to_string(set) + "/3";
+    if (next.empty())
+        return progress + " · ready";
+    return progress + " · next: " + next;
+}
+
+std::string auth_status_line(const AuthProbe& probe) {
+    const auto accepted = [](int status) { return status >= 200 && status < 300; };
+    if (!probe.attempted)
+        return "[auth] login unverified · /provider + /login, then /models to check";
+    if (probe.fetch_ok)
+        return "[auth] login verified · key accepted · " + std::to_string(probe.model_count) +
+               " model(s) reachable";
+    if (probe.http_status == 401 || probe.http_status == 403)
+        return "[auth] login REJECTED · HTTP " + std::to_string(probe.http_status) +
+               " · provider refused this key · re-enter /login <key>";
+    if (accepted(probe.http_status))
+        return "[auth] login verified · key accepted (model list unavailable, see above)";
+    if (probe.http_status != 0)
+        return "[auth] login unverified · provider replied HTTP " +
+               std::to_string(probe.http_status) + " · key not confirmed";
+    return "[auth] login unverified · provider unreachable · check /provider <url>";
+}
+
+std::string_view auth_log_token(const AuthProbe& probe) {
+    const auto accepted = [](int status) { return status >= 200 && status < 300; };
+    if (!probe.attempted)
+        return "untried";
+    if (probe.fetch_ok || accepted(probe.http_status))
+        return "verified";
+    if (probe.http_status == 401 || probe.http_status == 403)
+        return "rejected";
+    if (probe.http_status != 0)
+        return "refused";
+    return "unreachable";
+}
+
+ConnState connection_state(const AppConfig& config, const AuthProbe& probe, bool listing) noexcept {
+    // Pure derivation: no request is ever made here. The verdict comes from the
+    // model-list probe that /provider and /login already fire (rule 9), so the
+    // prompt costs nothing and never probes at startup (cold-start budget).
+    if (config.base_url.empty() || config.api_key.empty())
+        return ConnState::Unconfigured;
+    if (listing)
+        return ConnState::Checking;
+    const auto token = auth_log_token(probe);
+    if (token == "verified")
+        return ConnState::Verified;
+    if (token == "rejected")
+        return ConnState::Rejected;
+    if (token == "unreachable")
+        return ConnState::Unreachable;
+    // `untried` and `refused` (a non-auth status code) both leave the key
+    // unconfirmed: the prompt must not read as healthy without evidence.
+    return ConnState::Unverified;
+}
+
+std::string prompt_marker(const ConnState state) noexcept {
+    // Glyph and colour both carry the state (a colour-only signal is lost on
+    // monochrome terminals and for colour-blind users). SGR is zero-width for
+    // md::wrap, and each marker ends in a reset so no style can leak into the
+    // composer text or the following rows (5.6 rule 2 row accounting).
+    switch (state) {
+    case ConnState::Unconfigured:
+        return "\x1b[2m?\x1b[0m"; // dim: nothing to connect to yet
+    case ConnState::Checking:
+        return "\x1b[36m~\x1b[0m"; // cyan: probe in flight
+    case ConnState::Verified:
+        return "\x1b[1;32m>\x1b[0m"; // bold green: key accepted
+    case ConnState::Rejected:
+        return "\x1b[1;31m!\x1b[0m"; // bold red: key refused (401/403)
+    case ConnState::Unreachable:
+        return "\x1b[35mx\x1b[0m"; // magenta: no answer from that endpoint
+    case ConnState::Unverified:
+        break;
+    }
+    return "\x1b[33m?\x1b[0m"; // yellow: configured but unprobed
+}
+
 std::vector<std::string> slash_completion_hint(std::string_view composer) {
     if (composer.empty() || composer.front() != '/')
         return {};
@@ -268,7 +404,7 @@ class LiveScreen {
     // vanish from the refreshed region.
     void render(const std::string& response_tail, const std::string& pinned_question,
                 const std::string& composer, const std::string& composer_display,
-                const std::string& status, bool streaming,
+                const std::string& prompt, const std::string& status, bool streaming,
                 std::size_t cols) { // NOLINT(bugprone-easily-swappable-parameters)
         const std::size_t rows = current_rows();
         // Slash hint (2026-11-01 maintainer request; vertical list per
@@ -284,7 +420,8 @@ class LiveScreen {
         if (inputs_cached_ && rows == last_rows_ && cols == last_cols_ &&
             streaming == last_streaming_ && response_tail == last_tail_ &&
             pinned_question == last_pin_ && composer == last_composer_ &&
-            composer_display == last_comp_disp_ && status == last_status_) {
+            composer_display == last_comp_disp_ && prompt == last_prompt_ &&
+            status == last_status_) {
             return;
         }
         inputs_cached_ = true;
@@ -295,12 +432,15 @@ class LiveScreen {
         last_pin_ = pinned_question;
         last_composer_ = composer;
         last_comp_disp_ = composer_display;
+        last_prompt_ = prompt;
         last_status_ = status;
         const std::size_t cap = rows > 2 ? rows - 2 : 1; // block budget minus status row
         auto pin_rows =
             streaming ? md::wrap("You: " + pinned_question, cols) : std::vector<std::string>{};
         auto tail_rows = streaming ? md::wrap(response_tail, cols) : std::vector<std::string>{};
-        auto comp_rows = md::wrap("> " + composer_display, cols);
+        // The prompt marker carries the provider connection state (2026-11-02
+        // request): same row as the composer, one display column wide.
+        auto comp_rows = md::wrap(prompt + " " + composer_display, cols);
         // Row budget, priority low->high trimmed: status (fixed, appended
         // below), then tail, then the hint list, then the pinned question,
         // keeping the composer whole (2026-11-01: the question stays
@@ -351,7 +491,10 @@ class LiveScreen {
         }
 
         std::string out = "\x1b[?2026h"; // synchronized output: atomic frame
-        out += "\x1b[" + std::to_string(live_rows_) + "A";
+        // CSI 0 A means one row up, not zero: a new block must start at
+        // the current cursor or its first repaint erases committed history.
+        if (live_rows_ > 0)
+            out += "\x1b[" + std::to_string(live_rows_) + "A";
         if (first_changed > 0) {
             out += "\x1b[" + std::to_string(first_changed) + "B";
         }
@@ -426,6 +569,7 @@ class LiveScreen {
     std::string last_pin_;
     std::string last_composer_;
     std::string last_comp_disp_;
+    std::string last_prompt_;
     std::string last_status_;
 
     static std::string join(const std::vector<std::string>& rows) {
@@ -505,6 +649,24 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                    {"log", logger->enabled() ? "on" : "off"}});
     bool secret_input = false; // /login: mask composer echo
     std::string secret_field;  // target key when secret_input
+    // Model discovery (2026-11-02 request): a separate short-lived worker
+    // queries GET {base_url}/models so the frame loop never blocks on it.
+    // The result is read only after join(), mirroring `result`/`turn_done`.
+    std::thread models_worker;
+    std::atomic<bool> models_done{false};
+    bool models_running = false;
+    struct ModelsResult {
+        bool ok = false;
+        std::vector<std::string> ids;
+        std::string error;
+        int http_status = 0; // 0 = no response arrived (auth unverifiable)
+        bool network_error = false;
+    } models_result;
+    AuthProbe auth;                 // latest login/auth verdict, shown by /config too
+    std::string models_fingerprint; // base_url+api_key hash of last fetch
+    std::chrono::steady_clock::time_point models_start;
+    bool model_menu_open = false;
+    std::vector<std::string> model_choices; // ids backing the open menu
     int tab_state = 0;
     bool streaming = false;
     std::size_t last_prompt_chars = 0;
@@ -514,8 +676,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     const auto banner_model = config.model.empty() ? std::string("(no model)") : config.model;
     screen.commit("mini-agent · model=" + banner_model + " · session=" + options.session_id);
     if (!config.complete()) {
-        screen.commit("[warn] LLM not configured: /provider <url> · /login <key> · /model <name>"
+        // Names only the next missing step: the three commands save
+        // independently, so they may be supplied one per sitting.
+        screen.commit("[warn] LLM not configured · " + config_next_hint(config) +
                       " (env vars also work)");
+    } else {
+        // Fully configured from a previous run: the stored key has not been
+        // checked against the provider yet in this process.
+        screen.commit(auth_status_line(auth));
     }
     screen.commit("Enter sends; Enter while streaming queues; Ctrl-C/Esc interrupt; "
                   "Ctrl-C twice quits; /help; Tab completes");
@@ -561,6 +729,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 r.ok = true;
             } catch (const ProviderError& e) {
                 r.error = e.what();
+                r.http_status = e.http_status();
+                r.network_error = e.kind() == ProviderErrorKind::Network;
             } catch (const std::exception& e) {
                 r.error = e.what();
             }
@@ -571,12 +741,74 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         });
     };
 
-    auto save_and_report = [&]() {
+    auto save_and_report = [&](bool show_progress = false) {
         std::string err;
         if (save_config_file(config, &err)) {
             screen.commit("[ok] config saved (api_key stored in config file, 0600)");
+            // Batched entry: after each independently-saved piece, name only
+            // what is still missing so the user knows this step landed and
+            // what to supply next (possibly in a later session).
+            if (show_progress)
+                screen.commit(config_next_hint(config));
         } else {
             screen.commit("[warn] config save failed: " + err);
+        }
+    };
+
+    // Query GET {base_url}/models off-thread (frame loop must not block).
+    // No-op unless base_url+api_key are both set and differ from the last
+    // attempt. Logs only metadata (status/count/elapsed): the api_key never
+    // reaches the log line, the menu, or any ProviderError text.
+    auto start_models_fetch = [&](bool force) {
+        if (models_running || config.base_url.empty() || config.api_key.empty())
+            return;
+        const std::string fingerprint = config.base_url + '\n' + config.api_key;
+        if (!force && fingerprint == models_fingerprint)
+            return;
+        if (models_worker.joinable())
+            models_worker.join();
+        models_running = true;
+        models_done = false;
+        models_result = ModelsResult{};
+        model_menu_open = false;
+        models_fingerprint = fingerprint;
+        models_start = steady_now();
+        logger->event("models_list",
+                      {{"status", "start"}, {"base_url", Logger::redact_url(config.base_url)}});
+        const AppConfig snapshot = config; // thread boundary (like start_turn)
+        // The worker computes only the result and sets the flag: `logger` and
+        // `screen` are main-thread state (/log reassigns logger), so the
+        // completion event and the menu render happen on the main thread.
+        models_worker = std::thread([&, snapshot] {
+            ModelsResult r;
+            // Bounded wait: a hung /models must not stall the TUI for the
+            // full chat timeout budget (design 007 section 6 timeouts).
+            ProviderConfig pc = snapshot.to_provider();
+            pc.connect_timeout_seconds = 5;
+            pc.total_timeout_seconds =
+                pc.total_timeout_seconds < 15 ? pc.total_timeout_seconds : 15;
+            try {
+                OpenAiProvider provider(std::move(pc));
+                r.ids = provider.list_models();
+                r.ok = true;
+            } catch (const ProviderError& e) {
+                r.error = e.what();
+                r.http_status = e.http_status();
+                r.network_error = e.kind() == ProviderErrorKind::Network;
+            } catch (const std::exception& e) {
+                r.error = e.what();
+            }
+            models_result = std::move(r);
+            models_done = true;
+        });
+    };
+
+    // Called after /provider or /login mutates config: auto-discover once
+    // both halves are known (the user's stated request).
+    auto maybe_autofetch_models = [&] {
+        if (!config.base_url.empty() && !config.api_key.empty()) {
+            screen.commit("[info] listing models from provider...");
+            start_models_fetch(false);
         }
     };
 
@@ -589,8 +821,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // Short lines on purpose: single-row commands stay intact even
             // on narrow terminals (wrap breaks mid-token at width limit).
             screen.commit("commands: /provider <url> · /login [key] · /model <name>");
-            screen.commit("          /log <path>|off|default · /config · /sessions");
-            screen.commit("          /exit · Enter sends · Enter queues while streaming");
+            screen.commit("          /models (list & pick) · /log <path>|off|default");
+            screen.commit("          /config · /sessions · /exit");
+            screen.commit("Each of /provider /login /model saves on its own;");
+            screen.commit("configure them in any order, any number of sittings.");
+            screen.commit("prompt: ?=unconfigured/unverified · ~=checking · >=ok");
+            screen.commit("        !=key rejected · x=provider unreachable");
+            screen.commit("Enter sends · Enter queues while streaming");
             return true;
         }
         if (line.rfind("/login", 0) == 0) {
@@ -601,7 +838,22 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit("[input] API key (hidden); Enter confirms, empty Enter cancels");
             } else {
                 config.api_key = std::string(arg);
-                save_and_report();
+                auth = AuthProbe{}; // previous verdict belongs to the old key
+                save_and_report(true);
+                maybe_autofetch_models();
+            }
+            return true;
+        }
+        if (line.rfind("/models", 0) == 0) {
+            // Listed before /model so the shared prefix resolves here first.
+            if (config.base_url.empty() || config.api_key.empty()) {
+                screen.commit("[error] model listing needs base_url + api_key ·" +
+                              config_next_hint(config));
+            } else if (models_running) {
+                screen.commit("[info] already listing models, wait for the list");
+            } else {
+                screen.commit("[info] listing models from provider...");
+                start_models_fetch(true); // force: explicit re-list bypasses cache
             }
             return true;
         }
@@ -609,11 +861,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto arg = arg_of(line);
             if (arg.empty()) {
                 screen.commit("model=" + (config.model.empty() ? "(not set)" : config.model) +
-                              "; usage /model <name>");
+                              "; usage /model <name>" +
+                              (config.base_url.empty() || config.api_key.empty()
+                                   ? std::string()
+                                   : " · /models lists what the provider offers"));
             } else {
                 config.model = std::string(arg);
                 session.meta.model = config.model;
-                save_and_report();
+                save_and_report(true);
             }
             return true;
         }
@@ -625,7 +880,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     "; usage /provider <url>");
             } else {
                 config.base_url = std::string(arg);
-                save_and_report();
+                auth = AuthProbe{}; // a different endpoint cannot inherit it
+                save_and_report(true);
+                maybe_autofetch_models();
             }
             return true;
         }
@@ -663,6 +920,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("model=" + (config.model.empty() ? "(not set)" : config.model));
             screen.commit("api_key=" +
                           std::string(config.api_key.empty() ? "(not set)" : "***set***"));
+            screen.commit("login=" + std::string(auth_log_token(auth)));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
             screen.commit("config file: " + default_config_path().string() +
                           " (env overrides file)");
@@ -803,6 +1061,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         // request): same effect as the first Ctrl-C, without
                         // the double-press-to-quit escalation.
                         abort_requested = true;
+                    } else if (model_menu_open) {
+                        // Lone ESC while the model list is up dismisses it
+                        // (nothing else to interrupt); the fetched list stays
+                        // in the scrollback and /model <name> still works.
+                        model_menu_open = false;
+                        screen.commit("[cancel] model menu dismissed; /models re-lists");
                     }
                 } else if (c == '\r' || c == '\n') {
                     if (secret_input) {
@@ -810,8 +1074,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         if (!composer.empty()) {
                             if (secret_field == "api_key")
                                 config.api_key = composer;
+                            auth = AuthProbe{}; // stale the moment it changes
                             screen.commit("[ok] api_key updated");
-                            save_and_report();
+                            save_and_report(true);
+                            maybe_autofetch_models();
                         } else {
                             screen.commit("[cancel] input cancelled");
                         }
@@ -821,24 +1087,44 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         std::string line;
                         line.swap(composer);
                         cursor = 0;
-                        if (line.front() != '/') // slash lines: Tab menu recalls those
-                            history.push_back(line);
-                        hist_pos = history.size();
-                        history_draft.clear();
-                        if (line == "/exit")
-                            goto done;
-                        if (streaming) {
-                            // Pi-style steering (design 007 section 5.6
-                            // v1.x candidate 1): Enter while streaming
-                            // queues the input; it is sent after the
-                            // current turn commits (or is interrupted).
-                            pending.push_back(std::move(line));
-                        } else if (!handle_slash(line)) {
-                            if (!config.complete()) {
-                                screen.commit("[error] LLM not configured: /provider <url> ·"
-                                              " /login <key> · /model <name>");
-                            } else {
-                                start_turn(line);
+                        // Model menu: a number (or an exact id) selects. Any
+                        // other input dismisses the menu and falls through
+                        // unchanged, so /model <name> and ordinary questions
+                        // keep working while the list is on screen.
+                        if (model_menu_open) {
+                            model_menu_open = false;
+                            if (const auto pick = model_choice(model_choices, line)) {
+                                config.model = *pick;
+                                session.meta.model = config.model;
+                                save_and_report();
+                                logger->event("model_select",
+                                              {{"model", config.model}, {"source", "menu"}});
+                                screen.commit("model=" + config.model);
+                                line.clear();
+                            }
+                        }
+                        if (line.empty()) {
+                            // menu selection consumed the input
+                        } else {
+                            if (line.front() != '/') // slash lines: Tab menu recalls those
+                                history.push_back(line);
+                            hist_pos = history.size();
+                            history_draft.clear();
+                            if (line == "/exit")
+                                goto done;
+                            if (streaming) {
+                                // Pi-style steering (design 007 section 5.6
+                                // v1.x candidate 1): Enter while streaming
+                                // queues the input; it is sent after the
+                                // current turn commits (or is interrupted).
+                                pending.push_back(std::move(line));
+                            } else if (!handle_slash(line)) {
+                                if (!config.complete()) {
+                                    screen.commit("[error] LLM not configured ·" +
+                                                  config_next_hint(config));
+                                } else {
+                                    start_turn(line);
+                                }
                             }
                         }
                     }
@@ -859,10 +1145,63 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         }
 
         // frame: drain buffer snapshot and render live region (5.6 rule 1)
+
+        // Model-list completion: rendered here on the main thread so the
+        // worker never touches screen/logger (both are main-thread state).
+        if (models_done.load()) {
+            models_done = false;
+            models_running = false;
+            if (models_worker.joinable())
+                models_worker.join();
+            const auto ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(steady_now() - models_start)
+                    .count();
+            if (models_result.ok) {
+                logger->event("models_list", {{"status", "ok"},
+                                              {"count", std::to_string(models_result.ids.size())},
+                                              {"elapsed_ms", std::to_string(ms)}});
+                model_choices = models_result.ids;
+                model_menu_open = !model_choices.empty();
+                if (model_menu_open) {
+                    for (const auto& row : model_menu_rows(model_choices, config.model))
+                        screen.commit(row);
+                } else {
+                    screen.commit("[info] provider listed no models; use /model <name>");
+                }
+            } else {
+                logger->event("models_list", {{"status", "error"},
+                                              {"count", "0"},
+                                              {"elapsed_ms", std::to_string(ms)},
+                                              {"error", models_result.error}});
+                screen.commit("[error] model list failed: " + models_result.error);
+            }
+            // The request we just made is also the credential probe: report
+            // whether the provider accepted the key, separately from whether
+            // the listing itself worked (a 401 means re-enter /login, whereas
+            // a 200 with an unparseable body still proves the key is good).
+            auth.attempted = true;
+            auth.fetch_ok = models_result.ok;
+            auth.http_status = models_result.http_status;
+            auth.network_error = models_result.network_error;
+            auth.model_count = models_result.ids.size();
+            screen.commit(auth_status_line(auth));
+            std::vector<std::pair<std::string, std::string>> login_fields = {
+                {"status", std::string(auth_log_token(auth))},
+                {"models", std::to_string(auth.model_count)},
+            };
+            // Only report a status code when one actually arrived: a success
+            // path never raised one, and writing `http_status=0` there would
+            // read like a bogus response rather than "not applicable".
+            if (auth.http_status != 0)
+                login_fields.emplace_back("http_status", std::to_string(auth.http_status));
+            logger->event("login", login_fields);
+        }
+
         if (turn_done.load()) {
             streaming = false;
             if (worker.joinable())
                 worker.join();
+            const auto login_before = auth_log_token(auth);
             const auto elapsed_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(steady_now() - turn_start)
                     .count();
@@ -898,6 +1237,40 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit("You: " + last_user);
                 screen.commit("[error] " + result.error);
             }
+            // The completion request was itself a credential probe, so fold its
+            // outcome into the same verdict the model listing feeds: a working
+            // chat must read as connected even on providers that expose no
+            // /models endpoint (2026-11-02 report: chat replied, the prompt
+            // stayed yellow). Only real evidence counts -- an aborted turn or a
+            // local protocol error says nothing about the key and leaves the
+            // previous verdict alone.
+            if (result.ok) {
+                auth.attempted = true;
+                auth.fetch_ok = true;
+                auth.http_status = 0;
+                auth.network_error = false;
+            } else if (!result.aborted && (result.http_status != 0 || result.network_error)) {
+                auth.attempted = true;
+                auth.fetch_ok = false;
+                auth.http_status = result.http_status;
+                auth.network_error = result.network_error;
+            }
+            // The prompt marker is the user-facing feedback (2026-11-02: the
+            // [auth] history row that used to go with this is deliberate noise
+            // on every first reply), so a chat-driven verdict change is only
+            // recorded in the diagnostics log.
+            if (auth_log_token(auth) != login_before) {
+                std::vector<std::pair<std::string, std::string>> login_fields = {
+                    {"status", std::string(auth_log_token(auth))},
+                    {"models", std::to_string(auth.model_count)},
+                    {"source", "chat"},
+                };
+                // Status code only when one actually arrived (same rule as the
+                // model-list event: `http_status=0` reads like a bogus reply).
+                if (auth.http_status != 0)
+                    login_fields.emplace_back("http_status", std::to_string(auth.http_status));
+                logger->event("login", login_fields);
+            }
             turn_done = false;
             // Drain the steering queue once the turn commits (Pi-style,
             // 5.6 v1.x #1). Skipped while exiting.
@@ -911,7 +1284,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     if (config.complete()) {
                         start_turn(next);
                     } else {
-                        screen.commit("[error] LLM not configured, dropped queued message");
+                        screen.commit("[error] LLM not configured, dropped queued message ·" +
+                                      config_next_hint(config));
                     }
                 } else {
                     continue; // slash handled, keep rendering idle frame
@@ -949,9 +1323,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             }
             // Masked input passes an empty raw composer: no slash hint.
             const std::string raw_for_hint = secret_input ? std::string() : composer;
+            // Prompt marker = provider connection state, derived purely from
+            // (config, last probe, listing-in-flight): an idle tick yields the
+            // same text, so render() keeps its zero-work input cache.
+            const std::string prompt =
+                prompt_marker(connection_state(config, auth, models_running));
             std::string status =
                 "model=" + (config.model.empty() ? std::string("(not set)") : config.model) +
                 " · session=" + options.session_id;
+            if (models_running) {
+                status += " · listing models...";
+            } else if (model_menu_open) {
+                status += " · pick a model (Esc cancels)";
+            }
             if (streaming) {
                 const auto secs =
                     std::chrono::duration_cast<std::chrono::seconds>(steady_now() - turn_start)
@@ -963,7 +1347,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             } else {
                 status += " · idle";
             }
-            screen.render(tail, last_user, raw_for_hint, composer_display, status, streaming, cols);
+            screen.render(tail, last_user, raw_for_hint, composer_display, prompt, status,
+                          streaming, cols);
         }
     }
 
@@ -972,6 +1357,8 @@ done:
     abort_requested = true;
     if (worker.joinable())
         worker.join();
+    if (models_worker.joinable())
+        models_worker.join(); // bounded by its own 15 s curl timeout
     logger->event("session_close", {{"mode", "tui"}, {"id", session.meta.id}});
     Logger::shutdown_all();
     screen.clear_live();

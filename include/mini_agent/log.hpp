@@ -43,6 +43,14 @@ class Logger {
     void event(std::string_view name,
                const std::vector<std::pair<std::string, std::string>>& fields = {});
 
+    // Redact URL userinfo before it is logged: curl accepts
+    // https://user:token@host/v1, and such a URL in a log line would break
+    // the "no secrets in logs" guarantee (design 007 section 6) even though
+    // the api_key field itself is never logged. Scheme and host are kept for
+    // diagnosability; anything between them and the first '/' is replaced by
+    // `***@`. URLs without userinfo are returned unchanged.
+    static std::string redact_url(std::string_view url);
+
     // Turn outcome vocabulary shared by CLI/TUI/line-mode.
     enum class TurnStatus { Ok, Error, Aborted };
     static std::string_view turn_status_name(TurnStatus status) noexcept;

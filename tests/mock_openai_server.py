@@ -12,6 +12,28 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Model listing endpoint (mini-agent /models and the TUI auto-list).
+        if not self.path.rstrip("/").endswith("/models"):
+            self.send_error(404)
+            return
+        if not self.headers.get("Authorization", "").startswith("Bearer "):
+            self.send_error(401)
+            return
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "mock-small", "object": "model"},
+                {"id": "mock-large", "object": "model"},
+            ],
+        }
+        body = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length))
