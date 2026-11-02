@@ -26,4 +26,9 @@
 本模板不绑定任何协议；`AGENTS.md`/docs 体系面向"AI 工具读取 Markdown"这一最低公分母。接入 MCP 属于架构变化，需先更新 `docs/architecture.md` 并走设计流程。
 
 ## 实际采用情况
-尚未核对，无采用结论。
+2026-11-02 为 v2 设计（[008](../design/008-mcp-tools.md)）在线核对官方版本化规范（modelcontextprotocol.io，specification/2025-06-18 的 Key Changes/Lifecycle、specification/2025-03-26 的 Transports/Tools），未读 SDK 源码、未 clone servers 仓库：
+
+- 采用：stdio 传输（换行分隔 JSON-RPC、stdout 仅协议消息、stderr 可自由日志）、initialize/initialized 生命周期与版本协商、tools/list、tools/call、结果 content[]+isError、"客户端 MUST 视 annotations 为不可信"与 human-in-the-loop WARNING（转化为 ADR 006 默认 ask 策略）。同日二次核对 2025-06-18 Transports 的 Streamable HTTP 细则并纳入采用：每消息一个 POST（Accept 双类型）、响应 JSON 或 SSE 流二选一、通知收 202、`Mcp-Session-Id` 会话管理（捕获/携带/404 重初始化/DELETE 注销）、`MCP-Protocol-Version` 头（06-18 起后续请求 MUST）。
+- 不采用（v2 裁剪）：HTTP 侧服务器发起的 GET 常开流与 resumability/Last-Event-ID、OAuth 发现流程（仅静态 Bearer）、resources、prompts、sampling、elicitation、roots、progress；不使用 JSON-RPC batching（2025-06-18 已移除，禁用后两版本通用）。
+- 版本基线：2025-06-18，initialize 支持回退 2025-03-26。规范继续版本化演进，实现前按当天文本复核。
+- servers 参考仓库与 smolagents 仍未核对，无许可证结论；本仓库未复制任何第三方代码，仅按协议文本自写。

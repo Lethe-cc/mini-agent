@@ -136,7 +136,7 @@ stop
 
 | 能力 | v1 状态 | 预留 |
 | --- | --- | --- |
-| 工具调用 (function calling) | 不实现 | Role/字段预留，Provider 流式协议可扩展 |
+| 工具调用 (function calling) | 不实现（v2 设计中） | Role/字段预留，Provider 流式协议可扩展；[008：v2 设计草案](design/008-mcp-tools.md)（含 MCP 客户端传输抽象 + stdio/Streamable HTTP 与命令执行，草案未评审未实现） |
 | 上下文压缩 | 不实现 | 历史在内存重放，可插 summarize |
 | 多 Agent / 编排 | 不实现 | `run_turn(Chat&, Provider&)` 参数注入、无全局单例 |
 | 跨折行光标移动、鼠标、语法高亮 | 不实现（v2） | 帧模型行预算与 diff 结构已就位 |

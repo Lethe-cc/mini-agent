@@ -8,6 +8,8 @@
 | [002：HTTP 与 JSON 依赖](002-http-json-dependency.md) | 已接受 | libcurl 系统依赖 + vendored nlohmann/json（落地前必须核实许可证） |
 | [003：TUI 实现](003-tui-approach.md) | 已接受 | 自绘最小 TUI（termios + ANSI），不引入 FTXUI |
 | [004：Markdown 解析](004-md4c-parser.md) | 已接受 | Markdown 解析层 vendored md4c v0.6.0（MIT），自写 SGR writer |
+| [005：MCP 传输抽象与接入方式](005-mcp-transport-abstraction.md) | **提议**（2026-11-02，未获批） | 自写最小 MCP 客户端：RPC 内核与 Transport 抽象分层，首批 stdio + Streamable HTTP 双实现（基线 2025-06-18，退回 2025-03-26），裁剪至 tools 面，不引入 SDK |
+| [006：工具审批策略](006-tool-approval-policy.md) | **提议**（2026-11-02，未获批） | 命令执行默认逐次人工确认（ask），allowlist/off 需显式配置 |
 
 使用 [ADR 模板](../../templates/adr.md) 新增决策，按 `001-decision-name.md` 命名并在上表登记标题、状态和关联设计。
 

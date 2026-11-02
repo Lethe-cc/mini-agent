@@ -16,6 +16,7 @@
 | 文档 | 状态 | 范围 |
 | --- | --- | --- |
 | [007：mini-agent 第一版技术方案](007-agent-v1.md) | 已实现（内核/CLI/session/自绘 TUI；两 preset、tidy -Werror、mock E2E、pty smoke 通过）；待人工评审 | Agent 内核、CLI/TUI、多 session；关联 [ADR 001](../decisions/001-session-model.md)、[002](../decisions/002-http-json-dependency.md)、[003](../decisions/003-tui-approach.md)（均已接受） |
+| [008：mini-agent v2 技术方案（工具循环 + 命令执行 + MCP）](008-mcp-tools.md) | 草案（待评审）；未实现、未验证 | function calling 循环、内置 run_bash 与审批策略、MCP 客户端（传输抽象 + stdio/Streamable HTTP）、session schema v2；关联 [ADR 005](../decisions/005-mcp-transport-abstraction.md)、[006](../decisions/006-tool-approval-policy.md)（均为提议） |
 
 0.4 将目标平台收敛为 Linux 与 macOS，删除了全部 Windows/MSVC 配置、命令示例与 CI 矩阵；取舍、迁移步骤与完整验证表见 [006](006-drop-windows-support.md)。上表 001–005 中保留的 Windows 相关文字属于当时的真实验证记录，**不代表当前仍支持该平台**；其中描述*当前配置*的段落已就地标注 0.4 变更并回链 006。[005](005-macos-verification.md) 中标为未执行的 Rust 完整门禁与 clang-tidy 正路径，已在 0.4 轮真实跑通并附反证，详见 006 第 8 节。
 
