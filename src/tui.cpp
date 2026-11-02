@@ -663,7 +663,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         bool network_error = false;
     } models_result;
     AuthProbe auth;                 // latest login/auth verdict, shown by /config too
-    std::string models_fingerprint; // base_url+api_key hash of last fetch
+    std::string models_fingerprint; // base_url+'\n'+api_key of the last fetch (not a hash)
     std::chrono::steady_clock::time_point models_start;
     bool model_menu_open = false;
     std::vector<std::string> model_choices; // ids backing the open menu
