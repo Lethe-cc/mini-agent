@@ -6,7 +6,7 @@
 
 ## mini-agent 项目
 
-本仓库已初始化为 C++ 项目 **mini-agent**：Linux 终端下快速启动的轻量 AI Agent，提供 CLI 单次调用与自绘 TUI 多轮对话，一进程一会话（多开 = 多进程）。v1 已实现并通过验证（内核 / Provider / session / CLI / TUI / 日志 / Markdown）。
+本仓库已初始化为 C++ 项目 **mini-agent**：Linux 终端下快速启动的轻量 AI Agent，提供 CLI 单次调用与自绘 TUI 多轮对话，一进程一会话（多开 = 多进程）。v1 已实现并通过验证（内核 / Provider / session / CLI / TUI / 日志 / Markdown）；v2 工具层已落地（工具调用循环、内置 run_bash 命令执行、MCP stdio/Streamable HTTP 客户端，设计 008，使用见 [MCP 与工具使用指南](docs/mcp-usage.md)）。
 
 ```plantuml
 @startuml mini-agent-overview
@@ -102,6 +102,7 @@ python scripts/check.py --require-initialized
 | [完整使用手册](docs/user-guide.md) | 从创建项目到验证、设计交付和发布的逐步操作 |
 | [AGENTS.md](AGENTS.md) | AI 统一工作规则 |
 | [开发指南](docs/development.md) | 环境、命令和技术栈接入 |
+| [MCP 与工具使用指南](docs/mcp-usage.md) | v2 工具层使用者文档：MCP server 配置、审批交互、`--mcp`/`mcp list`、安全边界 |
 | [语言配置](docs/languages/README.md) | C++ 优先的语言规范、工具链与起步代码 |
 | [参考资料](docs/references/README.md) | 资料选择、版本与使用边界 |
 | [设计索引](docs/design/README.md) | 草案至最终设计的生命周期 |

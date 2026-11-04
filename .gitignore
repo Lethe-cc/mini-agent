@@ -42,3 +42,6 @@ compile_commands.json
 *.user
 *.suo
 Thumbs.db
+
+# Local language-server caches (clangd etc.)
+.cache/

@@ -10,7 +10,7 @@
 | cpp-tooling | [C++ 与构建工具](cpp-tooling.md) | C++、CMake、分析工具相关任务 | 按当前标准、工具版本和任务核对，不默认读取全部 |
 | agent-frameworks | [多智能体编排框架](agent-frameworks.md)（AutoGen、LangGraph、CrewAI、MetaGPT、OpenHands） | 设计编排层、消息/状态模型、可中断性 | 未读；借鉴模式不引入依赖，引用前按当天源码核对 |
 | coding-agents | [终端编码 Agent 实现](coding-agents.md)（mini-swe-agent、SWE-agent、Aider、Goose、Crush、opencode、Hermes Agent、Codex CLI、Pi） | 实现工具层、编辑协议、会话循环、错误恢复；TUI 交互借鉴（维护者确认的主要借鉴范围） | 部分核对（2026-11-01 许可证层）；Hermes/Pi=MIT、codex=Apache-2.0 可合规借鉴思路，Crush=FSL 禁代码复制 |
-| agent-protocols | [协议与极简实现](agent-protocols.md)（MCP、smolagents） | 设计工具接口契约、考虑与外部 AI 工具互通 | MCP 规范层部分核对（2026-11-02，stdio+lifecycle+tools，支撑 008 设计）；SDK/servers 源码仍未读；涉及"符合规范"的表述必须核对当天官方文本 |
+| agent-protocols | [协议与极简实现](agent-protocols.md)（MCP 规范/官方 SDK 组/官方 servers+inspector/C++ 与 Go/Rust 社区实现/deepwiki 对端/smolagents） | 设计工具接口契约、MCP client/server 实现对照、conformance 验收选型、与外部 AI 工具互通 | MCP 规范层核对（2026-11-02，stdio+lifecycle+tools+Streamable HTTP，支撑 008）；开源实现元数据+许可证核对（2026-11-05）；源码仍未精读；涉及"符合规范"的表述必须核对当天官方文本 |
 | agent-benchmarks | [评测基准与环境](agent-benchmarks.md)（SWE-bench、AgentBench、WebArena） | 设计验收标准与可自动执行的完成判据 | 未读；不复制数据集内容，不执行基准脚本 |
 | md-renderers | [终端 Markdown 渲染库](md-renderers.md)（md4c、cmark、glamour、glow、termimad、rich） | md 模块扩展表格/复杂语法、评估切换 md4c 时 | 许可证层已核对（2026-11-01）：md4c/glamour/glow/rich=MIT、cmark 需读原文、termimad 未核实；引入依赖必须先记 ADR |
 

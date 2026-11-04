@@ -123,6 +123,7 @@ stop
 - 配置合并：env > `config.json`；`/login`/`/model`/`/provider` 在 TUI 内写回文件（0600）。密钥在任何 stdout/日志面零输出（掩码显示 `***set***`）。三条命令**各自独立保存**，可任意顺序、分属不同进程分批录入；提示行统一走 `config_next_hint()`，只报 `config N/3 · next: <下一步>`而不重列全部命令，也不回显字段值（见 007 §5.6 规则 8）。日志侧 `Logger::redact_url()` 会将 `https://user:token@host` 的 userinfo 剥为 `***@`，防止将凭据内嵌到 base_url 时泄入日志。
 - 模型发现（2026-11-02）：`/provider <url>` 与 `/login <key>` 保存后，若 base_url+api_key 齐备则自动 `GET {base_url}/models`（独立 worker、15 s 上限），`/models` 可手动重列。返回 id 排序去重后以编号菜单呈现，输序号即选定（也可继续用 `/model <name>`，Esc dismiss）。日志记 `models_list status=start|ok|error count= elapsed_ms=` 与 `model_select model= source=menu`，仅元数据；密钥不入菜单也不入错误文本。
 - 登录状态（2026-11-02）：上述同一次 `GET /models` 兼作认证探针（**零额外请求**），`ProviderError::http_status()` 用于区分“密钥被拒”（401/403 → rejected）与“未连上”（unreachable）；`auth_status_line` / `auth_log_token` 分类 verified / rejected / refused / unreachable / unverified，展示于历史区与 `/config` 的 `login=` 行。凭据一变即重置结论；启动不探测（不击穿冷启动预算）；日志 `login status=… models=N [http_status=N]`（见 007 §5.6 规则 9）。**聊天请求也作为认证探针**（2026-11-02 修复）：主线程在回合结束把 `chat/completions` 的结果折叠进同一个 `AuthProbe`（成功=verified，401/403=rejected），聊天来源的证据在日志中以 `source=chat` 字段区分（`AuthProbe` 本身不带来源字段），因此不跑 `/models`、或 provider 不开放 `/models` 时也能正确显示连通；verdict 变化只记一条 `login … source=chat` 日志，不再往历史区打 `[auth]` 行（提示符即反馈），abort 不改变结论。
+- v2 工具层（2026-11-04，使用者文档见 [MCP 与工具使用指南](mcp-usage.md)）：`run_turn(TurnOptions)` 内层循环消费 OpenAI 兼容 `delta.tool_calls`（lenient 解析 4 类网关形状；未知形状报结构指纹错误，指纹仅含字段名与类型、无值）。工具源经 `ToolRegistry` 聚合：内置 `run_bash`（fork/exec `/bin/bash -lc`，超时杀进程组、输出 32 KiB 首尾截断）与 MCP server（`mcp.hpp` 三层：McpTransport 抽象 / McpRpcClient id 关联 / McpClient tools 对话；stdio=子进程换行分隔 JSON-RPC，Streamable HTTP=POST+SSE+会话头，仅静态 Bearer）。工具名命名空间 `server__tool`（分隔符与净化规则受 function-name 字符集约束，见 008 偏差 D1）。审批默认逐次 y/N/a/?（worker 与主线程以固定槽位+序号桥接），策略 `tool_approval=ask|allowlist|off`，env `MINI_AGENT_TOOL_APPROVAL` 覆盖、`MINI_AGENT_NO_MCP=1` 全禁。日志事件 `tools/tool_exec/tool_approve/mcp_*` 仅元数据；工具输出进 TUI 前过 `sanitize_display`。session 含工具数据自动升 `schema_version=2`，v1 构建按更高版本规则拒绝。
 - provider 连通状态标志（2026-11-02）：输入提示符本身即状态标志——`connection_state()` 从配置 + 上一次 `AuthProbe` 推导出 `ConnState`，`prompt_marker()` 将其渲染为带样式的 1 列前缀（`?` 暗色未配置 / `?` 黄未验证 / `~` 青探测中 / `>` 绿已验证 / `!` 红被拒 / `x` 品红不可达）。零额外请求与零额外行，marker 不含文本因此不可能泄露 endpoint 或密钥；图形与颜色双重编码，`/help` 提供图例（见 007 §5.6 规则 10）。
 
 ## 错误处理与安全边界
@@ -136,7 +137,7 @@ stop
 
 | 能力 | v1 状态 | 预留 |
 | --- | --- | --- |
-| 工具调用 (function calling) | 不实现（v2 设计中） | Role/字段预留，Provider 流式协议可扩展；[008：v2 设计草案](design/008-mcp-tools.md)（含 MCP 客户端传输抽象 + stdio/Streamable HTTP 与命令执行，草案未评审未实现） |
+| 工具调用 (function calling) | **v2 已实现**（2026-11-04，待人工评审） | [008](design/008-mcp-tools.md)：run_turn 多轮循环 + ToolRegistry + 内置 run_bash（默认逐次人审，ADR 006 提议）+ MCP 客户端（传输抽象 + stdio/Streamable HTTP，ADR 005 提议） |
 | 上下文压缩 | 不实现 | 历史在内存重放，可插 summarize |
 | 多 Agent / 编排 | 不实现 | `run_turn(Chat&, Provider&)` 参数注入、无全局单例 |
 | 跨折行光标移动、鼠标、语法高亮 | 不实现（v2） | 帧模型行预算与 diff 结构已就位 |
@@ -148,3 +149,4 @@ stop
 - 严格项目门禁（configure → build → CTest）：`python3 scripts/check.py --strict-project`
 - 手工冒烟（pty 驱动 TUI + mock SSE）：`python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent`
 - 单元契约：`build/<preset>/agent_test`（chat/session/loop/config/log/md/tui 纯函数）
+- MCP 客户端契约：`build/<preset>/mcp_test`（RPC/对话层 fake transport + stdio/http mock E2E，ctest `mcp.client`）

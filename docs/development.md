@@ -20,6 +20,12 @@
 | `python scripts/check.py --tooling-only` | 显式跳过项目命令，仅做工具和文档检查，不用于业务验收 |
 | `python -m unittest discover -s tests -p "test_*.py" -v` | 单独运行模板工具测试 |
 
+## 开发小工具（tools/）
+
+项目过程中产生的小工具（手动调试、探测、一次性验证脚本）统一放 `tools/`，清单和用法见 [tools/README.md](../tools/README.md)。它们不是质量命令，不进 `project.json`；CI/门禁脚本仍放 `scripts/`，被自动化测试引用的 mock 服务和测试脚本仍放 `tests/`。
+
+当前工具：`python3 tools/mcp_probe.py --help` — Streamable HTTP MCP 客户端探针，手动握手/列工具/调工具/发原始 JSON-RPC，用于调试 mini-agent 连接外部 HTTP MCP server 的问题。
+
 脚本中的项目路径根据脚本位置计算。质量命令固定从仓库根目录执行。
 
 ## mini-agent 业务开发
@@ -31,11 +37,16 @@
 | `cmake --preset linux-gcc-debug && cmake --build --preset linux-gcc-debug` | 配置+构建（另有 `linux-clang-debug`、Release preset；Ninja） |
 | `ctest --test-dir build/linux-gcc-debug --output-on-failure` | CTest（`agent.core`、`starter.project_name`） |
 | `./build/linux-gcc-debug/agent_test` | 单元/契约测试（chat/session/loop/config/log/md/tui 纯函数） |
+| `./build/linux-gcc-debug/mcp_test` | v2 MCP 契约测试（RPC/对话层 fake transport + stdio/http mock E2E；ctest `mcp.client`） |
+| `python3 tests/mock_mcp_server.py` | 手工：stdio mock MCP server（`/tools` 前的最小对端） |
+| `python3 tests/mock_mcp_http_server.py 8933` | 手工：Streamable HTTP mock MCP server（SSE 响应 + Mcp-Session-Id） |
 | `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent` | pty 端到端冒烟：真实伪终端驱动 TUI，mock SSE 服务，断言帧不变量/方向键/历史/中断/持久化（非质量命令，手工运行） |
 | `python3 scripts/cpp_check.py` | 质量命令入口（configure → build → CTest），由 `check.py --strict-project` 调用 |
 | `clang-format --dry-run -Werror <files>` / `python3 scripts/cpp_format.py` | 第一方 C++ 格式检查（风格见 `.clang-format`） |
 
-运行配置：环境变量 `MINI_AGENT_BASE_URL`/`MINI_AGENT_API_KEY`/`MINI_AGENT_MODEL` 优先于 `~/.config/mini-agent/config.json`；也可全部不设，在 TUI 内用 `/provider`、`/login`、`/model` 配置。模板见 `.env.example`（注释为英文；真实密钥只放本地 `.env` 或 shell 环境）。
+运行配置（v2 工具层，面向使用者的完整指南见 [MCP 与工具使用指南](mcp-usage.md)）：`config.json` 的 `mcp_servers`（stdio 用 `command`/`args`/`env`，HTTP 用 `url`/`bearer_token`；`transport` 缺省时含 `url` 即推断为 http，`transport` 只能是 `stdio` 或 `http`——写 `https` 会使整份配置校验失败）、`tool_approval`（`ask` 默认/`allowlist`/`off`）、`tool_allowlist`、`max_tool_rounds`、`tool_timeout_seconds`；env 覆盖 `MINI_AGENT_TOOL_APPROVAL`、`MINI_AGENT_NO_MCP=1` 全禁 MCP。CLI：`ask --tools off|ask|auto`（默认 off，脚本契约不变）；TUI：`/tools`（列注册表并强制握手/重列）、`/mcp`。会话级注入：`ask`/`run`/`mcp list` 支持 `--mcp NAME=SPEC`（`NAME=https://…` 或 loopback http | `NAME=cmd args…` stdio | `NAME={json}` 全量字段；同名覆盖文件条目、不落盘、重启即失）；`mini-agent mcp list` 打印生效清单（bearer 恒脱敏、URL 剥 userinfo，未配 LLM 也可运行）。工具名命名空间为 `server__tool`（双下划线；单斜杠会被 OpenAI 兼容网关静默忽略，见 008 偏差 D1）。
+
+原有配置：环境变量 `MINI_AGENT_BASE_URL`/`MINI_AGENT_API_KEY`/`MINI_AGENT_MODEL` 优先于 `~/.config/mini-agent/config.json`；也可全部不设，在 TUI 内用 `/provider`、`/login`、`/model` 配置。模板见 `.env.example`（注释为英文；真实密钥只放本地 `.env` 或 shell 环境）。
 
 运行时提示文案约定：面向用户的字符串（TUI/CLI 提示、状态行、历史前缀、补全菜单）一律英文；代码注释同为英文。设计/架构等中文文档是项目工作语言，不受此限。新增 UI 文案时同步更新 `tests/pty_tui_smoke.py` 中的对应断言。
 
