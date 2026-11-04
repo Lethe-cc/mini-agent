@@ -1363,6 +1363,68 @@ void test_run_bash_and_helpers() {
           "find routes by name");
 }
 
+void test_history_styling() {
+    namespace tui = mini_agent::tui;
+    // colors=false: byte-identical passthrough (non-TTY / NO_COLOR path).
+    check(tui::style_history_line("[error] boom", false) == "[error] boom",
+          "styling off returns the line unchanged");
+    // Already-styled lines (markdown replies, producer SGR) are never touched.
+    const std::string pre = "\x1b[1mAI: \x1b[0malready styled";
+    check(tui::style_history_line(pre, true) == pre, "styled lines pass through");
+    // Tag classification: whole-line spans, exact text preserved inside.
+    const auto ok = tui::style_history_line("[ok] config saved", true);
+    check(ok.find("\x1b[32m[ok] config saved\x1b[0m") == 0, "ok rows green, whole-line span");
+    const auto err = tui::style_history_line("[error] model list failed", true);
+    check(err.find("\x1b[1;31m") == 0 && err.find("model list failed") != std::string::npos,
+          "error rows bold red");
+    const auto warn = tui::style_history_line("[warn] save failed: x", true);
+    check(warn == "\x1b[33m[warn] save failed: x\x1b[0m", "warn rows yellow");
+    const auto info = tui::style_history_line("[info] listing models from provider...", true);
+    check(info == "\x1b[36m[info] listing models from provider...\x1b[0m", "info rows cyan");
+    // Auth verdicts differ by substring, not just tag.
+    check(tui::style_history_line("[auth] login verified · key accepted · 2 model(s)", true)
+                  .find("\x1b[32m") == 0,
+          "verified auth green");
+    check(tui::style_history_line("[auth] login REJECTED · HTTP 401", true).find("\x1b[1;31m") == 0,
+          "rejected auth bold red");
+    check(tui::style_history_line("[auth] login unverified · /provider", true).find("\x1b[33m") ==
+              0,
+          "unverified auth yellow");
+    // Tool outcome colours.
+    check(tui::style_history_line("[tool] run_bash · ls [ok 5ms · 1 B]", true).find("\x1b[36m") ==
+              0,
+          "ok tool row cyan");
+    check(tui::style_history_line("[tool] x [denied]", true).find("\x1b[1;31m") == 0,
+          "denied tool row bold red");
+    check(tui::style_history_line("[tool] x [error 5ms · 0 B]", true).find("\x1b[33m") == 0,
+          "error tool row yellow");
+    // Identity rows bold, informational echoes dim, replies left plain.
+    check(tui::style_history_line("mini-agent · model=m · session=s", true).find("\x1b[1mm") == 0,
+          "banner bold");
+    check(tui::style_history_line("You: hello", true).find("\x1b[1mYou: hello\x1b[0m") == 0,
+          "user echo bold");
+    check(tui::style_history_line("commands: /provider <url>", true).find("\x1b[2m") == 0,
+          "help legend dim");
+    check(tui::style_history_line("approval=off", true).find("\x1b[33m") == 0,
+          "approval policy off is yellow");
+    check(tui::style_history_line("approval=ask", true).find("\x1b[2m") == 0,
+          "approval policy ask is dim");
+    check(tui::style_history_line("    continuation of AI reply", true) ==
+              "    continuation of AI reply",
+          "assistant continuation stays plain");
+    check(tui::style_history_line("AI: plain reply", true) == "AI: plain reply",
+          "assistant reply rows stay plain");
+    // Wrap safety: the span is zero-width for md::wrap, and wrapped
+    // continuation rows re-assert the styling.
+    const std::string long_line = "[info] " + std::string(100, 'x');
+    const auto styled = tui::style_history_line(long_line, true);
+    check(mini_agent::md::display_width(styled) == mini_agent::md::display_width(long_line),
+          "SGR adds zero display width");
+    const auto wrapped = mini_agent::md::wrap(styled, 40);
+    check(wrapped.size() == 3 && wrapped[1].find("\x1b[36m") != std::string::npos,
+          "md::wrap re-asserts the span on continuation rows");
+}
+
 } // namespace
 
 int main() {
@@ -1385,6 +1447,7 @@ int main() {
     test_md4c_gfm_extensions();
     test_tui_helpers();
     test_tool_ui_helpers();
+    test_history_styling();
     test_tool_calls_round_trip();
     test_v1_request_shape_regresssion();
     test_session_schema_bumps_for_tools();

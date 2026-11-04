@@ -206,6 +206,12 @@ def main():
                # outside session_dir so the *.json session glob stays exact.
                MINI_AGENT_CONFIG=os.path.join(config_dir.name, "config.json"),
                MINI_AGENT_LOG=log_path)
+    # Colour assertions (prompt marker + history styling) need SGR on: a
+    # maintainer's NO_COLOR/TERM=dumb would disable commit styling.
+    env.pop("NO_COLOR", None)
+    env["TERM"] = env.get("TERM") or "xterm"
+    if env["TERM"] == "dumb":
+        env["TERM"] = "xterm"
     pid, fd = pty.fork()
     if pid == 0:
         os.execve(binary, [binary, "run", "--new"], env)
@@ -225,6 +231,13 @@ def main():
     # but never probed in this process, so it must be the yellow `?`
     # (unverified) -- never the green `>` (connected).
     expect("\x1b[33m?\x1b[0m" in splash, "startup prompt marker is the yellow unverified state")
+    # History colouring (2026-11-04 readability request): tag rows are tinted
+    # whole-line, so the printable text stays contiguous inside the span.
+    expect("\x1b[1mmini-agent · model=smoke" in splash,
+           "banner row is bold and text stays contiguous")
+    expect("\x1b[33m[auth] login unverified" in splash,
+           "unverified auth row is yellow")
+    expect("\x1b[2mEnter sends" in splash, "key-hint legend row is dim")
 
     os.write(fd, b"hello\r")
     turn = read_all(fd, 4.0)
@@ -372,10 +385,16 @@ def main():
     # the live block with the submitted question. Later frames may skip
     # re-writing it entirely (row diff preserves unchanged prefix rows on
     # screen -- that is what keeps it pinned without repaints).
+    # The pinned row is bold-styled (2026-11-04 colouring), so compare on the
+    # visible text: strip every SGR but keep the \x1b[2K row markers.
+    def strip_sgr_keep_k(frame):
+        return re.sub(r"\x1b\[(?!2K)[0-9;]*m", "", frame)
+
     frames = re.findall(r"\x1b\[\?2026h(.*?)\x1b\[\?2026l", long_raw, re.S)
-    stream_frames = [f for f in frames if "\x1b[2KYou: long-reply" in f]
+    stream_frames = [f for f in frames if "\x1b[2KYou: long-reply" in strip_sgr_keep_k(f)]
     expect(len(stream_frames) >= 1 and
-           all(f.split("\x1b[2K", 1)[1].startswith("You: long-reply") for f in stream_frames),
+           all(strip_sgr_keep_k(f).split("\x1b[2K", 1)[1].startswith("You: long-reply")
+               for f in stream_frames),
            f"question pinned atop live block ({len(stream_frames)} writes, first-row ok)")
     expect(bool(counts) and max(counts) >= 30,
            f"streaming window scales with terminal height (max backup={max(counts) if counts else 0})")

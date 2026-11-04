@@ -696,7 +696,9 @@ class LiveScreen {
         last_extra_ = extra_rows;
         const std::size_t cap = rows > 2 ? rows - 2 : 1; // block budget minus status row
         auto pin_rows =
-            streaming ? md::wrap("You: " + pinned_question, cols) : std::vector<std::string>{};
+            streaming
+                ? md::wrap(style_history_line("You: " + pinned_question, colors_enabled()), cols)
+                : std::vector<std::string>{};
         auto tail_rows = streaming ? md::wrap(response_tail, cols) : std::vector<std::string>{};
         // The prompt marker carries the provider connection state (2026-11-02
         // request): same row as the composer, one display column wide.
