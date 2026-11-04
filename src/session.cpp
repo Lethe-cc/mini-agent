@@ -128,7 +128,17 @@ bool SessionStore::ensure_root(std::string* error) {
 std::string session_to_json(const SessionMeta& meta, const Chat& chat) {
     nlohmann::json messages = nlohmann::json::parse(chat_to_json(chat));
     nlohmann::json root;
-    root["meta"]["schema_version"] = meta.schema_version;
+    // v2 rule (design 008 section 4): any tool_calls / tool_call_id in the
+    // history forces schema_version 2, because a v1 build would drop
+    // tool_calls on read and leave orphan Tool messages that replay wrongly.
+    int version = meta.schema_version;
+    for (const auto& message : chat.messages()) {
+        if (message.has_tool_data()) {
+            version = std::max(version, kToolSchemaVersion);
+            break;
+        }
+    }
+    root["meta"]["schema_version"] = version;
     root["meta"]["id"] = meta.id;
     root["meta"]["created_at"] = meta.created_at;
     root["meta"]["updated_at"] = meta.updated_at;
@@ -160,11 +170,14 @@ std::optional<Session> session_from_json(std::string_view text, std::string* err
         return std::nullopt;
     }
     const auto version = version_it->get<int>();
-    if (version > 1) {
-        // Forward rejection (design 007 section 5.5).
+    if (version > kToolSchemaVersion) {
+        // Forward rejection (design 007 section 5.5). v1 builds max out at 1,
+        // so a v2 file read by a v1 binary takes this path with a clear
+        // "upgrade" hint instead of silently corrupting the tool round-trip.
         if (error)
             *error = "session schema_version " + std::to_string(version) +
-                     " is newer than this build supports (max 1); upgrade mini-agent";
+                     " is newer than this build supports (max " +
+                     std::to_string(kToolSchemaVersion) + "); upgrade mini-agent";
         return std::nullopt;
     }
     Session session;

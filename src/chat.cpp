@@ -31,9 +31,13 @@ std::optional<Role> role_from_string(std::string_view name) noexcept {
     return std::nullopt;
 }
 
+bool operator==(const ToolCall& lhs, const ToolCall& rhs) noexcept {
+    return lhs.id == rhs.id && lhs.name == rhs.name && lhs.arguments_json == rhs.arguments_json;
+}
+
 bool operator==(const Message& lhs, const Message& rhs) noexcept {
     return lhs.role == rhs.role && lhs.content == rhs.content &&
-           lhs.tool_call_id == rhs.tool_call_id;
+           lhs.tool_call_id == rhs.tool_call_id && lhs.tool_calls == rhs.tool_calls;
 }
 
 void Chat::add(Message message) {
@@ -48,6 +52,13 @@ std::string chat_to_json(const Chat& chat) {
         entry["content"] = message.content;
         if (message.tool_call_id) {
             entry["tool_call_id"] = *message.tool_call_id;
+        }
+        if (!message.tool_calls.empty()) {
+            entry["tool_calls"] = nlohmann::json::array();
+            for (const auto& call : message.tool_calls) {
+                entry["tool_calls"].push_back(
+                    {{"id", call.id}, {"name", call.name}, {"arguments", call.arguments_json}});
+            }
         }
         arr.push_back(std::move(entry));
     }
@@ -104,6 +115,43 @@ std::optional<Chat> chat_from_json(std::string_view text, std::string* error) {
                 return std::nullopt;
             }
             message.tool_call_id = tid_it->get<std::string>();
+        }
+        // tool_calls: fail-closed on any malformed entry (design 008 section
+        // 5.2). An assistant message with an empty array parses as "no tool
+        // calls" and the field is dropped, matching the omit-while-empty rule.
+        if (auto calls_it = entry.find("tool_calls"); calls_it != entry.end()) {
+            if (!calls_it->is_array()) {
+                if (error)
+                    *error = "message #" + std::to_string(index) + " tool_calls is not an array";
+                return std::nullopt;
+            }
+            std::size_t call_index = 0;
+            for (const auto& call_node : *calls_it) {
+                ++call_index;
+                if (!call_node.is_object()) {
+                    if (error)
+                        *error = "message #" + std::to_string(index) + " tool_call #" +
+                                 std::to_string(call_index) + " is not an object";
+                    return std::nullopt;
+                }
+                auto str_field = [&](const char* key, std::string* out) -> bool {
+                    auto it = call_node.find(key);
+                    if (it == call_node.end() || !it->is_string()) {
+                        if (error)
+                            *error = "message #" + std::to_string(index) + " tool_call #" +
+                                     std::to_string(call_index) + " missing string '" + key + "'";
+                        return false;
+                    }
+                    *out = it->get<std::string>();
+                    return true;
+                };
+                ToolCall call;
+                if (!str_field("id", &call.id) || !str_field("name", &call.name) ||
+                    !str_field("arguments", &call.arguments_json)) {
+                    return std::nullopt;
+                }
+                message.tool_calls.push_back(std::move(call));
+            }
         }
         chat.add(std::move(message));
     }

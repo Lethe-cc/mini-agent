@@ -9,6 +9,11 @@
 
 namespace mini_agent {
 
+// Session schema levels: 1 = v1 (no tool data); 2 = v2, required as soon as
+// any message carries tool_calls/tool_call_id (design 008 section 4). Save
+// auto-bumps to this level for tool data; load accepts up to this level.
+constexpr int kToolSchemaVersion = 2;
+
 // v1 schema is version 1. Load rules (design 007 section 5.5): higher
 // schema_version is rejected; unknown optional fields are ignored;
 // unknown roles are rejected by the chat parser.

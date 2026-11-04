@@ -45,6 +45,21 @@ struct ProviderConfig {
 // transfer (used by TUI Ctrl-C).
 using ShouldAbort = std::function<bool()>;
 
+// ToolCall itself lives in chat.hpp (storage shape == wire shape here;
+// arguments_json is raw model output, never parsed at this layer).
+
+// Result of one completion: final text plus any tool calls the model
+// requested. When tool_calls is non-empty the text is usually empty or a
+// lead-in; the loop treats invocations as the authoritative outcome.
+struct CompletionResult {
+    std::string text;
+    std::vector<ToolCall> tool_calls;
+
+    bool has_tool_calls() const noexcept {
+        return !tool_calls.empty();
+    }
+};
+
 class Provider {
   public:
     virtual ~Provider() = default;
@@ -53,6 +68,13 @@ class Provider {
     virtual std::string complete(const Chat& chat,
                                  const std::function<void(std::string_view)>& on_delta,
                                  const ShouldAbort& should_abort) = 0;
+    // v2 capability: tool-aware completion. `tools_json` is the OpenAI wire
+    // shape ("[]" or empty = no tools, byte-identical v1 request). The base
+    // implementation delegates to complete() and returns pure text, so v1
+    // providers and test fakes need no changes (design 008 section 5.2).
+    virtual CompletionResult complete_chat(const Chat& chat, const std::string& tools_json,
+                                           const std::function<void(std::string_view)>& on_delta,
+                                           const ShouldAbort& should_abort);
     // Optional capability: list available model ids, sorted
     // (OpenAI-compatible GET {base_url}/models). The base implementation
     // throws ProviderError(Protocol); providers that speak the endpoint
@@ -60,6 +82,11 @@ class Provider {
     // never appears in the returned ids or in any ProviderError text.
     virtual std::vector<std::string> list_models();
 };
+
+// Test-visible wrapper around the internal request builder (008 section 7
+// byte-identical no-tools regression). Not part of the Provider interface.
+std::string preview_chat_request_body(const Chat& chat, const std::string& model,
+                                      const std::string& tools_json);
 
 // Parses an OpenAI-compatible GET /models body into model ids (sorted,
 // deduplicated). Fail-closed (design 007 section 5.5): malformed JSON, a
@@ -77,6 +104,13 @@ class OpenAiProvider final : public Provider {
     }
     std::string complete(const Chat& chat, const std::function<void(std::string_view)>& on_delta,
                          const ShouldAbort& should_abort) override;
+    // Tool-aware path: request body carries the `tools` array when
+    // tools_json is non-empty, and the SSE parser accumulates
+    // delta.tool_calls fragments by index (design 008 section 5.2, R2:
+    // gateway divergences are a must-verify fact per provider).
+    CompletionResult complete_chat(const Chat& chat, const std::string& tools_json,
+                                   const std::function<void(std::string_view)>& on_delta,
+                                   const ShouldAbort& should_abort) override;
     // OpenAI-compatible GET {base_url}/models. Throws ProviderError on
     // network/HTTP/protocol failure; never echoes the api_key.
     std::vector<std::string> list_models() override;

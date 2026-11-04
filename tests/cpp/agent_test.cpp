@@ -1,5 +1,6 @@
 // Unit tests for chat/session/loop (design 007 section 8: extension-point
 // format commitments are tested from v1). Plain asserts, no framework dep.
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -14,9 +15,11 @@
 #include "mini_agent/config.hpp"
 #include "mini_agent/log.hpp"
 #include "mini_agent/loop.hpp"
+#include "mini_agent/mcp.hpp"
 #include "mini_agent/md.hpp"
 #include "mini_agent/provider.hpp"
 #include "mini_agent/session.hpp"
+#include "mini_agent/tools.hpp"
 #include "mini_agent/tui.hpp"
 
 namespace {
@@ -760,6 +763,606 @@ void test_tui_helpers() {
     check(!mini_agent::tui::utf8_erase_at(edit, cur), "delete at end is no-op");
 }
 
+// ---------------------------------------------------------------------------
+// v2 (design 008): tool_calls round-trip, session schema 2, tool loop,
+// run_bash, sanitization.
+// ---------------------------------------------------------------------------
+
+void test_tool_ui_helpers() {
+    namespace tui = mini_agent::tui;
+    // tool_activity_line: one row, sanitized, name+summary+outcome
+    const auto line =
+        tui::tool_activity_line("run_bash", R"({"command":"ls -la"})", true, false, 420, 1024);
+    check(line.find("[tool] run_bash") != std::string::npos &&
+              line.find("ls -la") != std::string::npos &&
+              line.find("[ok 420ms") != std::string::npos,
+          "activity line shape");
+    const auto denied = tui::tool_activity_line("x/y", "{}", false, true, 5, 0);
+    check(denied.find("[denied]") != std::string::npos, "denied marker");
+    std::string evil_args = R"JW({"text":")JW";
+    evil_args += "\x1b[2Jhacked\x07"
+                 "done";
+    evil_args += R"JW("})JW";
+    const auto evil = tui::tool_activity_line("t", evil_args, true, false, 1, 1);
+    check(evil.find('\x1b') == std::string::npos && evil.find('\x07') == std::string::npos,
+          "escapes stripped from activity row");
+    check(evil.find('\n') == std::string::npos, "activity row is single-line");
+
+    // approval key state machine
+    bool expanded = false;
+    check(tui::approval_key('y', expanded) == tui::ApprovalKey::Allow, "y allows");
+    check(tui::approval_key('A', expanded) == tui::ApprovalKey::AllowSession, "A session-allows");
+    check(tui::approval_key('n', expanded) == tui::ApprovalKey::Deny, "n denies");
+    check(tui::approval_key('?', expanded) == std::nullopt && expanded, "? expands");
+    check(tui::approval_key('?', expanded) == std::nullopt && !expanded, "? collapses again");
+    check(tui::approval_key('q', expanded) == std::nullopt, "other keys unhandled");
+
+    // approval rows: header + legend; expanded adds argument lines
+    const auto compact = tui::approval_rows("run_bash", R"({"command":"rm -rf /tmp/x"})", false);
+    check(compact.size() == 2 && compact[0].find("rm -rf /tmp/x") != std::string::npos &&
+              compact[1].find("y=allow") != std::string::npos,
+          "approval rows compact shape");
+    const auto wide = tui::approval_rows("srv__tool", R"({"a":{"b":1}})", true);
+    std::string joined;
+    for (const auto& row : wide)
+        joined += row;
+    check(wide.size() >= 4 && joined.find("\"b\"") != std::string::npos &&
+              joined.find("params(compact)") != std::string::npos,
+          "expanded shows pretty-printed params");
+
+    // registry rows
+    const auto rows = tui::tool_registry_rows({"run_bash"});
+    check(rows.size() == 2 && rows[0].find("tools (1)") != std::string::npos, "registry rows");
+    const auto none = tui::tool_registry_rows({});
+    check(none.size() == 2 && none[1].find("mcp_servers") != std::string::npos, "empty hint");
+
+    // slash registry includes the new commands
+    const auto matches = tui::slash_matches("/to");
+    check(std::find(matches.begin(), matches.end(), std::string_view("/tools")) != matches.end(),
+          "/tools registered");
+    const auto mc = tui::slash_matches("/mc");
+    check(std::find(mc.begin(), mc.end(), std::string_view("/mcp")) != mc.end(), "/mcp registered");
+}
+
+void test_v1_request_shape_regresssion() {
+    // 008 section 7: with no tools offered, the chat request body must be
+    // exactly the v1 shape (model/stream/messages, nothing else).
+    mini_agent::Chat chat;
+    chat.add(mini_agent::Message{mini_agent::Role::User, "hi", std::nullopt, {}});
+    const std::string v1ish = mini_agent::preview_chat_request_body(chat, "m", "");
+    const std::string tools_empty = mini_agent::preview_chat_request_body(chat, "m", "[]");
+    check(v1ish == tools_empty, "empty tools json == no tools");
+    check(v1ish.find("\"tools\"") == std::string::npos, "no tools field when unset");
+    check(v1ish.find("\"stream\":true") != std::string::npos, "stream flag kept");
+    const std::string with_tools =
+        mini_agent::preview_chat_request_body(chat, "m", R"([{"type":"function"}])");
+    check(with_tools.find("\"tools\"") != std::string::npos, "tools field appears when set");
+}
+
+void test_tool_calls_round_trip() {
+    mini_agent::Chat chat;
+    mini_agent::Message assistant;
+    assistant.role = mini_agent::Role::Assistant;
+    assistant.content = "checking";
+    assistant.tool_calls.push_back({"c1", "run_bash", R"({"command":"ls -a"})"});
+    assistant.tool_calls.push_back({"c2", "fs/read", R"({"path":"x"})"});
+    chat.add(std::move(assistant));
+    mini_agent::Message tool;
+    tool.role = mini_agent::Role::Tool;
+    tool.content = "result text";
+    tool.tool_call_id = "c1";
+    chat.add(std::move(tool));
+
+    const std::string text = mini_agent::chat_to_json(chat);
+    check(text.find("\"tool_calls\"") != std::string::npos, "tool_calls written");
+    check(text.find("\"arguments\"") != std::string::npos, "arguments written");
+    // v1 omit-while-empty rule still holds for plain messages
+    mini_agent::Chat plain;
+    plain.add(mini_agent::Message{mini_agent::Role::User, "hi", std::nullopt, {}});
+    check(mini_agent::chat_to_json(plain).find("tool_calls") == std::string::npos,
+          "empty tool_calls omitted");
+
+    std::string error;
+    auto back = mini_agent::chat_from_json(text, &error);
+    check(back.has_value(), (std::string("tool chat parses: ") + error).c_str());
+    if (back) {
+        check(back->messages()[0].tool_calls.size() == 2, "two calls survive");
+        check(back->messages()[0].tool_calls[0].id == "c1" &&
+                  back->messages()[0].tool_calls[0].name == "run_bash" &&
+                  back->messages()[0].tool_calls[0].arguments_json == R"({"command":"ls -a"})",
+              "call fields survive verbatim");
+        check(back->messages()[1].tool_call_id == std::optional<std::string>("c1"),
+              "tool_call_id still survives");
+        check(back->messages()[0] == chat.messages()[0], "message equality covers tool_calls");
+    }
+
+    // fail-closed on malformed shapes (008 5.2)
+    check(!mini_agent::chat_from_json(R"([{"role":"assistant","content":"","tool_calls":"nope"}])",
+                                      &error)
+               .has_value(),
+          "tool_calls non-array rejected");
+    check(!mini_agent::chat_from_json(
+               R"([{"role":"assistant","content":"","tool_calls":[{"id":"1"}]}])", &error)
+               .has_value(),
+          "tool_call missing fields rejected");
+    check(
+        !mini_agent::chat_from_json(
+             R"([{"role":"assistant","content":"","tool_calls":[{"id":1,"name":"n","arguments":"{}"}]}])",
+             &error)
+             .has_value(),
+        "tool_call non-string id rejected");
+    // empty array tolerated and dropped (omits on re-serialize)
+    auto dropped = mini_agent::chat_from_json(
+        R"([{"role":"assistant","content":"x","tool_calls":[]}])", &error);
+    check(dropped.has_value() && dropped->messages()[0].tool_calls.empty(),
+          "empty tool_calls array parses");
+}
+
+void test_session_schema_bumps_for_tools() {
+    mini_agent::Chat chat;
+    mini_agent::Message assistant;
+    assistant.role = mini_agent::Role::Assistant;
+    assistant.tool_calls.push_back({"c1", "x", "{}"});
+    chat.add(std::move(assistant));
+
+    mini_agent::SessionMeta meta;
+    meta.id = "abc";
+    const std::string v2 = mini_agent::session_to_json(meta, chat);
+    check(v2.find("\"schema_version\": 2") != std::string::npos ||
+              v2.find("\"schema_version\":2") != std::string::npos,
+          "tool data bumps schema to 2");
+
+    mini_agent::Chat plain;
+    plain.add(mini_agent::Message{mini_agent::Role::User, "hi", std::nullopt, {}});
+    const std::string v1 = mini_agent::session_to_json(meta, plain);
+    check(v1.find("\"schema_version\": 1") != std::string::npos ||
+              v1.find("\"schema_version\":1") != std::string::npos,
+          "plain history stays at schema 1");
+
+    // v2 file loads fine in this build (accepts up to kToolSchemaVersion)
+    std::string error;
+    auto loaded = mini_agent::session_from_json(v2, &error);
+    check(loaded.has_value(), (std::string("v2 file loads: ") + error).c_str());
+    if (loaded)
+        check(loaded->meta.schema_version == 2, "loaded meta reports version 2");
+
+    // tool_call_id alone also bumps (a Tool message without bumping would
+    // still parse in v1, but tool_calls-bearing rounds must never half-load)
+    mini_agent::Chat only_tool_msg;
+    only_tool_msg.add(mini_agent::Message{mini_agent::Role::Tool, "r", "id1", {}});
+    const std::string bumped = mini_agent::session_to_json(meta, only_tool_msg);
+    check(bumped.find("2") != std::string::npos &&
+              bumped.find("schema_version\": 1") == std::string::npos,
+          "tool_call_id also bumps schema");
+}
+
+namespace {
+
+// Provider that emits scripted tool-call rounds then a final text (or
+// throws). Records the tools_json seen per call for request assertions.
+class FakeToolProvider final : public mini_agent::Provider {
+  public:
+    struct Step {
+        std::vector<mini_agent::ToolCall> calls;
+        std::string text;
+    };
+    explicit FakeToolProvider(std::vector<Step> steps) : steps_(std::move(steps)) {
+    }
+    std::string complete(const mini_agent::Chat&, const std::function<void(std::string_view)>&,
+                         const mini_agent::ShouldAbort&) override {
+        return "unused";
+    }
+    mini_agent::CompletionResult
+    complete_chat(const mini_agent::Chat& chat, const std::string& tools_json,
+                  const std::function<void(std::string_view)>& on_delta,
+                  const mini_agent::ShouldAbort&) override {
+        seen_tools_.push_back(tools_json);
+        seen_history_.push_back(chat.messages().size());
+        const auto& step = steps_[static_cast<std::size_t>(index_ % steps_.size())];
+        ++index_;
+        if (fail_at_ == index_)
+            throw mini_agent::ProviderError(mini_agent::ProviderErrorKind::Network, "boom");
+        mini_agent::CompletionResult r;
+        r.text = step.text;
+        r.tool_calls = step.calls;
+        if (!r.text.empty())
+            on_delta(r.text);
+        return r;
+    }
+    std::vector<std::string> seen_tools_;
+    std::vector<std::size_t> seen_history_;
+
+  private:
+    std::vector<Step> steps_;
+    int index_ = 0;
+    int fail_at_ = -1;
+};
+
+// Echo-style runtime for loop tests.
+class FakeRuntime final : public mini_agent::ToolRuntime {
+  public:
+    std::vector<mini_agent::ToolDefinition> list() override {
+        mini_agent::ToolDefinition d;
+        d.name = "echo";
+        d.description = "echo the arguments back";
+        d.input_schema_json = R"({"type":"object"})";
+        d.source = "fake";
+        return {d};
+    }
+    mini_agent::ToolResult call(const mini_agent::ToolCall& c,
+                                const mini_agent::ShouldAbort&) override {
+        ++calls;
+        last_call = c;
+        return mini_agent::ToolResult{"echo:" + c.arguments_json, error_flag};
+    }
+    int calls = 0;
+    bool error_flag = false;
+    mini_agent::ToolCall last_call;
+};
+
+} // namespace
+
+void test_tool_loop_rounds_and_commit() {
+    using namespace mini_agent;
+    Chat chat;
+    FakeToolProvider provider({{{{"t1", "echo", R"({"a":1})"}}, ""}, {{}, "final answer"}});
+    auto registry = std::make_unique<ToolRegistry>();
+    auto* fake = new FakeRuntime();
+    registry->add(std::unique_ptr<ToolRuntime>(fake));
+
+    TurnOptions options;
+    options.tools = registry.get();
+    std::string streamed;
+    const std::string text = run_turn(
+        chat, provider, "go", [&](std::string_view d) { streamed += d; }, [] { return false; },
+        options);
+
+    check(text == "final answer", "loop returns final text");
+    check(streamed == "final answer", "only text streams to UI");
+    check(fake->calls == 1, "tool executed once");
+    // history: user, assistant(tool_calls), tool(result), assistant(final)
+    check(chat.messages().size() == 4, "four messages committed");
+    check(chat.messages()[1].tool_calls.size() == 1, "assistant tool_calls stored");
+    check(chat.messages()[2].role == Role::Tool && *chat.messages()[2].tool_call_id == "t1" &&
+              chat.messages()[2].content == R"(echo:{"a":1})",
+          "tool result stored with call id");
+    check(!provider.seen_tools_.empty() &&
+              provider.seen_tools_[0].find("\"echo\"") != std::string::npos,
+          "tools advertised on first round");
+    check(provider.seen_tools_.size() == 2 &&
+              provider.seen_tools_[1].find("echo") != std::string::npos,
+          "tools stay advertised on non-final rounds");
+
+    // approval deny -> error tool message, model still gets a chance
+    Chat chat2;
+    FakeToolProvider provider2({{{{"t1", "echo", "{}"}}, ""}, {{}, "sorry then"}});
+    auto registry2 = std::make_unique<ToolRegistry>();
+    auto* fake2 = new FakeRuntime();
+    registry2->add(std::unique_ptr<ToolRuntime>(fake2));
+    TurnOptions denied;
+    denied.tools = registry2.get();
+    denied.approve = [](const ToolCall&) { return Approval::Deny; };
+    const std::string t2 =
+        run_turn(chat2, provider2, "go", [](std::string_view) {}, [] { return false; }, denied);
+    check(t2 == "sorry then", "deny path completes");
+    check(fake2->calls == 0, "denied tool never executed");
+    check(chat2.messages()[2].content == "user denied this tool invocation",
+          "denial surfaces to model as tool result");
+
+    // AllowSession: second call same name is not re-asked
+    Chat chat3;
+    FakeToolProvider provider3({{{{"t1", "echo", "1"}, {"t2", "echo", "2"}}, ""}, {{}, "done"}});
+    auto registry3 = std::make_unique<ToolRegistry>();
+    auto* fake3 = new FakeRuntime();
+    registry3->add(std::unique_ptr<ToolRuntime>(fake3));
+    TurnOptions sess;
+    sess.tools = registry3.get();
+    int questions = 0;
+    sess.approve = [&](const ToolCall&) {
+        ++questions;
+        return Approval::AllowSession;
+    };
+    run_turn(chat3, provider3, "go", [](std::string_view) {}, [] { return false; }, sess);
+    check(questions == 1, "session approval memoized per tool name");
+    check(fake3->calls == 2, "both calls executed");
+
+    // unknown tool name -> folded error result, no crash
+    Chat chat4;
+    FakeToolProvider provider4({{{{"t1", "nope", "{}"}}, ""}, {{}, "ok"}});
+    auto registry4 = std::make_unique<ToolRegistry>();
+    registry4->add(std::unique_ptr<ToolRuntime>(new FakeRuntime()));
+    TurnOptions unk;
+    unk.tools = registry4.get();
+    const std::string t4 =
+        run_turn(chat4, provider4, "go", [](std::string_view) {}, [] { return false; }, unk);
+    check(t4 == "ok" && chat4.messages()[2].content.find("no such tool") != std::string::npos,
+          "unknown tool folded into error result");
+
+    // failure mid-loop leaves history untouched (007 section 5 for v2)
+    Chat chat5;
+    chat5.add(Message{Role::User, "prior", std::nullopt, {}});
+    chat5.add(Message{Role::Assistant, "turn", std::nullopt, {}});
+    FakeToolProvider failing({{{{"t1", "echo", "{}"}}, ""}, {{}, "never"}});
+    // make round 2 throw
+    failing.seen_tools_.clear();
+    TurnOptions opt5;
+    opt5.tools = registry4.get(); // "echo" not in registry4 -> still completes; use deny loop
+    // instead: throw at provider level on the SECOND call
+    struct Thrower final : Provider {
+        int n = 0;
+        std::string complete(const Chat&, const std::function<void(std::string_view)>&,
+                             const ShouldAbort&) override {
+            return "";
+        }
+        CompletionResult complete_chat(const Chat&, const std::string&,
+                                       const std::function<void(std::string_view)>&,
+                                       const ShouldAbort&) override {
+            ++n;
+            if (n == 1)
+                return CompletionResult{"", {ToolCall{"t1", "echo", "{}"}}};
+            throw ProviderError(ProviderErrorKind::Network, "late failure");
+        }
+    } thrower;
+    auto registry5 = std::make_unique<ToolRegistry>();
+    auto* fake5 = new FakeRuntime();
+    registry5->add(std::unique_ptr<ToolRuntime>(fake5));
+    TurnOptions opt_fail;
+    opt_fail.tools = registry5.get();
+    bool threw = false;
+    try {
+        run_turn(chat5, thrower, "go", [](std::string_view) {}, [] { return false; }, opt_fail);
+    } catch (const ProviderError&) {
+        threw = true;
+    }
+    check(threw, "mid-loop provider failure propagates");
+    check(chat5.messages().size() == 2, "no partial tool history stored");
+    check(fake5->calls == 1, "tool side effect DID run (documented in 008 section 6)");
+}
+
+void test_max_tool_rounds() {
+    using namespace mini_agent;
+    Chat chat;
+    // provider that ALWAYS requests a tool -> must end via summary round
+    struct Looper final : Provider {
+        int n = 0;
+        std::string complete(const Chat&, const std::function<void(std::string_view)>&,
+                             const ShouldAbort&) override {
+            return "";
+        }
+        CompletionResult complete_chat(const Chat& c, const std::string& tools,
+                                       const std::function<void(std::string_view)>&,
+                                       const ShouldAbort&) override {
+            ++n;
+            last_tools = tools;
+            last_history = c.messages().size();
+            if (n < 4)
+                return CompletionResult{"", {ToolCall{"t" + std::to_string(n), "echo", "{}"}}};
+            return CompletionResult{"gave up gracefully", {}};
+        }
+        std::string last_tools;
+        std::size_t last_history = 0;
+    } looper;
+    auto registry = std::make_unique<ToolRegistry>();
+    registry->add(std::unique_ptr<ToolRuntime>(new FakeRuntime()));
+    TurnOptions options;
+    options.tools = registry.get();
+    options.max_tool_rounds = 3;
+    const std::string text =
+        run_turn(chat, looper, "go", [](std::string_view) {}, [] { return false; }, options);
+    check(text == "gave up gracefully", "loop terminates at budget via no-tools summary");
+    check(looper.last_tools.empty(), "final round advertises no tools");
+    // transient system note must not be persisted
+    for (const auto& m : chat.messages())
+        check(m.role != Role::System, "limit note never stored");
+}
+
+void test_mcp_cli_specs() {
+    std::string error;
+    mini_agent::McpServerConfig server;
+
+    // http shorthand (loopback ok)
+    check(mini_agent::parse_mcp_cli_spec("docs=http://127.0.0.1:8933/mcp", &server, &error) &&
+              server.name == "docs" && server.transport == "http" &&
+              server.url == "http://127.0.0.1:8933/mcp",
+          "http shorthand parses");
+    // https everywhere ok
+    check(mini_agent::parse_mcp_cli_spec("w=https://mcp.deepwiki.com/mcp", &server, &error) &&
+              server.transport == "http",
+          "https shorthand parses");
+    // plain http remote rejected without opt-in (same gate as file config)
+    check(!mini_agent::parse_mcp_cli_spec("bad=http://remote.example.com/mcp", &server, &error),
+          "plain http remote rejected");
+    // stdio shorthand with args
+    check(mini_agent::parse_mcp_cli_spec("fs=npx -y srv /tmp", &server, &error) &&
+              server.transport == "stdio" && server.command == "npx" && server.args.size() == 3 &&
+              server.args[0] == "-y",
+          "stdio shorthand splits args");
+    // json full form
+    check(mini_agent::parse_mcp_cli_spec(
+              R"JW(s={"transport":"http","url":"https://h/mcp","bearer_token":"t"})JW", &server,
+              &error) &&
+              server.transport == "http" && server.bearer_token == "t",
+          "json form parses with bearer");
+    // json form cannot rename itself
+    mini_agent::McpServerConfig renamed;
+    check(mini_agent::parse_mcp_cli_spec(R"JW(x={"url":"https://h/m"})JW", &renamed, &error) &&
+              renamed.name == "x",
+          "json form keeps CLI name");
+    // invalid names rejected
+    check(!mini_agent::parse_mcp_cli_spec("a/b=npx x", &server, &error), "slash name rejected");
+    check(!mini_agent::parse_mcp_cli_spec("=value", &server, &error), "empty name rejected");
+    check(!mini_agent::parse_mcp_cli_spec("name=", &server, &error), "empty spec rejected");
+    check(!mini_agent::parse_mcp_cli_spec("name={bad json", &server, &error),
+          "malformed json rejected");
+
+    // upsert replaces by name (CLI wins over file entry)
+    mini_agent::AppConfig config;
+    mini_agent::McpServerConfig file_entry;
+    file_entry.name = "dup";
+    file_entry.transport = "stdio";
+    file_entry.command = "old";
+    config.mcp_servers.push_back(file_entry);
+    check(mini_agent::parse_mcp_cli_spec("dup=https://new/mcp", &server, &error), "dup parses");
+    mini_agent::upsert_mcp_server(&config, server);
+    check(config.mcp_servers.size() == 1 && config.mcp_servers[0].transport == "http",
+          "upsert replaces same name");
+    mini_agent::McpServerConfig extra;
+    extra.name = "other";
+    extra.transport = "stdio";
+    extra.command = "x";
+    mini_agent::upsert_mcp_server(&config, extra);
+    check(config.mcp_servers.size() == 2, "new name appends");
+}
+
+void test_config_v2_fields() {
+    std::string error;
+    auto loaded = mini_agent::config_from_json(R"({
+        "schema_version":1,"base_url":"https://api.example.com/v1","api_key":"k","model":"m",
+        "tool_approval":"allowlist","tool_allowlist":["run_bash"],
+        "max_tool_rounds":4,"tool_timeout_seconds":15,
+        "mcp_servers":{
+            "fs":{"command":"npx","args":["-y","srv","/tmp"],"env":{"NODE_ENV":"production"}},
+            "docs":{"url":"http://127.0.0.1:8932/mcp","bearer_token":"tok"},
+            "bad":{"transport":"http","url":"http://remote.example.com/mcp"}
+        }})",
+                                               &error);
+    check(!loaded.has_value(), "plain http non-loopback rejected without opt-in");
+    check(error.find("allow_insecure_http") != std::string::npos, "error names the opt-in");
+
+    auto good = mini_agent::config_from_json(R"({
+        "base_url":"https://api.example.com/v1","api_key":"k","model":"m",
+        "mcp_servers":{
+            "fs":{"command":"npx","args":["-y","srv"],"env":{"A":"1"}},
+            "docs":{"url":"https://mcp.example.com/mcp","bearer_token":"tok"}
+        }})",
+                                             &error);
+    check(good.has_value(), (std::string("mcp servers parse: ") + error).c_str());
+    if (good) {
+        check(good->mcp_servers.size() == 2, "two servers");
+        // object iteration is key-sorted; look entries up by name
+        const mini_agent::McpServerConfig* fs = nullptr;
+        const mini_agent::McpServerConfig* docs = nullptr;
+        for (const auto& server : good->mcp_servers) {
+            if (server.name == "fs")
+                fs = &server;
+            if (server.name == "docs")
+                docs = &server;
+        }
+        check(fs != nullptr && docs != nullptr, "both named servers present");
+        check(fs && fs->transport == "stdio" && fs->command == "npx" && fs->args.size() == 2 &&
+                  fs->env.size() == 1 && fs->env[0].first == "A",
+              "stdio entry fields");
+        check(docs && docs->transport == "http" && docs->url == "https://mcp.example.com/mcp" &&
+                  docs->bearer_token == "tok",
+              "http entry inferred");
+        // round-trip: serialize keeps servers, approval default omitted when ask
+        const auto text = mini_agent::config_to_json(*good);
+        check(text.find("mcp_servers") != std::string::npos &&
+                  text.find("docs") != std::string::npos,
+              "servers re-serialize");
+        auto back = mini_agent::config_from_json(text, &error);
+        check(back.has_value() && back->mcp_servers.size() == 2, "round-trip stable");
+    }
+
+    auto bad_approval = mini_agent::config_from_json(
+        R"({"base_url":"b","api_key":"k","model":"m","tool_approval":"yolo"})", &error);
+    check(!bad_approval.has_value(), "invalid tool_approval rejected");
+    auto ok_approval = mini_agent::config_from_json(
+        R"({"base_url":"b","api_key":"k","model":"m","tool_approval":"off"})", &error);
+    check(ok_approval.has_value() && ok_approval->tool_approval == "off", "off is explicit opt-in");
+    check(mini_agent::config_to_json(mini_agent::AppConfig{}).find("tool_approval") ==
+              std::string::npos,
+          "default ask not written (compact files)");
+
+    // missing/unknown transport combo fails closed
+    check(!mini_agent::config_from_json(
+               R"({"mcp_servers":{"x":{"transport":"websocket","url":"ws://a"}}})", &error)
+               .has_value(),
+          "unknown transport rejected");
+    check(!mini_agent::config_from_json(R"({"mcp_servers":{"x":{}}})", &error).has_value(),
+          "empty stdio entry without command rejected");
+}
+
+void test_run_bash_and_helpers() {
+    using namespace mini_agent;
+    BuiltinRuntime runtime(5);
+    check(!runtime.list().empty() && runtime.list()[0].name == "run_bash", "run_bash listed");
+
+    const auto ok =
+        runtime.call(ToolCall{"1", "run_bash", R"({"command":"printf hi"})"}, [] { return false; });
+    check(!ok.is_error && ok.text == "hi", "printf captured");
+
+    const auto both =
+        runtime.call(ToolCall{"1", "run_bash", R"({"command":"echo out; echo err 1>&2; exit 3"})"},
+                     [] { return false; });
+    check(both.is_error && both.text.find("out") != std::string::npos &&
+              both.text.find("err") != std::string::npos &&
+              both.text.find("exit 3") != std::string::npos,
+          "stdout+stderr merged, exit code reported");
+
+    const auto timeout = runtime.call(
+        ToolCall{"1", "run_bash", R"({"command":"sleep 30","timeout":1})"}, [] { return false; });
+    check(timeout.is_error && timeout.text.find("timed out") != std::string::npos,
+          "timeout kills the command");
+
+    const auto bad_args = runtime.call(ToolCall{"1", "run_bash", "not-json"}, [] { return false; });
+    check(bad_args.is_error && bad_args.text.find("not valid JSON") != std::string::npos,
+          "malformed arguments fail closed as error result");
+
+    const auto wrong = runtime.call(ToolCall{"1", "nope", "{}"}, [] { return false; });
+    check(wrong.is_error, "unknown builtin name is an error result");
+
+    // output cap keeps head+tail
+    const auto big = runtime.call(
+        ToolCall{
+            "1", "run_bash",
+            R"J({"command":"printf 'A%.0s' $(seq 1 40000); printf MARKER; printf 'B%.0s' $(seq 1 40000)"})J"},
+        [] { return false; });
+    check(!big.is_error && big.text.size() < 40000 &&
+              big.text.find("truncated") != std::string::npos && big.text.front() == 'A' &&
+              big.text.back() == 'B',
+          "runaway output truncated head+tail");
+
+    // cap_tool_output pure helper
+    check(cap_tool_output("short", 1024) == "short", "short text untouched");
+    const std::string long_text(10000, 'x');
+    const auto capped = cap_tool_output(long_text, 1024);
+    check(capped.size() < 1100 && capped.find("truncated") != std::string::npos,
+          "cap inserts marker");
+
+    // parse_bash_arguments bounds
+    std::string error;
+    check(parse_bash_arguments(R"({"command":"ls","timeout":7})", 30, &error)->timeout_seconds == 7,
+          "explicit timeout honored");
+    check(!parse_bash_arguments(R"({"command":"ls","timeout":0})", 30, &error).has_value(),
+          "zero timeout rejected");
+    check(!parse_bash_arguments(R"({"command":""})", 30, &error).has_value(),
+          "empty command rejected");
+    check(!parse_bash_arguments(R"({"timeout":5})", 30, &error).has_value(),
+          "missing command rejected");
+
+    // sanitize_display strips escapes but keeps newline/tab
+    const std::string dirty = "ok\x1b[2Jhacked\x07\x00done\nmore\t";
+    const auto clean = sanitize_display(dirty);
+    check(clean.find('\x1b') == std::string::npos && clean.find('\0') == std::string::npos &&
+              clean.find("ok") == 0 && clean.find("done\nmore\t") != std::string::npos,
+          "escape sequences and C0 controls stripped, text layout kept");
+
+    // registry json shape + duplicate name claim
+    auto registry = std::make_unique<ToolRegistry>();
+    registry->add(std::make_unique<BuiltinRuntime>());
+    registry->add(std::unique_ptr<ToolRuntime>(new FakeRuntime()));
+    const auto tools_json = registry->to_openai_tools_json();
+    check(tools_json.find("\"type\":\"function\"") != std::string::npos &&
+              tools_json.find("run_bash") != std::string::npos &&
+              tools_json.find("echo") != std::string::npos,
+          "openai tools json assembled");
+    ToolRegistry empty_registry;
+    check(empty_registry.to_openai_tools_json() == "[]", "empty registry yields []");
+    check(registry->find("echo") != nullptr && registry->find("ghost") == nullptr,
+          "find routes by name");
+}
+
 } // namespace
 
 int main() {
@@ -781,6 +1384,15 @@ int main() {
     test_md_render_subset();
     test_md4c_gfm_extensions();
     test_tui_helpers();
+    test_tool_ui_helpers();
+    test_tool_calls_round_trip();
+    test_v1_request_shape_regresssion();
+    test_session_schema_bumps_for_tools();
+    test_tool_loop_rounds_and_commit();
+    test_max_tool_rounds();
+    test_run_bash_and_helpers();
+    test_config_v2_fields();
+    test_mcp_cli_specs();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";
         return EXIT_FAILURE;

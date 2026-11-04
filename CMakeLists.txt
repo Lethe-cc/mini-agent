@@ -42,6 +42,10 @@ add_library(agent_core STATIC
     src/project.cpp
     src/provider_openai.cpp
     src/session.cpp
+    src/mcp_rpc.cpp
+    src/mcp_stdio.cpp
+    src/mcp_http.cpp
+    src/tools.cpp
     src/tui.cpp
     third_party/md4c/md4c.c
 )
@@ -70,6 +74,11 @@ if(BUILD_TESTING)
     target_link_libraries(starter_test PRIVATE agent_core)
     starter_options(starter_test)
 
+    add_executable(mcp_test tests/cpp/mcp_test.cpp)
+    target_link_libraries(mcp_test PRIVATE agent_core)
+    starter_options(mcp_test)
+
     add_test(NAME agent.core COMMAND agent_test)
+    add_test(NAME mcp.client COMMAND mcp_test)
     add_test(NAME starter.project_name COMMAND starter_test)
 endif()
