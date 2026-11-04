@@ -23,15 +23,19 @@
     - https://github.com/mark3labs/mcp-go （Go server+client，生态使用面广）
     - https://github.com/rust-mcp-stack/rust-mcp-sdk （Rust async server+client）
   - server 目录/发现（清单类，非代码源）：https://github.com/punkpeye/awesome-mcp-servers 、https://github.com/punkpeye/awesome-remote-mcp-servers
+  - OpenMCP（MCP client/开发调试平台，作者 Kirigaya 社区）：
+    - https://github.com/LSTM-Kirigaya/openmcp-client （VSCode 插件：多 server 管理、tool 实时调试、LLM 调用细节与性能监控、用例 Git 化复现）
+    - https://github.com/LSTM-Kirigaya/openmcp-tutorial 、https://github.com/LSTM-Kirigaya/openmcp-document （教程/文档；文档站 https://document.kirigaya.cn/ 2026-11-05 实读）
+    - CLI 发行名 @agent-ruler/openmcp（omc）；官方模板 Python/TS/Java；server 经 stdio 或 HTTP 连接（与本项目两传输同域）
   - 在用远端示例：https://mcp.deepwiki.com/mcp （Streamable HTTP 公开 server，连通验证见"实际采用情况"）
 - 固定 commit SHA / tag / 产品版本：未固定。MCP 规范版本化明显，引用时以任务当天的规范版本号为准。
 - 最近核对日期与阅读状态：**2026-11-05 元数据+许可证核对**（GitHub 仓库元数据与 LICENSE 文件在线实读；源码仍未精读）。规范文本核对记录见"实际采用情况"。
-- 许可证及核实依据：modelcontextprotocol 官方组（typescript-sdk、servers、inspector 的 LICENSE 当日实读一致）：**MIT→Apache-2.0 过渡授权**（新代码与规范贡献 Apache-2.0，文档 CC-BY-4.0；组内其余 SDK 按同政策对待，复制前仍须逐仓库确认条款细节）。GopherSecurity/gopher-mcp = **Apache-2.0**（当日实读）；caomengxuan666/cxxmcp = **MIT**（当日实读）；mark3labs/mcp-go = **MIT**（当日实读，Copyright Anthropic）。Neumann-Labs/mcp-cpp、yurirocha15/mcp-cpp-sdk、rust-mcp-stack/rust-mcp-sdk、官方组内其余 SDK、awesome 清单：**未核实**。复制代码前必须逐仓库核实。
+- 许可证及核实依据：modelcontextprotocol 官方组（typescript-sdk、servers、inspector 的 LICENSE 当日实读一致）：**MIT→Apache-2.0 过渡授权**（新代码与规范贡献 Apache-2.0，文档 CC-BY-4.0；组内其余 SDK 按同政策对待，复制前仍须逐仓库确认条款细节）。GopherSecurity/gopher-mcp = **Apache-2.0**（当日实读）；caomengxuan666/cxxmcp = **MIT**（当日实读）；mark3labs/mcp-go = **MIT**（当日实读，Copyright Anthropic）。Neumann-Labs/mcp-cpp、yurirocha15/mcp-cpp-sdk、rust-mcp-stack/rust-mcp-sdk、官方组内其余 SDK、awesome 清单、openmcp-tutorial/document 及 openmcp SDK 具体仓库：**未核实**。**OpenMCP 冲突记录**：其文档站 FAQ 自称 MIT，但 openmcp-client 仓库根 LICENSE 当日实读为 **Apache-2.0**——引用以 LICENSE 文件为准。复制代码前必须逐仓库核实。
 
 ## 参考目的与范围
 - 借鉴什么：
   - MCP：工具/资源/提示的接口契约与能力协商方式，评估本模板未来是否需要以 MCP server 形式暴露工作流约定。
-  - MCP client/server 开源实现（v2 自写客户端后新增的对照需求）：协议灰区行为以官方 SDK（TS/Go/Rust）与 C++ 实现为"第二意见"——尤其 Streamable HTTP 的 SSE/JSON 双响应、`Mcp-Session-Id`/`MCP-Protocol-Version` 处理、stdio 子进程生命周期、超时与断连语义；cxxmcp / yurirocha15 的 conformance 测试集可考虑作为本客户端的外部一致性验收（用官方 suite 打 mini-agent client）。server 侧样例：官方 servers 仓库的 filesystem/fetch/time 是 stdio 规范对端；deepwiki 是已在用的 Streamable HTTP 公开对端。
+  - MCP client/server 开源实现（v2 自写客户端后新增的对照需求）：协议灰区行为以官方 SDK（TS/Go/Rust）与 C++ 实现为"第二意见"——尤其 Streamable HTTP 的 SSE/JSON 双响应、`Mcp-Session-Id`/`MCP-Protocol-Version` 处理、stdio 子进程生命周期、超时与断连语义；cxxmcp / yurirocha15 的 conformance 测试集可考虑作为本客户端的外部一致性验收（用官方 suite 打 mini-agent client）。server 侧样例：官方 servers 仓库的 filesystem/fetch/time 是 stdio 规范对端；deepwiki 是已在用的 Streamable HTTP 公开对端。OpenMCP（LSTM-Kirigaya，2026-11-05 维护者确认登记）定位为**开发调试侧邻具**：为 mini-agent 编写/联调新 MCP server 时可用其 VSCode 插件或 omc CLI 交互式调试（与 tools/mcp_probe.py 互补——probe 按 HttpTransport 同款头规则精确重放，OpenMCP 提供通用 GUI 工作流），同时作为 MCP client 的又一 TS 参考列入灰区对照；不是依赖、不引入代码，其推广的 OpenMCP Cloud/AgentRuler 属第三方商业服务，不构成接入授权。
   - smolagents：CodeAgent 范式（Agent 直接写代码而非结构化调用）与其极简 Prompt 工程，作为"最小抽象"的对照样本。
 - 重点文件或章节：待读取后填写精确路径。候选起点（按名登记，未读）：typescript-sdk `src/server`/`src/client` 传输层、mcp-go `server`/`client` 目录、cxxmcp 与 yurirocha15 的 conformance 测试目录、inspector 的 client 连接管理。
 - 不参考什么：官方 SDK 的完整依赖树与构建体系（本项目约束零新增第三方依赖，只对照协议行为，不引入实现）；smolagents 的 Hub 集成与模型托管；各实现的 GUI/框架胶水层。
@@ -52,4 +56,5 @@
 - 版本基线：2025-06-18，initialize 支持回退 2025-03-26。规范继续版本化演进，实现前按当天文本复核。
 - servers 参考仓库与 smolagents 源码仍未精读；2026-11-05 完成开源实现组的元数据+许可证登记（见上）。本仓库未复制任何第三方代码，客户端全部按协议文本自写（ADR 005）。
 - 开源实现参考的定位（2026-11-05）：① 规范灰区（超时、SSE 断流重连、会话过期重初始化各家差异）出现争议行为时的第二意见；② conformance 测试集可作本客户端的外部一致性验收工具（cxxmcp/yurirocha15 声明对官方 suite）；③ 未来引入服务器发起请求/progress/OAuth 等能力时的工程形态参照。引入任何代码前逐仓库二次核实许可证细节（官方组 MIT→Apache 过渡含贡献时点区分）并记 ADR；Apache-2.0 注意专利授权条款与 NOTICE 义务。
+- OpenMCP（LSTM-Kirigaya）已登记（2026-11-05）：文档站与仓库元数据当日实读，**源码未读、无实现级借鉴**；用途见「参考目的与范围」节。自称许可与 LICENSE 文件冲突已记录，借鉴任何代码前必须逐仓库二次核实并记 ADR。
 - 真实对端记录：deepwiki（https://mcp.deepwiki.com/mcp，Streamable HTTP、无鉴权）于 2026-11-04/05 由 mini-agent 客户端连通并全链路调用（tools/list 4 工具、tools/call 成功；其行为为 SSE 单响应、无进度流，与本项目实现兼容）。属"外部 API 事实"，非设计参考。
