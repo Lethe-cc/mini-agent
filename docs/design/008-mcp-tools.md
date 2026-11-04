@@ -57,6 +57,7 @@ v1 明确排除 tool calling，只做了格式预留（`Role::Tool`、`Message.t
 
 - [agent-protocols.md](../references/agent-protocols.md)：MCP 工具契约与能力协商；本次核对结论已回写其"实际采用情况"。
 - [coding-agents.md](../references/coding-agents.md)：Goose 早期 MCP 集成形态；Pi "刻意保持内核小"的论证支持本文"只做 tools 面、不碰 resources/prompts/sampling"的裁剪。只取模式，不复制代码（各仓库源码仍未精读）。
+- [cli-as-tools.md](../references/cli-as-tools.md)（2026-11-05 登记）："全量注入 schema"的 token 成本论证与两条替代路线（MCP→CLI 按需发现、Code Mode）。本文 §2 将 progressive disclosure 列为非目标的前提是当前小规模下成本低于复杂度；若 v3 松动该裁剪，按需加载 schema / `search_tools` 元工具两种成熟形态见该文件，Code Mode 因需沙箱执行环境与项目约束冲突不在射程。
 
 本地差异：官方生态以 TS/Python SDK 为主，本项目是原生 C++ 单二进制，无官方 C++ SDK（社区 SDK 许可证与维护状态未核实，不引入），故按协议文本自写最小客户端（预估数百行，单请求串行）。
 - MCP client/server 开源实现参考组（2026-11-05 登记，元数据+许可证层核对，源码未精读、无代码借鉴）：官方 SDK 组（TS/Python/Go/Java/Rust/C#/Swift，MIT→Apache-2.0 过渡）、官方 inspector（client 调试器）、C++ 社区实现（gopher-mcp=Apache-2.0、cxxmcp=MIT 等，其中 conformance-tested 项目是未来对本客户端做外部一致性验收的候选工具）、mcp-go=MIT/rust-mcp-sdk 等高星社区实现、deepwiki 公开 server（真实对端行为已记录）。清单、许可证与用途定位见 [references/agent-protocols.md](../references/agent-protocols.md)。
