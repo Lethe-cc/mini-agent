@@ -8,8 +8,13 @@
 #include "mini_agent/tui.hpp"
 
 #include "mini_agent/log.hpp"
+#include "mini_agent/loop.hpp"
+#include "mini_agent/mcp.hpp"
 #include "mini_agent/md.hpp"
 #include "mini_agent/provider.hpp"
+#include "mini_agent/tools.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <poll.h>
 #include <sys/ioctl.h>
@@ -22,8 +27,12 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -31,8 +40,8 @@
 namespace mini_agent::tui {
 namespace {
 
-constexpr std::string_view kCommands[] = {"/config", "/exit",   "/help",     "/login",
-                                          "/model",  "/models", "/provider", "/sessions"};
+constexpr std::string_view kCommands[] = {"/config", "/exit",   "/help",     "/login",    "/mcp",
+                                          "/model",  "/models", "/provider", "/sessions", "/tools"};
 
 class RawMode {
   public:
@@ -257,6 +266,104 @@ std::vector<std::string> model_menu_rows(const std::vector<std::string>& models,
     return rows;
 }
 
+namespace {
+
+bool color_env_disabled() noexcept {
+    const char* no_color = std::getenv("NO_COLOR"); // https://no-color.org
+    if (no_color != nullptr && *no_color != '\0')
+        return true;
+    const char* term = std::getenv("TERM");
+    return term != nullptr && std::strcmp(term, "dumb") == 0;
+}
+
+bool starts_with(std::string_view line, std::string_view prefix) noexcept {
+    return line.size() >= prefix.size() && line.compare(0, prefix.size(), prefix) == 0;
+}
+
+std::string tint(bool colors, std::string_view sgr, std::string_view text) {
+    if (!colors)
+        return std::string(text);
+    std::string out;
+    out.reserve(text.size() + sgr.size() + 6);
+    out += "\x1b[";
+    out += sgr;
+    out += 'm';
+    out += text;
+    out += "\x1b[0m";
+    return out;
+}
+
+} // namespace
+
+bool colors_enabled() {
+    // Cached process-lifetime constant: the TUI only starts behind cli_main's
+    // isatty gate, and NO_COLOR/TERM never change mid-session. Static-local
+    // init is thread-safe (C++11); first call happens on the main thread.
+    static const bool on = ::isatty(STDOUT_FILENO) != 0 && !color_env_disabled();
+    return on;
+}
+
+std::string style_history_line(std::string_view line, bool colors) {
+    // Whole-line spans only: every printable substring stays contiguous for
+    // copy/paste and test assertions, and md::wrap re-asserts the span on
+    // wrapped continuation rows. 1 = bold, 2 = dim, 3x = colour, 1;3x = strong.
+    if (!colors || line.find('\x1b') != std::string_view::npos)
+        return std::string(line); // producer-styled (markdown replies) or off
+    if (starts_with(line, "[auth]")) {
+        if (line.find("login verified") != std::string_view::npos)
+            return tint(colors, "32", line); // green: key accepted
+        if (line.find("REJECTED") != std::string_view::npos)
+            return tint(colors, "1;31", line); // bold red: provider refused
+        return tint(colors, "33", line);       // yellow: unconfirmed/unreachable
+    }
+    if (starts_with(line, "[tool]")) {
+        if (line.find("[denied]") != std::string_view::npos)
+            return tint(colors, "1;31", line);
+        if (line.find("[error ") != std::string_view::npos)
+            return tint(colors, "33", line);
+        return tint(colors, "36", line); // cyan: ran fine
+    }
+    if (starts_with(line, "[ok]") || starts_with(line, "saved session "))
+        return tint(colors, "32", line);
+    if (starts_with(line, "[error]"))
+        return tint(colors, "1;31", line);
+    if (starts_with(line, "[warn]") || starts_with(line, "[note]") ||
+        starts_with(line, "[interrupted]"))
+        return tint(colors, "33", line);
+    if (starts_with(line, "[info]") || starts_with(line, "[input]"))
+        return tint(colors, "36", line);
+    if (starts_with(line, "[cancel]"))
+        return tint(colors, "2", line);
+    if (starts_with(line, "[hint]"))
+        return tint(colors, "36", line);
+    if (starts_with(line, "mini-agent · ") || starts_with(line, "You: "))
+        return tint(colors, "1", line); // bold: identity rows
+    if (starts_with(line, "config "))
+        return tint(colors, line.find("· ready") != std::string_view::npos ? "32" : "2", line);
+    // Everything below is informational echo / legend text and should recede.
+    // Order matters: the 4-space AI-reply continuation check must not swallow
+    // the longer-indented help legend rows, so the dim list runs first.
+    if (starts_with(line, "approval="))
+        return tint(colors, line.find("off") != std::string_view::npos ? "33" : "2", line);
+    static constexpr std::string_view kDimPrefixes[] = {
+        "commands:",  "prompt:",      "Each of ",      "configure ",   "Enter ",
+        "Tab comple", "restart serv", "tools (",       "mcp server",   "sessions:",
+        "resume after", "logging",    "base_url=",     "model=",       "api_key=",
+        "login=",     "log_file=",    "config file:",
+        "          ", // /help continuation (10 spaces)
+        "        ",   // legend continuation (8 spaces)
+    };
+    for (const auto prefix : kDimPrefixes) {
+        if (starts_with(line, prefix))
+            return tint(colors, "2", line);
+    }
+    if (starts_with(line, "    "))
+        return std::string(line); // assistant-reply continuation: leave plain
+    if (starts_with(line, "  ") || starts_with(line, "ALLOW "))
+        return tint(colors, "2", line); // list entries / approval prompt
+    return std::string(line);
+}
+
 std::string config_next_hint(const AppConfig& config) {
     const int set = (config.base_url.empty() ? 0 : 1) + (config.api_key.empty() ? 0 : 1) +
                     (config.model.empty() ? 0 : 1);
@@ -277,6 +384,8 @@ std::string config_next_hint(const AppConfig& config) {
 }
 
 std::string auth_status_line(const AuthProbe& probe) {
+    // Plain text on purpose: `LiveScreen::commit` adds the verdict colour via
+    // `style_history_line`, so the pure helper stays testable without a TTY.
     const auto accepted = [](int status) { return status >= 200 && status < 300; };
     if (!probe.attempted)
         return "[auth] login unverified · /provider + /login, then /models to check";
@@ -350,17 +459,156 @@ std::string prompt_marker(const ConnState state) noexcept {
 }
 
 std::vector<std::string> slash_completion_hint(std::string_view composer) {
+    const bool colors = colors_enabled();
     if (composer.empty() || composer.front() != '/')
         return {};
     const auto matches = slash_matches(composer);
     std::vector<std::string> rows;
     if (matches.empty()) {
-        rows.emplace_back("Tab completion: no matching command (see /help)");
+        rows.emplace_back(tint(colors, "33", "Tab completion: no matching command (see /help)"));
         return rows;
     }
-    rows.emplace_back("Tab completion (cycle with Tab):");
+    rows.emplace_back(tint(colors, "2", "Tab completion (cycle with Tab):"));
     for (const auto& cmd : matches)
-        rows.push_back("  " + std::string(cmd));
+        rows.push_back(tint(colors, "2", "  " + std::string(cmd)));
+    return rows;
+}
+
+// ------------------------------------------------------------ v2 tool UI
+
+std::string tool_activity_line(const std::string& tool_name, const std::string& arguments_json,
+                               bool executed, bool is_error, long long elapsed_ms,
+                               std::size_t result_bytes) {
+    std::string summary;
+    // First meaningful fragment of the arguments, sanitized + clipped:
+    // never raw control characters reach the frame (008 5.4).
+    auto parsed = nlohmann::json::parse(arguments_json, nullptr, false);
+    if (parsed.is_object()) {
+        // Prefer the obvious primary argument for readability.
+        for (const char* key : {"command", "path", "text", "url", "query"}) {
+            if (auto it = parsed.find(key); it != parsed.end() && it->is_string()) {
+                summary = it->get<std::string>();
+                break;
+            }
+        }
+        if (summary.empty())
+            summary = parsed.dump();
+    } else {
+        summary = arguments_json;
+    }
+    // collapse internal newlines, cap display length
+    for (auto& ch : summary)
+        if (ch == '\n' || ch == '\r')
+            ch = ' ';
+    summary = sanitize_display(summary);
+    if (summary.size() > 72)
+        summary = summary.substr(0, 72) + "...";
+    // Plain text: `LiveScreen::commit` colours `[tool]` rows by outcome via
+    // `style_history_line` (the summary is sanitized, so no ESC bytes reach
+    // the classifier's passthrough check).
+    std::string line = "[tool] " + sanitize_display(tool_name);
+    if (!summary.empty())
+        line += " \u00b7 " + summary;
+    if (!executed) {
+        line += " [denied]";
+    } else if (is_error) {
+        line += " [error " + std::to_string(elapsed_ms) + "ms \u00b7 " +
+                std::to_string(result_bytes) + " B]";
+    } else {
+        line += " [ok " + std::to_string(elapsed_ms) + "ms \u00b7 " + std::to_string(result_bytes) +
+                " B]";
+    }
+    return line;
+}
+
+std::optional<ApprovalKey> approval_key(int ch, bool& expanded) noexcept {
+    switch (ch) {
+    case 'y':
+    case 'Y':
+        return ApprovalKey::Allow;
+    case 'a':
+    case 'A':
+        return ApprovalKey::AllowSession;
+    case 'n':
+    case 'N':
+        return ApprovalKey::Deny;
+    case '?':
+        expanded = !expanded;
+        return std::nullopt; // toggle only
+    default:
+        return std::nullopt;
+    }
+}
+
+std::vector<std::string> approval_rows(const std::string& tool_name,
+                                       const std::string& arguments_json, bool expanded) {
+    std::vector<std::string> rows;
+    const auto parsed = nlohmann::json::parse(arguments_json, nullptr, false);
+    std::string primary;
+    if (parsed.is_object()) {
+        for (const char* key : {"command", "path", "text", "url", "query"}) {
+            if (auto it = parsed.find(key); it != parsed.end() && it->is_string()) {
+                primary = it->get<std::string>();
+                break;
+            }
+        }
+    }
+    // Approval block styling (2026-11-04 readability request): the ALLOW
+    // lead is bold red (an action gate, not an error), the command summary
+    // stays plain and copyable, argument lines dim, the key legend dim.
+    const bool colors = colors_enabled();
+    rows.push_back(tint(colors, "1;31", "ALLOW " + sanitize_display(tool_name)) +
+                   (primary.empty() ? std::string()
+                                    : ": " + sanitize_display(primary)));
+    if (expanded) {
+        std::string pretty = parsed.is_discarded() ? arguments_json : parsed.dump(2);
+        std::string line;
+        std::istringstream stream(pretty);
+        int shown = 0;
+        while (std::getline(stream, line) && shown < 8) {
+            rows.push_back(tint(colors, "2", "  " + sanitize_display(line)));
+            ++shown;
+        }
+        if (!stream.eof())
+            rows.push_back(tint(colors, "2", "  ..."));
+    }
+    rows.push_back(tint(colors, "33",
+                        expanded ? "y=allow  n=deny  a=allow-name  ?=params(compact)  "
+                                   "other keys held"
+                                 : "y=allow  n=deny  a=allow-name  ?=params  "
+                                   "(Esc/Ctrl-C deny+stop)"));
+    return rows;
+}
+
+std::vector<std::string> tool_registry_rows(const std::vector<std::string>& rendered_tools) {
+    // Structured dump (2026-11-04 readability request): bold header, tool
+    // rows with the name in cyan and the source tag in magenta, so per-tool
+    // lines separate visually from headers and legend text. Descriptions
+    // (user/server data) stay plain; the ESC bytes here also make
+    // style_history_line skip these rows (no double styling).
+    const bool colors = colors_enabled();
+    std::vector<std::string> rows;
+    rows.push_back(tint(colors, "1", "tools (" + std::to_string(rendered_tools.size()) + "):"));
+    if (rendered_tools.empty()) {
+        rows.push_back(tint(colors, "2", "  (none configured · add mcp_servers to config.json)"));
+        return rows;
+    }
+    for (const auto& tool : rendered_tools) {
+        static constexpr std::string_view kSep = " \u00b7 ";
+        const auto first = tool.find(kSep);
+        const auto second = first == std::string::npos
+                                ? std::string::npos
+                                : tool.find(kSep, first + kSep.size());
+        if (colors && first != std::string::npos && second != std::string::npos) {
+            rows.push_back("  " + tint(colors, "36", tool.substr(0, first)) +
+                           std::string(kSep) +
+                           tint(colors, "35", tool.substr(first + kSep.size(),
+                                                          second - first - kSep.size())) +
+                           std::string(kSep) + tool.substr(second + kSep.size()));
+        } else {
+            rows.push_back("  " + tool);
+        }
+    }
     return rows;
 }
 
@@ -376,9 +624,18 @@ class LiveScreen {
     // multi-line replies both desynced the old relative-rows model).
     void commit(std::string_view line) {
         clear_live();
+        // History colouring (2026-11-04 readability request): classify the
+        // tag/role of plain lines centrally, so every caller gets consistent
+        // hues without threading a flag through each commit site. Rows that
+        // already carry SGR (markdown replies, producer-styled registry/
+        // approval/tool rows) pass through untouched -- no double styling.
+        // md::wrap treats the spans as zero-width (5.6 rule 2 accounting is
+        // unchanged), and commit lines are hard-wrapped, not clipped, so the
+        // line may exceed the clipped width of the live status row here.
+        const std::string styled = style_history_line(line, colors_enabled());
         const std::size_t cols = current_cols();
         std::string out;
-        for (auto& row : md::wrap(line, cols)) {
+        for (auto& row : md::wrap(styled, cols)) {
             out += "\x1b[2K" + row + "\n";
         }
         ::fwrite(out.data(), 1, out.size(), stdout);
@@ -405,7 +662,9 @@ class LiveScreen {
     void render(const std::string& response_tail, const std::string& pinned_question,
                 const std::string& composer, const std::string& composer_display,
                 const std::string& prompt, const std::string& status, bool streaming,
-                std::size_t cols) { // NOLINT(bugprone-easily-swappable-parameters)
+                std::size_t cols,
+                const std::vector<std::string>& extra_rows =
+                    {}) { // NOLINT(bugprone-easily-swappable-parameters)
         const std::size_t rows = current_rows();
         // Slash hint (2026-11-01 maintainer request; vertical list per
         // follow-up): while the composer is a slash line, enumerate Tab
@@ -421,7 +680,7 @@ class LiveScreen {
             streaming == last_streaming_ && response_tail == last_tail_ &&
             pinned_question == last_pin_ && composer == last_composer_ &&
             composer_display == last_comp_disp_ && prompt == last_prompt_ &&
-            status == last_status_) {
+            status == last_status_ && extra_rows == last_extra_) {
             return;
         }
         inputs_cached_ = true;
@@ -434,6 +693,7 @@ class LiveScreen {
         last_comp_disp_ = composer_display;
         last_prompt_ = prompt;
         last_status_ = status;
+        last_extra_ = extra_rows;
         const std::size_t cap = rows > 2 ? rows - 2 : 1; // block budget minus status row
         auto pin_rows =
             streaming ? md::wrap("You: " + pinned_question, cols) : std::vector<std::string>{};
@@ -453,7 +713,13 @@ class LiveScreen {
         // Vertical list keeps its header when short on rows: build from
         // the top and stop at the budget (opposite of trim_last).
         std::vector<std::string> hint_rows;
-        for (const auto& line : slash_completion_hint(composer)) {
+        std::vector<std::string> hint_source;
+        if (!extra_rows.empty()) {
+            hint_source = extra_rows; // approval block outranks slash hints
+        } else {
+            hint_source = slash_completion_hint(composer);
+        }
+        for (const auto& line : hint_source) {
             if (hint_rows.size() >= budget)
                 break;
             for (auto& wrapped : md::wrap(line, cols)) {
@@ -469,7 +735,11 @@ class LiveScreen {
         content.insert(content.end(), tail_rows.begin(), tail_rows.end());
         content.insert(content.end(), comp_rows.begin(), comp_rows.end());
         content.insert(content.end(), hint_rows.begin(), hint_rows.end());
-        content.push_back(md::clip(status, cols)); // status is always one row
+        // Status is always one row; the trailing reset matters now that the
+        // row carries SGR segments: md::clip can cut mid-span, and this is
+        // the block's last row, so an unclosed span would leak into the next
+        // repaint's rows (5.6 rule 2: no style may survive a row boundary).
+        content.push_back(md::clip(status, cols) + "\x1b[0m");
 
         const std::string joined = join(content);
         if (joined == last_frame_ && content.size() == live_rows_) {
@@ -571,6 +841,7 @@ class LiveScreen {
     std::string last_comp_disp_;
     std::string last_prompt_;
     std::string last_status_;
+    std::vector<std::string> last_extra_;
 
     static std::string join(const std::vector<std::string>& rows) {
         std::string out;
@@ -605,6 +876,35 @@ std::vector<std::string> split_ansi_paragraphs(const std::string& rendered) {
 std::chrono::steady_clock::time_point steady_now() {
     return std::chrono::steady_clock::now();
 }
+
+} // namespace
+
+namespace {
+
+// One decided tool invocation parked for the main thread (worker -> UI
+// handoff: rounds are committed to history only on the main thread, same
+// rule as models_result/deltas -- 5.6 rule 1).
+struct ToolRound {
+    std::string tool_name;
+    std::string arguments_json;
+    bool executed = false;
+    bool is_error = false;
+    long long elapsed_ms = 0;
+    std::size_t result_bytes = 0;
+    bool approval_timeout = false;
+};
+
+// Fixed approval slot (no dynamic ownership races): the worker fills the
+// call fields, publishes request_seq, and waits for answer_seq to catch
+// up. The main thread reads/writes only through the sequence numbers, so
+// the object never moves and no pointer can dangle.
+struct ApprovalSlot {
+    std::mutex mutex; // guards `call` payload writes
+    ToolCall call;    // valid between request and answer
+    std::atomic<unsigned long long> request_seq{0};
+    std::atomic<unsigned long long> answer_seq{0};
+    std::atomic<int> answer{0}; // 1 allow, 2 deny, 3 allow-session
+};
 
 } // namespace
 
@@ -688,14 +988,103 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     screen.commit("Enter sends; Enter while streaming queues; Ctrl-C/Esc interrupt; "
                   "Ctrl-C twice quits; /help; Tab completes");
 
+    // v2 tool layer (design 008 section 5.4): registry, approval bridge.
+    std::string tool_note;
+    auto tool_registry = build_tool_registry(config, &tool_note);
+    std::mutex tool_mutex;
+    std::vector<ToolRound> tool_events;
+    ApprovalSlot approval_slot;
+    std::atomic<bool> approval_abort{false};
+    bool approval_expanded = false;
+    std::set<std::string> session_allowed_tools;
+    std::mutex session_allowed_mutex; // worker memoizes AllowSession names
+    // Allowlist names are snapshotted per turn like the rest of config;
+    // /tools and slash handlers rebuild both the registry and this copy.
+    AppConfig config_snapshot = config;
+    const std::size_t max_tool_rounds = config.max_tool_rounds;
+    bool tools_active = false; // any tool round ran in the current turn
+    if (!tool_note.empty())
+        screen.commit("[info] " + tool_note + " · lazy start on first call · /tools");
+    const std::string approval_policy =
+        config.tool_approval.empty() ? std::string("ask") : config.tool_approval;
+    if (approval_policy == "off" && !tool_registry->empty()) {
+        screen.commit("[warn] tool_approval=off: tools run WITHOUT asking");
+        logger->event("tools", {{"status", "auto"}, {"approval", "off"}});
+    }
+    logger->event("tools", {{"status", "ready"},
+                            {"approval", approval_policy},
+                            {"servers", std::to_string(config.mcp_servers.size())},
+                            {"builtin", tool_registry->empty() ? "no" : "yes"}});
+
+    auto drain_tool_events = [&] {
+        std::vector<ToolRound> batch;
+        {
+            std::lock_guard<std::mutex> lock(tool_mutex);
+            batch.swap(tool_events);
+        }
+        for (const auto& round : batch) {
+            screen.commit(tool_activity_line(round.tool_name, round.arguments_json, round.executed,
+                                             round.is_error, round.elapsed_ms, round.result_bytes));
+            tools_active = true;
+        }
+    };
+
+    auto approval_pending = [&] {
+        return approval_slot.request_seq.load() != approval_slot.answer_seq.load();
+    };
+    // Answer the pending approval with the UI key semantics (008 5.4):
+    // y allow once, n deny, a allow-name for the session, Esc/Ctrl-C deny.
+    auto answer_approval = [&](int key) {
+        std::lock_guard<std::mutex> lock(approval_slot.mutex);
+        ToolCall call = approval_slot.call; // snapshot under the slot mutex
+        int answer = 2;
+        bool handled = true;
+        switch (key) {
+        case 'y':
+        case 'Y':
+            answer = 1;
+            break;
+        case 'a':
+        case 'A':
+            answer = 3;
+            break;
+        case 'n':
+        case 'N':
+            answer = 2;
+            break;
+        case '?':
+            approval_expanded = !approval_expanded;
+            handled = false;
+            break;
+        default:
+            handled = false; // other keys are held (swallowed) while pending
+            break;
+        }
+        if (!handled)
+            return;
+        approval_slot.answer.store(answer);
+        approval_slot.answer_seq.store(approval_slot.request_seq.load());
+        logger->event("tool_approve",
+                      {{"tool", call.name},
+                       {"decision", answer == 1 ? "allow" : (answer == 3 ? "session" : "deny")}});
+    };
+
     auto start_turn = [&](const std::string& text) {
         if (worker.joinable())
             worker.join();
+        config_snapshot = config; // refresh after join, before worker start
         last_user = text;
         deltas.clear();
         abort_requested = false;
         turn_done = false;
         result = TurnResult{};
+        {
+            std::lock_guard<std::mutex> lock(tool_mutex);
+            tool_events.clear();
+        }
+        approval_abort = false;
+        approval_expanded = false;
+        tools_active = false;
         turn_start = steady_now();
         streaming = true;
         last_prompt_chars = text.size();
@@ -714,18 +1103,94 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 outgoing.add(Message{m});
             outgoing.add(Message{user_msg});
             TurnResult r;
+            // Snapshot of the shared control state for this turn's tools
+            // (thread-boundary discipline mirrors turn_config; the TUI
+            // rebuilds the registry before every start_turn, so mutations
+            // of `tool_registry` here are serialized by the worker join).
+            ToolRegistry* registry = tool_registry.get();
+            TurnOptions turn_options;
+            turn_options.tools = registry;
+            turn_options.max_tool_rounds = max_tool_rounds;
+            turn_options.should_abort = [&] {
+                return abort_requested.load() || approval_abort.load();
+            };
+            turn_options.approve = [&](const ToolCall& call) -> Approval {
+                const bool auto_run = approval_policy == "off" ||
+                                      (approval_policy == "allowlist" &&
+                                       std::find(config_snapshot.tool_allowlist.begin(),
+                                                 config_snapshot.tool_allowlist.end(), call.name) !=
+                                           config_snapshot.tool_allowlist.end());
+                if (auto_run || session_allowed_tools.count(call.name) != 0)
+                    return Approval::Allow;
+                unsigned long long seq = 0;
+                {
+                    std::lock_guard<std::mutex> lock(approval_slot.mutex);
+                    approval_slot.call = call;
+                    seq = approval_slot.request_seq.load() + 1;
+                    approval_slot.request_seq.store(seq); // publish (call set first)
+                }
+                const auto wait_start = std::chrono::steady_clock::now();
+                int answer = 0;
+                while (approval_slot.answer_seq.load() != seq) {
+                    if (abort_requested.load())
+                        break;
+                    const auto waited = std::chrono::duration_cast<std::chrono::seconds>(
+                                            std::chrono::steady_clock::now() - wait_start)
+                                            .count();
+                    if (waited >= 120) { // never block the worker forever
+                        std::lock_guard<std::mutex> lock(tool_mutex);
+                        ToolRound timeout_round;
+                        timeout_round.tool_name = call.name;
+                        timeout_round.arguments_json = call.arguments_json;
+                        timeout_round.executed = false;
+                        timeout_round.is_error = true;
+                        timeout_round.approval_timeout = true;
+                        tool_events.push_back(std::move(timeout_round));
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+                answer = abort_requested.load() && approval_slot.answer_seq.load() != seq
+                             ? 2
+                             : approval_slot.answer.load();
+                switch (answer) {
+                case 1:
+                    return Approval::Allow;
+                case 3: {
+                    std::lock_guard<std::mutex> lock(session_allowed_mutex);
+                    session_allowed_tools.insert(call.name);
+                    return Approval::AllowSession;
+                }
+                default:
+                    return Approval::Deny;
+                }
+            };
+            turn_options.on_tool = [&](const ToolCall& call, const ToolResult& tool_result,
+                                       bool executed) {
+                ToolRound round;
+                round.tool_name = call.name;
+                round.arguments_json = call.arguments_json;
+                round.executed = executed;
+                round.is_error = tool_result.is_error;
+                round.elapsed_ms = tool_result.elapsed_ms;
+                round.result_bytes = tool_result.text.size();
+                std::lock_guard<std::mutex> lock(tool_mutex);
+                tool_events.push_back(std::move(round));
+            };
             try {
-                r.reply = provider.complete(
-                    outgoing, [&](std::string_view d) { deltas.append(d); },
-                    [&] { return abort_requested.load(); });
-                // Success path mirrors loop.cpp run_turn: stored chat gains
-                // user+assistant only now, never before (5.6 rule: errors
-                // never reach storage).
-                session.chat.add(std::move(user_msg));
-                Message assistant;
-                assistant.role = Role::Assistant;
-                assistant.content = r.reply;
-                session.chat.add(std::move(assistant));
+                // Run the (possibly multi-round) turn on a detached copy:
+                // run_turn commits the whole turn to its Chat only on
+                // success; on error we discard the copy, so session.chat
+                // stays at the previous turn boundary exactly as in v1
+                // (5.6 rule: errors never reach storage; 008 section 4).
+                Chat turn_chat;
+                for (const auto& m : session.chat.messages())
+                    turn_chat.add(Message{m});
+                r.reply = run_turn(
+                    turn_chat, provider, user_msg.content,
+                    [&](std::string_view d) { deltas.append(d); },
+                    [&] { return abort_requested.load(); }, turn_options);
+                session.chat = std::move(turn_chat);
                 r.ok = true;
             } catch (const ProviderError& e) {
                 r.error = e.what();
@@ -821,6 +1286,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // Short lines on purpose: single-row commands stay intact even
             // on narrow terminals (wrap breaks mid-token at width limit).
             screen.commit("commands: /provider <url> · /login [key] · /model <name>");
+            screen.commit("          /tools (tool registry) · /mcp (servers)");
             screen.commit("          /models (list & pick) · /log <path>|off|default");
             screen.commit("          /config · /sessions · /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
@@ -935,6 +1401,40 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("resume after exit: mini-agent run --session <id>");
             return true;
         }
+        if (line == "/tools") {
+            // Rebuild the registry so fresh server configs apply without
+            // a restart; old clients die with their transports (RAII).
+            if (worker.joinable())
+                worker.join();
+            config_snapshot = config;
+            std::string note;
+            tool_registry = build_tool_registry(config, &note);
+            std::vector<std::string> rendered;
+            for (const auto& definition : tool_registry->list()) {
+                auto first_line = definition.description.find('\n');
+                rendered.push_back(definition.name + " \u00b7 " + definition.source + " \u00b7 " +
+                                   sanitize_display(definition.description.substr(0, first_line)));
+            }
+            for (const auto& row : tool_registry_rows(rendered))
+                screen.commit(row);
+            if (!note.empty())
+                screen.commit("[info] " + note + " (lazy start on first call)");
+            screen.commit("approval=" + approval_policy);
+            return true;
+        }
+        if (line == "/mcp") {
+            if (config.mcp_servers.empty()) {
+                screen.commit("mcp servers: (none) · add mcp_servers to config.json");
+                return true;
+            }
+            for (const auto& server : config.mcp_servers) {
+                screen.commit("  " + server.name + " \u00b7 " + server.transport + "\u2192" +
+                              (server.transport == "http" ? Logger::redact_url(server.url)
+                                                          : sanitize_display(server.command)));
+            }
+            screen.commit("restart servers after config edits: /tools · down marks clear per call");
+            return true;
+        }
         if (line == "/exit")
             return false; // caller exits
         if (!line.empty() && line.front() == '/') {
@@ -981,6 +1481,23 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             }
             for (ssize_t i = 0; i < n; ++i) {
                 const unsigned char c = static_cast<unsigned char>(buf[i]);
+                if (approval_pending()) {
+                    // Approval mode owns the keyboard (008 5.4): only
+                    // y/n/a/? act; Esc and Ctrl-C deny the tool AND keep
+                    // the existing interrupt escalation (abort_requested),
+                    // so the turn stops cleanly instead of hanging.
+                    if (c == 'y' || c == 'Y' || c == 'n' || c == 'N' || c == 'a' || c == 'A' ||
+                        c == '?') {
+                        answer_approval(c);
+                        continue;
+                    }
+                    if (c == 0x03 || c == 0x1b) {
+                        answer_approval('n');
+                        abort_requested = true;
+                        continue;
+                    }
+                    continue; // held: swallowed without touching composer
+                }
                 if (c == 0x03) { // Ctrl-C
                     if (streaming) {
                         if (abort_requested.load()) {
@@ -1201,6 +1718,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             streaming = false;
             if (worker.joinable())
                 worker.join();
+            drain_tool_events(); // last tool rows commit before the reply
             const auto login_before = auth_log_token(auth);
             const auto elapsed_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(steady_now() - turn_start)
@@ -1236,6 +1754,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.clear_live();
                 screen.commit("You: " + last_user);
                 screen.commit("[error] " + result.error);
+                if (tools_active)
+                    screen.commit("[note] tools already ran this turn; their side "
+                                  "effects were not rolled back");
             }
             // The completion request was itself a credential probe, so fold its
             // outcome into the same verdict the model listing feeds: a working
@@ -1293,6 +1814,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             }
         } else {
             const auto cols = static_cast<std::size_t>(term_columns());
+            drain_tool_events();                 // [tool] rows land in history as they arrive
+            std::vector<std::string> extra_rows; // approval block when pending
             const std::string tail = streaming ? deltas.snapshot() : std::string{};
             std::string composer_display;
             if (secret_input) {
@@ -1328,27 +1851,50 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // same text, so render() keeps its zero-work input cache.
             const std::string prompt =
                 prompt_marker(connection_state(config, auth, models_running));
-            std::string status =
-                "model=" + (config.model.empty() ? std::string("(not set)") : config.model) +
-                " · session=" + options.session_id;
+            // Status-row colouring (2026-11-04 readability request): the
+            // identity prefix dims, state words carry the hue (listing/
+            // streaming cyan, idle dim, auto-tools red, AWAITING APPROVAL
+            // bold yellow). SGR is zero-width for md::clip, and the clip
+            // keeps any active span (it re-emits escapes while cutting).
+            const bool sc = colors_enabled();
+            std::string status = tint(sc, "2",
+                                      "model=" +
+                                          (config.model.empty() ? std::string("(not set)")
+                                                                : config.model) +
+                                          " · session=" + options.session_id);
             if (models_running) {
-                status += " · listing models...";
+                status += tint(sc, "36", " · listing models...");
             } else if (model_menu_open) {
-                status += " · pick a model (Esc cancels)";
+                status += tint(sc, "36", " · pick a model (Esc cancels)");
             }
             if (streaming) {
                 const auto secs =
                     std::chrono::duration_cast<std::chrono::seconds>(steady_now() - turn_start)
                         .count();
-                status += " · streaming (Ctrl-C/Esc) · " + std::to_string(secs) + "s";
+                status += tint(sc, "36", " · streaming (Ctrl-C/Esc) · " +
+                                             std::to_string(secs) + "s");
                 if (!pending.empty()) {
-                    status += " · queued " + std::to_string(pending.size());
+                    status += tint(sc, "36", " · queued " + std::to_string(pending.size()));
                 }
             } else {
-                status += " · idle";
+                status += tint(sc, "2", " · idle");
+            }
+            if (approval_policy == "off" && !tool_registry->empty())
+                status += tint(sc, "1;31", " · auto-tools"); // persistent danger marker (008 5.4)
+            if (approval_pending()) {
+                unsigned long long seq = approval_slot.request_seq.load();
+                ToolCall snapshot;
+                {
+                    std::lock_guard<std::mutex> lock(approval_slot.mutex);
+                    (void)seq;
+                    snapshot = approval_slot.call;
+                }
+                status += tint(sc, "1;33", " · AWAITING APPROVAL");
+                extra_rows =
+                    approval_rows(snapshot.name, snapshot.arguments_json, approval_expanded);
             }
             screen.render(tail, last_user, raw_for_hint, composer_display, prompt, status,
-                          streaming, cols);
+                          streaming, cols, extra_rows);
         }
     }
 

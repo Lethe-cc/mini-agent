@@ -13,12 +13,15 @@
 
 #include <curl/curl.h>
 
+#include <nlohmann/json.hpp>
+
 #include "mini_agent/chat.hpp"
 #include "mini_agent/config.hpp"
 #include "mini_agent/log.hpp"
 #include "mini_agent/loop.hpp"
 #include "mini_agent/provider.hpp"
 #include "mini_agent/session.hpp"
+#include "mini_agent/tools.hpp"
 #include "mini_agent/tui.hpp"
 
 #ifndef MINI_AGENT_VERSION
@@ -35,10 +38,16 @@ void print_usage(std::ostream& out) {
     out << "mini-agent " MINI_AGENT_VERSION
         << " - a mini AI agent\n"
            "usage:\n"
-           "  mini-agent ask \"question\"      one-shot question to stdout\n"
-           "  mini-agent ask -               read question from stdin\n"
+           "  mini-agent ask [--tools M] \"question\"  one-shot question to stdout\n"
+           "  mini-agent ask [--tools M] -   read question from stdin\n"
+           "      --tools off|ask|auto  (default off: non-interactive contract)\n"
            "  mini-agent run [--session ID]  interactive session (TUI; v1.0 fallback line mode)\n"
            "  mini-agent session list|rm ID  manage sessions\n"
+           "  mini-agent mcp list            show configured MCP servers\n"
+           "  --mcp NAME=SPEC (ask/run/mcp)  add one server this session:\n"
+           "      NAME=https://host/mcp          Streamable HTTP\n"
+           "      NAME=cmd arg1 arg2             stdio subprocess\n"
+           "      NAME={json entry}              full control (env, bearer)\n"
            "  mini-agent --help | --version  no network, no key needed\n"
            "\nenvironment:\n"
            "  MINI_AGENT_BASE_URL  e.g. https://api.openai.com/v1\n"
@@ -104,6 +113,69 @@ void print_provider_error(const mini_agent::ProviderError& error) {
     std::cerr << prefix << error.what() << '\n';
 }
 
+// Apply repeatable --mcp NAME=SPEC flags over merged config (session-
+// scoped injection, design 008 section 5.3): upsert so a CLI name replaces
+// a same-named file entry. Returns false on the first invalid spec.
+bool apply_mcp_flags(int argc, char** argv, mini_agent::AppConfig* config, std::string* error) {
+    for (int i = 0; i < argc; ++i) {
+        std::string_view value;
+        if (std::strcmp(argv[i], "--mcp") == 0 && i + 1 < argc) {
+            value = argv[i + 1];
+        } else if (std::strncmp(argv[i], "--mcp=", 6) == 0) {
+            value = std::string_view(argv[i]).substr(6);
+        } else {
+            continue;
+        }
+        mini_agent::McpServerConfig server;
+        if (!mini_agent::parse_mcp_cli_spec(value, &server, error))
+            return false;
+        mini_agent::upsert_mcp_server(config, server);
+    }
+    return true;
+}
+
+// mcp list: print configured servers after merged file/env config, with
+// --mcp flags upserted on top (same precedence ask/run use). Secrets are
+// always redacted: bearer shows "set" only, URLs go through redact_url.
+int cmd_mcp(int argc, char** argv) {
+    if (!(argc >= 3 && std::strcmp(argv[2], "list") == 0)) {
+        std::cerr << "usage: mini-agent mcp list [--mcp NAME=SPEC ...]\n";
+        return kConfigError;
+    }
+    // Merged config WITHOUT the completeness gate: listing servers must
+    // work before base_url/key/model exist (a fresh setup step).
+    std::string file_error;
+    mini_agent::AppConfig config = mini_agent::load_config_merged(&file_error);
+    if (!file_error.empty()) {
+        std::cerr << "error: " << file_error << '\n';
+        return kConfigError;
+    }
+    std::string apply_error;
+    if (!apply_mcp_flags(argc, argv, &config, &apply_error)) {
+        std::cerr << "error: " << apply_error << '\n';
+        return kConfigError;
+    }
+    if (config.mcp_servers.empty()) {
+        std::cout << "mcp servers: (none)\n"
+                  << "  add via config.json mcp_servers, or --mcp NAME=SPEC\n";
+        return kOk;
+    }
+    for (const auto& server : config.mcp_servers) {
+        if (server.transport == "http") {
+            std::cout << server.name << "  http  " << mini_agent::Logger::redact_url(server.url);
+            if (!server.bearer_token.empty())
+                std::cout << "  bearer=set";
+            std::cout << '\n';
+        } else {
+            std::cout << server.name << "  stdio  " << server.command;
+            for (const auto& arg : server.args)
+                std::cout << ' ' << arg;
+            std::cout << '\n';
+        }
+    }
+    return kOk;
+}
+
 int cmd_ask(int argc, char** argv) {
     mini_agent::AppConfig config;
     std::string config_error;
@@ -112,15 +184,46 @@ int cmd_ask(int argc, char** argv) {
         return kConfigError;
     }
     std::string question;
-    if (argc == 3 && std::strcmp(argv[2], "-") == 0) {
-        if (!read_stdin(&question)) {
-            std::cerr << "error: stdin is empty\n";
-            return kRuntimeError;
+    std::string tools_mode = "off"; // non-interactive default (008 R4)
+    std::string mcp_error;
+    if (!apply_mcp_flags(argc, argv, &config, &mcp_error)) {
+        std::cerr << "error: " << mcp_error << '\n';
+        return kConfigError;
+    }
+    std::vector<std::string> positional;
+    for (int i = 2; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--tools") == 0 && i + 1 < argc) {
+            tools_mode = argv[++i];
+            continue;
         }
-    } else if (argc == 3) {
-        question = argv[2];
+        if (std::strncmp(argv[i], "--tools=", 8) == 0) {
+            tools_mode = argv[i] + 8;
+            continue;
+        }
+        if (std::strcmp(argv[i], "--mcp") == 0 && i + 1 < argc) {
+            ++i; // handled by apply_mcp_flags
+            continue;
+        }
+        if (std::strncmp(argv[i], "--mcp=", 6) == 0)
+            continue; // handled by apply_mcp_flags
+        positional.emplace_back(argv[i]);
+    }
+    if (tools_mode != "off" && tools_mode != "ask" && tools_mode != "auto") {
+        std::cerr << "error: --tools must be off|ask|auto\n";
+        return kConfigError;
+    }
+    if (positional.size() == 1) {
+        if (positional[0] == "-") {
+            if (!read_stdin(&question)) {
+                std::cerr << "error: stdin is empty\n";
+                return kRuntimeError;
+            }
+        } else {
+            question = positional[0];
+        }
     } else {
-        std::cerr << "usage: mini-agent ask \"question\" | mini-agent ask - (stdin)\n";
+        std::cerr << "usage: mini-agent ask [--tools off|ask|auto] \"question\" | "
+                     "mini-agent ask - (stdin)\n";
         return kConfigError;
     }
 
@@ -128,12 +231,81 @@ int cmd_ask(int argc, char** argv) {
     mini_agent::Logger logger(
         mini_agent::Logger::resolve_path(config).value_or(std::filesystem::path{}));
     mini_agent::Chat chat;
+
+    // Tool wiring for --tools ask|auto (008 5.4). off (default) keeps the
+    // byte-identical v1 request/behavior. ask in a non-TTY downgrades to
+    // auto with a stderr note: a one-shot CLI cannot block on prompts
+    // portably; use the TUI for interactive approval.
+    std::unique_ptr<mini_agent::ToolRegistry> registry;
+    mini_agent::TurnOptions turn_options;
+    if (tools_mode != "off") {
+        std::string note;
+        registry = mini_agent::build_tool_registry(config, &note);
+        turn_options.tools = registry.get();
+        turn_options.max_tool_rounds = config.max_tool_rounds;
+        if (tools_mode == "ask") {
+            if (::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO)) {
+                turn_options.approve = [](const mini_agent::ToolCall& call) {
+                    auto parsed = nlohmann::json::parse(call.arguments_json, nullptr, false);
+                    std::string primary;
+                    if (parsed.is_object()) {
+                        for (const char* key : {"command", "path", "text", "url", "query"}) {
+                            auto it = parsed.find(key);
+                            if (it != parsed.end() && it->is_string()) {
+                                primary = it->get<std::string>();
+                                break;
+                            }
+                        }
+                    }
+                    if (primary.empty())
+                        primary = call.arguments_json;
+                    // Prompt on STDERR: stdout stays reply-only (the ask
+                    // pipe contract); the TTY still shows both streams.
+                    std::cerr << "\n[approve] " << call.name << ": " << primary << "\nallow? [y/N] "
+                              << std::flush;
+                    std::string answer;
+                    if (!std::getline(std::cin, answer))
+                        return mini_agent::Approval::Deny;
+                    return (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y'))
+                               ? mini_agent::Approval::Allow
+                               : mini_agent::Approval::Deny;
+                };
+            } else {
+                // Design 008 section 5.4 + ADR 006: non-interactive ask
+                // degrades to tools-off (deterministic script contract),
+                // NEVER to auto: silently running run_bash inside a pipe
+                // would hand the shell to the model with no human in the
+                // loop.
+                std::cerr << "note: --tools ask needs a TTY; running with tools off\n";
+                tools_mode = "off";
+                turn_options.tools = nullptr;
+                turn_options.approve = {};
+            }
+        }
+        turn_options.on_tool = [&logger](const mini_agent::ToolCall& call,
+                                         const mini_agent::ToolResult& result, bool executed) {
+            // Metadata only (008 section 6): name/status/ms/bytes, never
+            // arguments or output text.
+            logger.event("tool_exec", {{"tool", call.name},
+                                       {"executed", executed ? "yes" : "no"},
+                                       {"status", result.is_error ? "error" : "ok"},
+                                       {"elapsed_ms", std::to_string(result.elapsed_ms)},
+                                       {"bytes", std::to_string(result.text.size())}});
+            std::cerr << "[tool] " << call.name << " " << (result.is_error ? "error" : "ok")
+                      << "\n";
+        };
+        logger.event("tools", {{"mode", "ask_cli"}, {"level", tools_mode}});
+    }
+
     const auto started = std::chrono::steady_clock::now();
     try {
         // stdout receives ONLY the reply so it pipes cleanly; deltas go to
         // stdout as they arrive (single writer, no interleaving risk).
-        mini_agent::run_turn(chat, provider, question,
-                             [](std::string_view delta) { std::cout << delta << std::flush; });
+        // Tool status lines print to stderr, keeping the stdout contract.
+        mini_agent::run_turn(
+            chat, provider, question,
+            [](std::string_view delta) { std::cout << delta << std::flush; }, [] { return false; },
+            turn_options);
         std::cout << '\n';
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - started)
@@ -165,14 +337,24 @@ int cmd_run(int argc, char** argv) {
             session_id = argv[++i];
         } else if (std::strcmp(argv[i], "--new") == 0) {
             fresh = true;
+        } else if (std::strcmp(argv[i], "--mcp") == 0 && i + 1 < argc) {
+            ++i; // consumed by apply_mcp_flags below
+        } else if (std::strncmp(argv[i], "--mcp=", 6) == 0) {
+            // consumed by apply_mcp_flags below
         } else {
-            std::cerr << "usage: mini-agent run [--session ID] [--new]\n";
+            std::cerr << "usage: mini-agent run [--session ID] [--new] "
+                         "[--mcp NAME=SPEC]\n";
             return kConfigError;
         }
     }
     mini_agent::AppConfig config;
     std::string config_error;
     const bool configured = load_app_config(&config, &config_error);
+    std::string mcp_error;
+    if (!apply_mcp_flags(argc, argv, &config, &mcp_error)) {
+        std::cerr << "error: " << mcp_error << '\n';
+        return kConfigError;
+    }
     const bool tty = ::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO);
     if (!configured && !tty) {
         std::cerr << config_error << '\n'; // non-TTY cannot /login
@@ -307,6 +489,8 @@ int main(int argc, char** argv) {
         code = cmd_run(argc, argv);
     } else if (argc >= 2 && std::strcmp(argv[1], "session") == 0) {
         code = cmd_session(argc, argv);
+    } else if (argc >= 2 && std::strcmp(argv[1], "mcp") == 0) {
+        code = cmd_mcp(argc, argv);
     } else {
         print_usage(std::cerr);
         code = kConfigError;

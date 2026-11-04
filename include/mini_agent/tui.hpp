@@ -70,6 +70,20 @@ struct AuthProbe {
     std::size_t model_count = 0;
 };
 
+// Line-level history colouring (2026-11-04 readability request). Tag-
+// prefixed system rows pick a colour from their leading marker and outcome:
+// `[ok]` green, `[error]`/denied tools red, `[warn]`/`[tool]` errors yellow,
+// `[info]`/`[input]` cyan, `[auth]` per verdict, banners bold, key-hint and
+// config-echo rows dim. The SGR wraps the WHOLE line, so every printable
+// substring stays contiguous for copy/paste and test assertions. Lines that
+// already carry ESC bytes (markdown-rendered replies, producer-styled rows)
+// are returned untouched -- styling there belongs to the producer. When
+// `colors` is false (NO_COLOR, non-TTY stdout) the line is unchanged.
+std::string style_history_line(std::string_view line, bool colors);
+// Whether history/live styling may emit SGR: a TTY on stdout and NO_COLOR
+// unset (https://no-color.org). Process-lifetime constant, cached.
+bool colors_enabled();
+
 // One-line, user-facing (English per design 007 section 5.6) auth status.
 // Never echoes any part of the key.
 std::string auth_status_line(const AuthProbe& probe);
@@ -113,6 +127,31 @@ struct TuiOptions {
     std::string session_id;
     std::size_t frame_ms = 50; // poll tick / max redraw cadence (5.6 rule 1)
 };
+
+// ---------------------------------------------------------------- v2 tools
+
+// One history-area line for a tool event: `[tool] name · summary` plus
+// outcome `[ok 1.2s · 340 B]` / `[error]` (design 008 section 5.4). Text
+// is sanitized and collapsed to one row so the frame model stays intact.
+std::string tool_activity_line(const std::string& tool_name, const std::string& arguments_json,
+                               bool executed, bool is_error, long long elapsed_ms,
+                               std::size_t result_bytes);
+
+// Approval key state machine (pure; main thread drives it). `expanded`
+// toggles the full-arguments view with `?`. Returns the action for the
+// key or nullopt when the key belongs to the normal composer.
+enum class ApprovalKey { Allow, Deny, AllowSession };
+std::optional<ApprovalKey> approval_key(int ch, bool& expanded) noexcept;
+
+// Rows shown in the live region while an approval is pending: the prompt
+// row (command/argument summary) plus the choices legend; when expanded,
+// pretty-printed argument JSON lines follow.
+std::vector<std::string> approval_rows(const std::string& tool_name,
+                                       const std::string& arguments_json, bool expanded);
+
+// Registry dump rows for /tools: "name · source · description-first-line"
+// one row per tool (sanitized), header + count footer.
+std::vector<std::string> tool_registry_rows(const std::vector<std::string>& rendered_tools);
 
 // Interactive TUI over one session. Owns the raw-mode/termios lifecycle and
 // the request worker; exits with an exit code. Persists per-turn saves via
