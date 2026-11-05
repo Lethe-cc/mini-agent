@@ -112,6 +112,9 @@
 ### 3. 编码 Agent（研究 harness 设计的最佳样本）
 - **[OpenHands](https://github.com/OpenHands/OpenHands)**（9 万+★，注意组织已从 All-Hands-AI 迁到 OpenHands）：开源软件开发 Agent 平台，可在 Docker/VM 沙箱跑 Claude Code、Codex、Gemini CLI 等第三方后端。
 - **[Cline](https://github.com/cline/cline)**（VS Code，~71k★）、**[Aider](https://github.com/Aider-AI/aider)**、**[Goose](https://github.com/block/goose)**（Block）、**[OpenCode](https://github.com/sst/opencode) / [Crush](https://github.com/charmbracelet/crush)**（终端）、**[Gemini CLI](https://github.com/google-gemini/gemini-cli) / [Codex CLI](https://github.com/openai/codex)**（官方开源）。
+- **2026 年两个必须分清的新来者**（易混淆，名称都带 DeepSeek）：
+  - **[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**（`dsh`，DeepSeek **官方**开源，TypeScript，2026-08-13 发布后已达 27 万+★，MIT，[文档](https://deepseek-harness.github.io/deepseek-harness/)）：「Everything is a Plugin」架构，底层是 [Cordis](https://github.com/cordiverse/cordis) 与[时空可组合编程范式论文](https://arxiv.org/abs/2608.25512)；仍是 developer preview 且明确会破坏兼容。生态极快：[awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)（2 万+★）、[dsh-web](https://github.com/zhu1090093659/dsh-web)、[dsh-desktop](https://github.com/dataelement/dsh-desktop)、[oh-my-dsh](https://github.com/agi-fans/oh-my-dsh) 等第三方 TUI/桌面壳。读它的价值在于**「插件即一切」这条边界划法**，与 MCP/Skills 的分工是同一议题的另一种答案。
+  - **[Codewhale](https://github.com/codewhale-hq/Codewhale)**（Rust，4 万+★，MIT，[站点](https://codewhale.net)）：**原名 `deepseek-tui`**（2026-01 由社区开发者 Hmbown/Hunter 创建），2026-08-14 更名——时间点正好在官方 DeepSeek Harness 发布次日，更名是为避嫌；README 明确写「independently maintained and not affiliated with DeepSeek」。因此**看到 `deepseek-tui` 这个名字，要按项目创建时间判断指的是哪一个**；Homebrew 旧 formula 已 `deprecate!` 指向 codewhale。技术上它是「任意 provider + 本地模型 + 子 Agent + MCP + 沙箱 + `/receipts` 变更回执」的完整终端 harness，与本项目形态最接近的 Rust 参考实现之一。
 - **Spec-Kit / Superpowers 等规格驱动与技能扩展**：**[GitHub Spec Kit](https://github.com/github/spec-kit)**（规格驱动开发官方工具）；Goose 的 [extensions/skills 生态](https://github.com/block/goose)。
 - **[SWE-agent](https://github.com/SWE-agent/SWE-agent) / [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)**：Princeton 出品，ACI 思想的教学级实现；mini-swe-agent 只有千行级代码，**是「读一个完整 Agent Loop」的最佳单文件教材**。
 - 本仓库自身（mini_agent）的循环、工具审批与 MCP 接入即对照这些样本的最小实现。
@@ -168,6 +171,7 @@
 - **Bedrock AgentCore**（[产品](https://aws.amazon.com/bedrock/agentcore/) / [文档](https://docs.aws.amazon.com/bedrock/latest/userguide/agents.html)：运行时、身份、记忆、浏览器/代码沙箱、可观测性组件化）+ **[Strands Agents](https://github.com/strands-agents/sdk-python)**（开源 SDK）；与 GCP 的跨云互通（2026-07 GA）。
 
 ### 国内生态（速览）
+- **DeepSeek**：模型（V3/R1/V4 系）之外，2026-08 开源了 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）——**国内厂商第一次把自家 Agent harness 完整开源**，「万物皆插件」路线；注意与社区项目 `deepseek-tui`（现 Codewhale，无隶属关系）区分，见第三部分。
 - **阿里**：百炼（模型+Agent 工厂）/ [AgentScope](https://github.com/agentscope-ai/agentscope) / [Qwen-Agent](https://github.com/QwenLM/Qwen-Agent) / 通义系产品。
 - **字节**：[Coze Studio](https://github.com/coze-dev/coze-studio)（扣子）+ HiAgent（企业版）+ [Eino](https://github.com/cloudwego/eino)；豆包系。
 - **腾讯**：ADP 智能体开发平台（→ AgentOps，Connector+Skills 广场）/ 元器 / [WeKnora](https://github.com/Tencent/WeKnora)（开源知识库，~36k★）。
