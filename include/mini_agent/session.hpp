@@ -24,6 +24,10 @@ struct SessionMeta {
     std::string updated_at;
     std::string model;
     std::optional<std::string> parent_id; // forward-read: ignored if unknown
+    // v3 (design 009 section 5.4): workspace boundary this session opened
+    // with; absent = use the launching config/--cwd value. Optional field:
+    // old files parse unchanged.
+    std::optional<std::string> workspace;
 };
 
 struct Session {
@@ -76,5 +80,18 @@ class SessionStore {
 
 std::string session_to_json(const SessionMeta& meta, const Chat& chat);
 std::optional<Session> session_from_json(std::string_view text, std::string* error);
+
+// v3 default system prompt (design 009 section 5.5). Static identity +
+// tool etiquette + the live workspace line. `config.system_prompt`:
+// nullopt = this default, "" = disabled (returns empty). Called only when
+// creating a fresh session (empty chat).
+std::string build_system_prompt(const std::string& workspace, const std::string& model,
+                                const std::optional<std::string>& override_prompt);
+
+// Injects the default system prompt as the first message of an empty
+// chat (no-op when the chat already has messages or the prompt disabled).
+// Returns true when a message was added.
+bool inject_system_prompt(Chat& chat, const std::string& workspace, const std::string& model,
+                          const std::optional<std::string>& override_prompt);
 
 } // namespace mini_agent

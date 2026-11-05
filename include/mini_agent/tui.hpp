@@ -147,7 +147,8 @@ std::optional<ApprovalKey> approval_key(int ch, bool& expanded) noexcept;
 // row (command/argument summary) plus the choices legend; when expanded,
 // pretty-printed argument JSON lines follow.
 std::vector<std::string> approval_rows(const std::string& tool_name,
-                                       const std::string& arguments_json, bool expanded);
+                                       const std::string& arguments_json, bool expanded,
+                                       const std::string& preview = {});
 
 // Registry dump rows for /tools: "name · source · description-first-line"
 // one row per tool (sanitized), header + count footer.

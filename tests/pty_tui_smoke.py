@@ -57,7 +57,40 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        if '"long-reply"' in body:
+        try:
+            req_msgs = json.loads(body).get("messages", [])
+        except Exception:
+            req_msgs = []
+        tool_rounds = sum(1 for m in req_msgs if m.get("role") == "tool")
+        last_user = next((m.get("content", "") for m in reversed(req_msgs)
+                          if m.get("role") == "user"), "")
+        if last_user.startswith("EDITFLOW") and tool_rounds == 0:
+            # v3 approval flow: request a workspace write; the client must
+            # show the diff preview block and wait for y/n before running.
+            frags = [
+                {"choices": [{"delta": {"role": "assistant"}}]},
+                {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "ap1",
+                    "type": "function", "function": {"name": "write_file",
+                    "arguments": ""}}]}}]},
+                {"choices": [{"delta": {"tool_calls": [{"index": 0,
+                    "function": {"arguments": '{"path":"note.txt"'}}]}}]},
+                {"choices": [{"delta": {"tool_calls": [{"index": 0,
+                    "function": {"arguments": ',"content":"hello from approval\\n"}'}}]}}]},
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+            for chunk in frags:
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.flush()
+        elif last_user.startswith("EDITFLOW"):
+            tool_text = next((m["content"] for m in reversed(req_msgs)
+                              if m.get("role") == "tool"), "")
+            for chunk in [
+                {"choices": [{"delta": {"content": f"tool said: {tool_text[:40]}"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ]:
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.flush()
+        elif '"long-reply"' in body:
             # 60 short lines: exercises the height-scaled streaming window
             # (2026-11-01 "full-terminal refresh") and the row-accounting invariants.
             for i in range(60):
@@ -439,13 +472,73 @@ def main():
     expect(len(files) == 1, "one session persisted")
     if files:
         data = json.load(open(files[0]))
-        expect([m["role"] for m in data["messages"]]
+        # v3: fresh sessions open with the injected system prompt, so the
+        # turn history is [system] + N*(user, assistant) pairs.
+        expect(data["messages"][0]["role"] == "system",
+               "v3 session starts with the system prompt")
+        expect([m["role"] for m in data["messages"][1:]]
                == ["user", "assistant"] * 6,
                "history stores successful turns including steered queue")
 
     # terminal restored: cooked mode check on our own shell is not the pty's;
     # instead assert the child exited cleanly above (RawMode destructor ran
     # on all paths incl. exceptions via RAII).
+
+    # v3 TUI approval + diff preview (design 009 5.3): a fresh TUI process
+    # with a toy workspace. write_file must raise the approval block with
+    # the diff rows (+green), y allows, the tool row lands in history, and
+    # the file is written. Then /cwd queries the boundary.
+    ws_dir = "/tmp/mini_agent_pty_smoke_ws"
+    subprocess.run(["rm", "-rf", ws_dir], check=False)
+    os.makedirs(ws_dir)
+    approval_dir = "/tmp/mini_agent_pty_smoke_appr"
+    subprocess.run(["rm", "-rf", approval_dir], check=False)
+    os.makedirs(approval_dir)
+    appr_env = dict(env, MINI_AGENT_SESSION_DIR=approval_dir,
+                    MINI_AGENT_LOG=approval_dir + "/agent.log")
+    apid, afd = pty.fork()
+    if apid == 0:
+        os.execve(binary, [binary, "run", "--new", "--cwd", ws_dir], appr_env)
+    set_pty_size(afd, 24, 80)
+    read_all(afd, 0.8)  # banner
+    os.write(afd, b"EDITFLOW please\r")
+    appr_out = read_all(afd, 5.0)
+    plain = strip_csi(appr_out)
+    expect("AWAITING APPROVAL" in plain or "ALLOW write_file" in plain,
+           "v3 approval block appears for write_file")
+    expect("\x1b[0;32m+hello from approval" in appr_out,
+           "v3 diff preview renders added line in green")
+    expect("+hello from approval" in plain and "-(no content)" not in plain,
+           "v3 diff rows visible with content")
+    os.write(afd, b"y")
+    approved = read_all(afd, 5.0)
+    approved_plain = strip_csi(approved)
+    expect("[tool] write_file" in approved_plain and "ok" in approved_plain,
+           "v3 approved tool row lands in history")
+    expect("tool said: created" in approved_plain or "tool said: wrote" in approved_plain,
+           "v3 mock consumed the tool result (flow completed)")
+    expect(os.path.exists(ws_dir + "/note.txt")
+           and "hello from approval" in open(ws_dir + "/note.txt").read(),
+           "v3 approved write landed on disk inside the workspace")
+    os.write(afd, b"/cwd\r")
+    cwd_out = read_all(afd, 2.5)
+    expect("workspace: " in strip_csi(cwd_out),
+           "v3 /cwd shows the session workspace")
+    # Log red-line extension: file content must never reach the log.
+    os.write(afd, b"\x03\x03")
+    read_all(afd, 2.0)
+    try:
+        os.waitpid(apid, 0)
+    except ChildProcessError:
+        pass
+    appr_log = open(approval_dir + "/agent.log").read() if os.path.exists(
+        approval_dir + "/agent.log") else ""
+    expect("hello from approval" not in appr_log,
+           "v3 file content never reaches the log (metadata only)")
+    expect("tool_approve" in appr_log and "write_file" in appr_log,
+           "v3 tool_approve event recorded (metadata)")
+    subprocess.run(["rm", "-rf", ws_dir], check=False)
+    subprocess.run(["rm", "-rf", approval_dir], check=False)
 
     # line-mode (non-TTY) /exit: same save/unlock path, no turn after it
     line_dir = "/tmp/mini_agent_pty_smoke_line"

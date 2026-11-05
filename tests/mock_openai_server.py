@@ -82,6 +82,44 @@ SCRIPTS = {
             "function": {"arguments": '{"a":1}'}}]}}]},
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     ],
+    # v3 coding flow (multi-round, keyed by tool-result count): read ->
+    # edit -> git_status -> git_commit -> final summary.
+    "CODEFIX": [
+        [  # round 1: request read_file
+            {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1",
+                "type": "function", "function": {"name": "read_file",
+                "arguments": '{"path":"hello.txt"}'}}]}}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+        [  # round 2: request edit_file
+            {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c2",
+                "type": "function", "function": {"name": "edit_file",
+                "arguments": '{"path":"hello.txt","old_str":"CHANGEME","new_str":"changed by mini-agent"}'}}]}}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+        [  # round 3: check git status
+            {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c3",
+                "type": "function", "function": {"name": "git_status",
+                "arguments": '{}'}}]}}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+        [  # round 4: stage + commit
+            {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c4",
+                "type": "function", "function": {"name": "git_add",
+                "arguments": '{"path":"hello.txt"}'}}]}}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+        [  # round 5
+            {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c5",
+                "type": "function", "function": {"name": "git_commit",
+                "arguments": '{"message":"update hello.txt wording"}'}}]}}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+        [  # round 6: final text
+            {"choices": [{"delta": {"content": "done: edited and committed"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ],
+    ],
 }
 
 
@@ -122,7 +160,12 @@ class Handler(BaseHTTPRequestHandler):
         saw_tool_result = any(m.get("role") == "tool" for m in messages)
         prefix1 = ("TOOLTEST", "VARFLAT", "VARFC", "VAROBJ", "VARQWEN",
                    "VARMSG", "INJECT", "BADSHAPE")
-        if last_user.startswith(prefix1) and has_tools and not saw_tool_result:
+        if last_user.startswith("CODEFIX") and has_tools:
+            # v3 multi-round coding flow: pick the script by how many tool
+            # results came back (read/edit/status/add/commit, then summary).
+            tool_rounds = sum(1 for m in messages if m.get("role") == "tool")
+            seq = SCRIPTS["CODEFIX"][min(tool_rounds, 5)]
+        elif last_user.startswith(prefix1) and has_tools and not saw_tool_result:
             seq = SCRIPTS[next(k for k in prefix1 if last_user.startswith(k))]
         elif last_user.startswith(prefix1):
             # round 2: consume the tool result and finish

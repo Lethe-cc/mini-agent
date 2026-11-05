@@ -41,6 +41,14 @@ struct AppConfig {
     std::string model;
     std::string log_file; // optional diagnostics path (design 007 §7)
 
+    // v3 (design 009 section 5.4): workspace root for file/git tools and
+    // run_bash cwd. Empty = process cwd at launch. Never logged in full
+    // (basename only is allowed -- path components can be sensitive).
+    std::string workspace;
+    // nullopt = built-in default prompt; present-but-empty = disabled
+    // (design 009 section 5.5).
+    std::optional<std::string> system_prompt;
+
     // v2 tool layer (design 008 §5.3). Approval policy: "ask" (default,
     // human-in-the-loop per ADR 006), "allowlist", "off".
     std::string tool_approval = "ask";

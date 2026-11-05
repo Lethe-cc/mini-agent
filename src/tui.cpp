@@ -40,8 +40,9 @@
 namespace mini_agent::tui {
 namespace {
 
-constexpr std::string_view kCommands[] = {"/config", "/exit",   "/help",     "/login",    "/mcp",
-                                          "/model",  "/models", "/provider", "/sessions", "/tools"};
+constexpr std::string_view kCommands[] = {"/config",   "/cwd",      "/exit",  "/help",
+                                          "/login",    "/mcp",      "/model", "/models",
+                                          "/provider", "/sessions", "/tools"};
 
 class RawMode {
   public:
@@ -346,10 +347,9 @@ std::string style_history_line(std::string_view line, bool colors) {
     if (starts_with(line, "approval="))
         return tint(colors, line.find("off") != std::string_view::npos ? "33" : "2", line);
     static constexpr std::string_view kDimPrefixes[] = {
-        "commands:",  "prompt:",      "Each of ",      "configure ",   "Enter ",
-        "Tab comple", "restart serv", "tools (",       "mcp server",   "sessions:",
-        "resume after", "logging",    "base_url=",     "model=",       "api_key=",
-        "login=",     "log_file=",    "config file:",
+        "commands:",    "prompt:", "Each of ",   "configure ", "Enter ",       "Tab comple",
+        "restart serv", "tools (", "mcp server", "sessions:",  "resume after", "logging",
+        "base_url=",    "model=",  "api_key=",   "login=",     "log_file=",    "config file:",
         "          ", // /help continuation (10 spaces)
         "        ",   // legend continuation (8 spaces)
     };
@@ -541,7 +541,8 @@ std::optional<ApprovalKey> approval_key(int ch, bool& expanded) noexcept {
 }
 
 std::vector<std::string> approval_rows(const std::string& tool_name,
-                                       const std::string& arguments_json, bool expanded) {
+                                       const std::string& arguments_json, bool expanded,
+                                       const std::string& preview) {
     std::vector<std::string> rows;
     const auto parsed = nlohmann::json::parse(arguments_json, nullptr, false);
     std::string primary;
@@ -558,8 +559,37 @@ std::vector<std::string> approval_rows(const std::string& tool_name,
     // stays plain and copyable, argument lines dim, the key legend dim.
     const bool colors = colors_enabled();
     rows.push_back(tint(colors, "1;31", "ALLOW " + sanitize_display(tool_name)) +
-                   (primary.empty() ? std::string()
-                                    : ": " + sanitize_display(primary)));
+                   (primary.empty() ? std::string() : ": " + sanitize_display(primary)));
+    // v3 (design 009 5.3): the pre-computed diff preview replaces the old
+    // "?=params" default view for file writes -- what the human sees IS
+    // what will be written (race guard backs the promise up at execute).
+    // `?` flips between the diff and the full parameter JSON.
+    if (!preview.empty() && !expanded) {
+        std::string line;
+        std::istringstream stream(preview);
+        std::size_t shown = 0;
+        while (std::getline(stream, line) && shown < 24) {
+            std::string tinted;
+            if (!line.empty() && line[0] == '+')
+                tinted = tint(colors, "0;32", sanitize_display(line));
+            else if (!line.empty() && line[0] == '-')
+                tinted = tint(colors, "0;31", sanitize_display(line));
+            else if (!line.empty() && line[0] == '@')
+                tinted = tint(colors, "0;35", sanitize_display(line));
+            else if (!line.empty() && line[0] == ':')
+                tinted = tint(colors, "2", sanitize_display(line));
+            else
+                tinted = tint(colors, "2", sanitize_display(line));
+            rows.push_back(std::move(tinted));
+            ++shown;
+        }
+        if (!stream.eof())
+            rows.push_back(tint(colors, "2", "  ... diff truncated (approve applies full change)"));
+        rows.push_back(tint(colors, "33",
+                            "y=allow  n=deny  a=allow-name  ?=params  (Esc/Ctrl-C "
+                            "deny+stop)"));
+        return rows;
+    }
     if (expanded) {
         std::string pretty = parsed.is_discarded() ? arguments_json : parsed.dump(2);
         std::string line;
@@ -596,15 +626,13 @@ std::vector<std::string> tool_registry_rows(const std::vector<std::string>& rend
     for (const auto& tool : rendered_tools) {
         static constexpr std::string_view kSep = " \u00b7 ";
         const auto first = tool.find(kSep);
-        const auto second = first == std::string::npos
-                                ? std::string::npos
-                                : tool.find(kSep, first + kSep.size());
+        const auto second =
+            first == std::string::npos ? std::string::npos : tool.find(kSep, first + kSep.size());
         if (colors && first != std::string::npos && second != std::string::npos) {
-            rows.push_back("  " + tint(colors, "36", tool.substr(0, first)) +
-                           std::string(kSep) +
-                           tint(colors, "35", tool.substr(first + kSep.size(),
-                                                          second - first - kSep.size())) +
-                           std::string(kSep) + tool.substr(second + kSep.size()));
+            rows.push_back(
+                "  " + tint(colors, "36", tool.substr(0, first)) + std::string(kSep) +
+                tint(colors, "35", tool.substr(first + kSep.size(), second - first - kSep.size())) +
+                std::string(kSep) + tool.substr(second + kSep.size()));
         } else {
             rows.push_back("  " + tool);
         }
@@ -903,6 +931,10 @@ struct ToolRound {
 struct ApprovalSlot {
     std::mutex mutex; // guards `call` payload writes
     ToolCall call;    // valid between request and answer
+    // v3 (design 009 5.3): pre-computed diff preview for write-side tools,
+    // written under the same mutex BEFORE request_seq publishes, so the UI
+    // thread never sees a pending approval without its preview settled.
+    std::string preview;
     std::atomic<unsigned long long> request_seq{0};
     std::atomic<unsigned long long> answer_seq{0};
     std::atomic<int> answer{0}; // 1 allow, 2 deny, 3 allow-session
@@ -1128,6 +1160,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 {
                     std::lock_guard<std::mutex> lock(approval_slot.mutex);
                     approval_slot.call = call;
+                    // v3: compute the diff preview on the worker thread
+                    // (registry preview honors the same single-owner
+                    // contract as list/call) and arm the runtime's race
+                    // guard -- both inside the mutex, before publish.
+                    approval_slot.preview = registry ? registry->preview(call) : std::string();
                     seq = approval_slot.request_seq.load() + 1;
                     approval_slot.request_seq.store(seq); // publish (call set first)
                 }
@@ -1164,6 +1201,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     return Approval::AllowSession;
                 }
                 default:
+                    // v3: denial must release any preview-armed race guard
+                    // (worker owns the registry; preview() armed it here).
+                    if (registry)
+                        registry->disarm(call);
                     return Approval::Deny;
                 }
             };
@@ -1288,7 +1329,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // Short lines on purpose: single-row commands stay intact even
             // on narrow terminals (wrap breaks mid-token at width limit).
             screen.commit("commands: /provider <url> · /login [key] · /model <name>");
-            screen.commit("          /tools (tool registry) · /mcp (servers)");
+            screen.commit("          /tools (tool registry) · /mcp (servers) · /cwd [path]");
             screen.commit("          /models (list & pick) · /log <path>|off|default");
             screen.commit("          /config · /sessions · /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
@@ -1401,6 +1442,39 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             for (const auto& id : ids)
                 screen.commit("  " + id);
             screen.commit("resume after exit: mini-agent run --session <id>");
+            return true;
+        }
+        if (line.rfind("/cwd", 0) == 0) {
+            // v3 (design 009 5.4): query or rebind the session workspace.
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                screen.commit("workspace: " +
+                              sanitize_display(config.workspace.empty()
+                                                   ? std::filesystem::current_path().string()
+                                                   : config.workspace) +
+                              " · /cwd <path> to rebind (file+git tools and run_bash)");
+                return true;
+            }
+            const std::filesystem::path target(arg);
+            std::error_code ec;
+            const auto canonical = std::filesystem::weakly_canonical(target, ec);
+            if (ec || !std::filesystem::is_directory(canonical, ec)) {
+                screen.commit("[error] not a directory: " + sanitize_display(arg));
+                return true;
+            }
+            if (worker.joinable())
+                worker.join(); // registry swap needs the worker idle (008 thread rule)
+            config.workspace = canonical.string();
+            session.meta.workspace = config.workspace;
+            session.chat.update_system_workspace(config.workspace);
+            std::string note;
+            tool_registry = build_tool_registry(config, &note);
+            config_snapshot = config;
+            screen.commit("[ok] workspace=" + sanitize_display(config.workspace) +
+                          " · tools rebound · " +
+                          (config.workspace == std::filesystem::current_path().string()
+                               ? "(matches launch cwd)"
+                               : "run_bash now starts inside it"));
             return true;
         }
         if (line == "/tools") {
@@ -1859,11 +1933,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // bold yellow). SGR is zero-width for md::clip, and the clip
             // keeps any active span (it re-emits escapes while cutting).
             const bool sc = colors_enabled();
-            std::string status = tint(sc, "2",
-                                      "model=" +
-                                          (config.model.empty() ? std::string("(not set)")
-                                                                : config.model) +
-                                          " · session=" + options.session_id);
+            std::string status =
+                tint(sc, "2",
+                     "model=" + (config.model.empty() ? std::string("(not set)") : config.model) +
+                         " · session=" + options.session_id);
             if (models_running) {
                 status += tint(sc, "36", " · listing models...");
             } else if (model_menu_open) {
@@ -1873,8 +1946,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 const auto secs =
                     std::chrono::duration_cast<std::chrono::seconds>(steady_now() - turn_start)
                         .count();
-                status += tint(sc, "36", " · streaming (Ctrl-C/Esc) · " +
-                                             std::to_string(secs) + "s");
+                status +=
+                    tint(sc, "36", " · streaming (Ctrl-C/Esc) · " + std::to_string(secs) + "s");
                 if (!pending.empty()) {
                     status += tint(sc, "36", " · queued " + std::to_string(pending.size()));
                 }
@@ -1886,14 +1959,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             if (approval_pending()) {
                 unsigned long long seq = approval_slot.request_seq.load();
                 ToolCall snapshot;
+                std::string snapshot_preview;
                 {
                     std::lock_guard<std::mutex> lock(approval_slot.mutex);
                     (void)seq;
                     snapshot = approval_slot.call;
+                    snapshot_preview = approval_slot.preview;
                 }
                 status += tint(sc, "1;33", " · AWAITING APPROVAL");
-                extra_rows =
-                    approval_rows(snapshot.name, snapshot.arguments_json, approval_expanded);
+                extra_rows = approval_rows(snapshot.name, snapshot.arguments_json,
+                                           approval_expanded, snapshot_preview);
             }
             screen.render(tail, last_user, raw_for_hint, composer_display, prompt, status,
                           streaming, cols, extra_rows);

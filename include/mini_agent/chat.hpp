@@ -52,6 +52,11 @@ class Chat {
     const std::vector<Message>& messages() const noexcept {
         return messages_;
     }
+    // v3 (design 009 section 5.5): rewrites the `Workspace:` line inside
+    // the FIRST System message (the default prompt) when the session's
+    // workspace changes via /cwd. No-op when no leading System message or
+    // no such line exists. Everything else in the prompt is untouched.
+    void update_system_workspace(const std::string& workspace);
 
   private:
     std::vector<Message> messages_;

@@ -38,10 +38,11 @@ void print_usage(std::ostream& out) {
     out << "mini-agent " MINI_AGENT_VERSION
         << " - a mini AI agent\n"
            "usage:\n"
-           "  mini-agent ask [--tools M] \"question\"  one-shot question to stdout\n"
-           "  mini-agent ask [--tools M] -   read question from stdin\n"
-           "      --tools off|ask|auto  (default off: non-interactive contract)\n"
-           "  mini-agent run [--session ID]  interactive session (TUI; v1.0 fallback line mode)\n"
+           "  mini-agent ask [--tools M] [--cwd PATH] \"question\"  one-shot to stdout\n"
+           "  mini-agent ask [--tools M] --cwd PATH -   read question from stdin\n"
+           "      --tools off|ask|allowlist|auto  (default off: non-interactive contract)\n"
+           "          allowlist: only tool_allowlist names execute (script-safe, v3)\n"
+           "  mini-agent run [--session ID] [--cwd PATH]  session (TUI; v1 line-mode)\n"
            "  mini-agent session list|rm ID  manage sessions\n"
            "  mini-agent mcp list            show configured MCP servers\n"
            "  --mcp NAME=SPEC (ask/run/mcp)  add one server this session:\n"
@@ -206,10 +207,19 @@ int cmd_ask(int argc, char** argv) {
         }
         if (std::strncmp(argv[i], "--mcp=", 6) == 0)
             continue; // handled by apply_mcp_flags
+        if (std::strcmp(argv[i], "--cwd") == 0 && i + 1 < argc) {
+            config.workspace = argv[++i]; // v3 workspace override (009 5.4)
+            continue;
+        }
+        if (std::strncmp(argv[i], "--cwd=", 6) == 0) {
+            config.workspace = argv[i] + 6;
+            continue;
+        }
         positional.emplace_back(argv[i]);
     }
-    if (tools_mode != "off" && tools_mode != "ask" && tools_mode != "auto") {
-        std::cerr << "error: --tools must be off|ask|auto\n";
+    if (tools_mode != "off" && tools_mode != "ask" && tools_mode != "auto" &&
+        tools_mode != "allowlist") {
+        std::cerr << "error: --tools must be off|ask|allowlist|auto\n";
         return kConfigError;
     }
     if (positional.size() == 1) {
@@ -222,8 +232,8 @@ int cmd_ask(int argc, char** argv) {
             question = positional[0];
         }
     } else {
-        std::cerr << "usage: mini-agent ask [--tools off|ask|auto] \"question\" | "
-                     "mini-agent ask - (stdin)\n";
+        std::cerr << "usage: mini-agent ask [--tools off|ask|allowlist|auto] [--cwd PATH] "
+                     "\"question\" | mini-agent ask - (stdin)\n";
         return kConfigError;
     }
 
@@ -239,13 +249,23 @@ int cmd_ask(int argc, char** argv) {
     std::unique_ptr<mini_agent::ToolRegistry> registry;
     mini_agent::TurnOptions turn_options;
     if (tools_mode != "off") {
+        // v3: validate the workspace boundary before any tool can run.
+        if (!config.workspace.empty()) {
+            std::error_code ec;
+            const auto canonical = std::filesystem::weakly_canonical(config.workspace, ec);
+            if (ec || !std::filesystem::is_directory(canonical, ec)) {
+                std::cerr << "error: workspace is not a directory: " << config.workspace << '\n';
+                return kConfigError;
+            }
+            config.workspace = canonical.string();
+        }
         std::string note;
         registry = mini_agent::build_tool_registry(config, &note);
         turn_options.tools = registry.get();
         turn_options.max_tool_rounds = config.max_tool_rounds;
         if (tools_mode == "ask") {
             if (::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO)) {
-                turn_options.approve = [](const mini_agent::ToolCall& call) {
+                turn_options.approve = [&registry](const mini_agent::ToolCall& call) {
                     auto parsed = nlohmann::json::parse(call.arguments_json, nullptr, false);
                     std::string primary;
                     if (parsed.is_object()) {
@@ -261,14 +281,28 @@ int cmd_ask(int argc, char** argv) {
                         primary = call.arguments_json;
                     // Prompt on STDERR: stdout stays reply-only (the ask
                     // pipe contract); the TTY still shows both streams.
-                    std::cerr << "\n[approve] " << call.name << ": " << primary << "\nallow? [y/N] "
-                              << std::flush;
+                    // v3: file writes / commits render their diff preview
+                    // first when the runtime provides one (same hook as
+                    // the TUI approval block).
+                    const auto preview = registry ? registry->preview(call) : std::string();
+                    if (!preview.empty()) {
+                        std::cerr << "\n[approve] " << call.name << " -- review before "
+                                  << "allowing:\n"
+                                  << preview;
+                    } else {
+                        std::cerr << "\n[approve] " << call.name << ": " << primary << '\n';
+                    }
+                    std::cerr << "allow? [y/N] " << std::flush;
                     std::string answer;
-                    if (!std::getline(std::cin, answer))
+                    if (!std::getline(std::cin, answer)) {
+                        if (registry)
+                            registry->disarm(call);
                         return mini_agent::Approval::Deny;
-                    return (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y'))
-                               ? mini_agent::Approval::Allow
-                               : mini_agent::Approval::Deny;
+                    }
+                    const bool allowed = !answer.empty() && (answer[0] == 'y' || answer[0] == 'Y');
+                    if (!allowed && registry)
+                        registry->disarm(call);
+                    return allowed ? mini_agent::Approval::Allow : mini_agent::Approval::Deny;
                 };
             } else {
                 // Design 008 section 5.4 + ADR 006: non-interactive ask
@@ -281,6 +315,17 @@ int cmd_ask(int argc, char** argv) {
                 turn_options.tools = nullptr;
                 turn_options.approve = {};
             }
+        } else if (tools_mode == "allowlist") {
+            // v3 (design 009 section 2 CLI tier): deterministic AND
+            // script-safe -- only names in config tool_allowlist execute;
+            // everything else is denied as an error Tool message. No TTY
+            // needed: nothing ever blocks.
+            auto allowlist = config.tool_allowlist;
+            turn_options.approve = [allowlist](const mini_agent::ToolCall& call) {
+                return std::find(allowlist.begin(), allowlist.end(), call.name) != allowlist.end()
+                           ? mini_agent::Approval::Allow
+                           : mini_agent::Approval::Deny;
+            };
         }
         turn_options.on_tool = [&logger](const mini_agent::ToolCall& call,
                                          const mini_agent::ToolResult& result, bool executed) {
@@ -332,6 +377,7 @@ int cmd_ask(int argc, char** argv) {
 int cmd_run(int argc, char** argv) {
     std::string session_id;
     bool fresh = false;
+    std::string workspace_flag;
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--session") == 0 && i + 1 < argc) {
             session_id = argv[++i];
@@ -341,15 +387,21 @@ int cmd_run(int argc, char** argv) {
             ++i; // consumed by apply_mcp_flags below
         } else if (std::strncmp(argv[i], "--mcp=", 6) == 0) {
             // consumed by apply_mcp_flags below
+        } else if (std::strcmp(argv[i], "--cwd") == 0 && i + 1 < argc) {
+            workspace_flag = argv[++i]; // v3: session workspace override
+        } else if (std::strncmp(argv[i], "--cwd=", 6) == 0) {
+            workspace_flag = argv[i] + 6;
         } else {
             std::cerr << "usage: mini-agent run [--session ID] [--new] "
-                         "[--mcp NAME=SPEC]\n";
+                         "[--cwd PATH] [--mcp NAME=SPEC]\n";
             return kConfigError;
         }
     }
     mini_agent::AppConfig config;
     std::string config_error;
     const bool configured = load_app_config(&config, &config_error);
+    if (!workspace_flag.empty())
+        config.workspace = workspace_flag; // CLI flag beats file/env (v3 009 5.4)
     std::string mcp_error;
     if (!apply_mcp_flags(argc, argv, &config, &mcp_error)) {
         std::cerr << "error: " << mcp_error << '\n';
@@ -372,6 +424,22 @@ int cmd_run(int argc, char** argv) {
     if (session_id.empty() || fresh) {
         session.meta.id = mini_agent::generate_session_id();
         session.meta.model = config.model;
+        // v3 (design 009 5.4/5.5): resolve + validate the workspace now so
+        // a bad --cwd fails before the lock, and stamp it into the session.
+        if (!config.workspace.empty()) {
+            std::error_code ec;
+            const auto canonical = std::filesystem::weakly_canonical(config.workspace, ec);
+            if (ec || !std::filesystem::is_directory(canonical, ec)) {
+                std::cerr << "error: workspace is not a directory: " << config.workspace << '\n';
+                return kConfigError;
+            }
+            config.workspace = canonical.string();
+        }
+        session.meta.workspace = config.workspace.empty()
+                                     ? std::optional<std::string>{}
+                                     : std::optional<std::string>(config.workspace);
+        mini_agent::inject_system_prompt(session.chat, config.workspace, config.model,
+                                         config.system_prompt);
     } else {
         if (!mini_agent::session_id_is_safe(session_id)) {
             std::cerr << "error: unsafe session id\n";
@@ -383,6 +451,21 @@ int cmd_run(int argc, char** argv) {
             return kRuntimeError;
         }
         session = std::move(*loaded);
+        // v3 workspace precedence on resume: an explicit --cwd rebinds the
+        // session (and is persisted); otherwise the session's own stamp
+        // wins; otherwise config/env/launch cwd (009 5.4).
+        if (!workspace_flag.empty()) {
+            std::error_code ec;
+            const auto canonical = std::filesystem::weakly_canonical(config.workspace, ec);
+            if (ec || !std::filesystem::is_directory(canonical, ec)) {
+                std::cerr << "error: workspace is not a directory: " << config.workspace << '\n';
+                return kConfigError;
+            }
+            config.workspace = canonical.string();
+            session.meta.workspace = config.workspace;
+        } else if (session.meta.workspace && !session.meta.workspace->empty()) {
+            config.workspace = *session.meta.workspace;
+        }
     }
     if (!store.try_lock(session.meta.id, &io_error)) {
         std::cerr << "error: " << io_error << '\n';

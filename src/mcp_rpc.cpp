@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <filesystem>
 
 namespace mini_agent {
 namespace {
@@ -428,8 +429,19 @@ TransportFactory default_transport_factory() {
 namespace mini_agent {
 
 std::unique_ptr<ToolRegistry> build_tool_registry(const AppConfig& config, std::string* note) {
+    // v3 file tools (design 009 5.1): workspace root defaults to the
+    // process cwd when unset. Construction never fails.
+    std::filesystem::path workspace = config.workspace.empty()
+                                          ? std::filesystem::current_path()
+                                          : std::filesystem::path(config.workspace);
     auto registry = std::make_unique<ToolRegistry>();
-    registry->add(std::make_unique<BuiltinRuntime>(config.tool_timeout_seconds));
+    registry->add(std::make_unique<BuiltinRuntime>(config.tool_timeout_seconds, workspace));
+    FileToolsConfig file_config;
+    file_config.workspace = workspace;
+    registry->add(std::make_unique<FileRuntime>(std::move(file_config)));
+    // v3 git tools (design 009 5.2): lazy probe on first use; absent
+    // entirely when git is missing or the workspace is no repository.
+    registry->add(std::make_unique<GitRuntime>(workspace, config.tool_timeout_seconds));
     if (!config.mcp_servers.empty()) {
         auto factory = default_transport_factory();
         for (const auto& server : config.mcp_servers) {

@@ -146,6 +146,9 @@ std::string session_to_json(const SessionMeta& meta, const Chat& chat) {
     if (meta.parent_id) {
         root["meta"]["parent_id"] = *meta.parent_id;
     }
+    if (meta.workspace) {
+        root["meta"]["workspace"] = *meta.workspace;
+    }
     root["messages"] = std::move(messages);
     return root.dump(2);
 }
@@ -194,6 +197,9 @@ std::optional<Session> session_from_json(std::string_view text, std::string* err
     session.meta.model = get_str("model");
     if (auto it = meta_node.find("parent_id"); it != meta_node.end() && it->is_string()) {
         session.meta.parent_id = it->get<std::string>();
+    }
+    if (auto it = meta_node.find("workspace"); it != meta_node.end() && it->is_string()) {
+        session.meta.workspace = it->get<std::string>();
     }
     const auto& messages_node = parsed["messages"];
     if (!messages_node.is_array()) {
@@ -375,6 +381,49 @@ void SessionStore::unlock(const std::string& id) noexcept {
     if (!session_id_is_safe(id))
         return;
     ::unlink(lock_path_for(id).c_str());
+}
+
+std::string build_system_prompt(const std::string& workspace, const std::string& model,
+                                const std::optional<std::string>& override_prompt) {
+    if (override_prompt.has_value())
+        return *override_prompt; // "" = disabled, text = full replacement
+    std::string prompt = "You are mini-agent, a terminal coding assistant running on Linux.\n";
+    if (!model.empty())
+        prompt += "Model: " + model + "\n";
+    prompt += "Workspace: " + (workspace.empty() ? std::string("(unset)") : workspace) +
+              "\n"
+              "File and git tools are bounded to the workspace; requests outside it are "
+              "rejected (re-check the path with list_dir).\n\n"
+              "Tool etiquette:\n"
+              "- To inspect code prefer read_file (line-numbered) and search_text over shell "
+              "pipes.\n"
+              "- To change code prefer edit_file: old_str must match exactly once (include "
+              "surrounding context; whitespace matters); use write_file only for new files or "
+              "full rewrites.\n"
+              "- After edits, verify with the project's build/test commands via run_bash "
+              "before declaring success.\n"
+              "- git_status/git_diff/git_log are safe; git_add/git_commit create local "
+              "commits and may ask for approval; pushing is always a human action -- never "
+              "attempt it yourself.\n"
+              "- Some tool calls require interactive approval: if a result reports "
+              "\"user denied this tool invocation\", do NOT retry the same call; explain "
+              "what you wanted and ask the user.\n"
+              "- Keep final answers concise; reference files by path.\n";
+    return prompt;
+}
+
+bool inject_system_prompt(Chat& chat, const std::string& workspace, const std::string& model,
+                          const std::optional<std::string>& override_prompt) {
+    if (!chat.messages().empty())
+        return false; // only fresh sessions get the prompt
+    const auto text = build_system_prompt(workspace, model, override_prompt);
+    if (text.empty())
+        return false;
+    Message message;
+    message.role = Role::System;
+    message.content = text;
+    chat.add(std::move(message));
+    return true;
 }
 
 } // namespace mini_agent

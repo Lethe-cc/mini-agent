@@ -212,6 +212,13 @@ std::string config_to_json(const AppConfig& config) {
     if (!config.log_file.empty()) {
         root["log_file"] = config.log_file;
     }
+    // v3 fields (design 009 section 5.4): optional, written only when set.
+    if (!config.workspace.empty())
+        root["workspace"] = config.workspace;
+    if (config.system_prompt.has_value()) {
+        // "" (explicit disable) is written; absent = built-in default.
+        root["system_prompt"] = *config.system_prompt;
+    }
     // v2 fields (design 008 section 5.3): written only when they differ
     // from defaults, keeping v1-era files compact and diff-clean.
     if (config.tool_approval != "ask")
@@ -274,6 +281,18 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
     config.api_key = get_str("api_key");
     config.model = get_str("model");
     config.log_file = get_str("log_file");
+
+    // v3 optional fields.
+    config.workspace = get_str("workspace");
+    if (auto it = parsed.find("system_prompt"); it != parsed.end()) {
+        if (it->is_string()) {
+            config.system_prompt = it->get<std::string>();
+        } else if (!it->is_null()) {
+            if (error)
+                *error = "config system_prompt must be a string or null";
+            return std::nullopt;
+        }
+    }
 
     // v2 optional fields; unknown/absent -> defaults (forward-read rule).
     if (auto approval = get_str("tool_approval"); !approval.empty()) {
@@ -401,6 +420,8 @@ AppConfig load_config_merged(std::string* file_error) {
         config.model = v;
     if (const char* v = env_nonempty("MINI_AGENT_LOG"))
         config.log_file = v;
+    if (const char* v = env_nonempty("MINI_AGENT_WORKSPACE"))
+        config.workspace = v; // v3: scripts pin the boundary per invocation
     if (const char* v = env_nonempty("MINI_AGENT_TOOL_APPROVAL"); v && *v) {
         const std::string approval = v;
         if (approval == "ask" || approval == "allowlist" || approval == "off")

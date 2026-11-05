@@ -44,6 +44,20 @@ void Chat::add(Message message) {
     messages_.push_back(std::move(message));
 }
 
+void Chat::update_system_workspace(const std::string& workspace) {
+    if (messages_.empty() || messages_.front().role != Role::System)
+        return;
+    auto& content = messages_.front().content;
+    const std::string marker = "Workspace: ";
+    const auto start = content.find(marker);
+    if (start == std::string::npos)
+        return; // custom prompt without the line: leave it alone
+    const auto end = content.find('\n', start);
+    if (end == std::string::npos)
+        return; // malformed: no line terminator to splice at
+    content = content.substr(0, start) + marker + workspace + content.substr(end);
+}
+
 std::string chat_to_json(const Chat& chat) {
     nlohmann::json arr = nlohmann::json::array();
     for (const auto& message : chat.messages()) {

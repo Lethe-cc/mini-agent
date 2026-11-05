@@ -36,6 +36,7 @@ find_package(CURL REQUIRED)
 add_library(agent_core STATIC
     src/chat.cpp
     src/config.cpp
+    src/diff.cpp
     src/log.cpp
     src/md.cpp
     src/loop.cpp

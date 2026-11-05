@@ -13,6 +13,7 @@
 
 #include "mini_agent/chat.hpp"
 #include "mini_agent/config.hpp"
+#include "mini_agent/diff.hpp"
 #include "mini_agent/log.hpp"
 #include "mini_agent/loop.hpp"
 #include "mini_agent/mcp.hpp"
@@ -1427,6 +1428,444 @@ void test_history_styling() {
 
 } // namespace
 
+void test_unified_diff() {
+    using namespace mini_agent;
+    // Unchanged texts (including the trailing-newline normalization): no
+    // change reported, empty unified output.
+    check(!diff_texts("a\nb\n", "a\nb\n").changed, "identical text unchanged");
+    check(!diff_texts("a\n", "a").changed, "trailing newline alone is not a change");
+    // A single-line change: one hunk, context kept, coordinates correct.
+    const auto one = diff_texts("x\na\ny\n", "x\nB\ny\n");
+    check(one.changed && !one.too_large, "single change detected");
+    check(one.added == 1 && one.removed == 1, "counts: one add one remove");
+    const std::string text = one.to_unified_text("old", "new");
+    check(text == "--- old\n+++ new\n@@ -1,3 +1,3 @@\n x\n-a\n+B\n y\n", "exact hunk shape");
+    // New file (empty -> content): all adds.
+    const auto fresh = diff_against_empty("hello\nworld\n");
+    check(fresh.removed == 0 && fresh.added == 2, "new file is all additions");
+    // Deletion-only change keeps the @@ coordinates honest on the new side.
+    const auto del = diff_texts("a\nb\nc\nd\n", "a\nd\n");
+    const std::string deltext = del.to_unified_text("o", "n");
+    check(deltext.find("@@ -1,4 +1,2 @@") != std::string::npos, "deletion hunk header");
+    check(del.removed == 2 && del.added == 0, "deletion counts");
+    // Too-large guard fires before the O(n*m) table.
+    std::string big(DiffOptions{}.max_diff_lines + 1, '\n');
+    big += "tail\n";
+    const auto huge = diff_texts("", big);
+    check(huge.changed && huge.too_large && !huge.note.empty(), "oversized input gives up");
+    // Cell-budget guard: both sides under the line cap, product over it.
+    std::string mid_a;
+    std::string mid_b;
+    for (int i = 0; i < 2500; ++i) {
+        mid_a += "a" + std::to_string(i) + "\n";
+        mid_b += "b" + std::to_string(i) + "\n";
+    }
+    DiffOptions tight_cells;
+    tight_cells.max_diff_cells = 1000;
+    const auto cells = diff_texts(mid_a, mid_b, tight_cells);
+    check(cells.changed && cells.too_large &&
+              cells.note.find("too large to preview") != std::string::npos,
+          "cell budget guard fires before allocation");
+    // Hunk merging: two changes within context lines share one hunk.
+    const auto merged = diff_texts("1\n2\n3\n4\n5\n6\n7\n8\n9\n", "A\n2\n3\n4\n5\n6\n7\n8\nB\n");
+    const std::size_t hunks = std::count_if(merged.rows.begin(), merged.rows.end(),
+                                            [](const DiffRow& r) { return r.kind == '@'; });
+    check(hunks == 2, "far-apart changes split hunks");
+    const auto close = diff_texts("1\n2\n3\n4\n5\n", "A\n2\n3\n4\nB\n");
+    const std::size_t close_hunks = std::count_if(close.rows.begin(), close.rows.end(),
+                                                  [](const DiffRow& r) { return r.kind == '@'; });
+    check(close_hunks == 1, "changes within context merge into one hunk");
+    // Row-budget truncation keeps the result bounded and flags the note.
+    std::string old_t;
+    std::string new_t;
+    for (int i = 0; i < 500; ++i) {
+        old_t += "line" + std::to_string(i) + "\n";
+        new_t += "L" + std::to_string(i) + "\n";
+    }
+    DiffOptions tight;
+    tight.max_hunk_rows = 40;
+    const auto capped = diff_texts(old_t, new_t, tight);
+    check(capped.rows.size() < 60 && capped.note.find("truncated") != std::string::npos,
+          "row budget caps output with note");
+    // Empty-input edge: split of "" is zero lines, of "\n" is one empty line.
+    check(diff_split_lines("").empty(), "empty text has no lines");
+    check(diff_split_lines("\n").size() == 1, "single newline is one empty line");
+}
+
+// Creates a temp workspace dir with sample files for file-tool tests.
+struct TempWorkspace {
+    std::filesystem::path root;
+    std::filesystem::path outside;
+    TempWorkspace() {
+        const auto tag = mini_agent::generate_session_id();
+        root = std::filesystem::temp_directory_path() / ("mini_agent_ws_" + tag);
+        outside = std::filesystem::temp_directory_path() / ("mini_agent_out_" + tag);
+        std::error_code ec;
+        std::filesystem::create_directories(root / "sub", ec);
+        std::filesystem::create_directories(outside, ec);
+        {
+            std::ofstream f(root / "a.txt");
+            f << "alpha\nbeta\ngamma\nbeta\n";
+        }
+        {
+            std::ofstream f(root / "sub" / "b.txt");
+            f << "one\ntwo\n";
+        }
+        {
+            std::ofstream f(outside / "secret.txt");
+            f << "do not read\n";
+        }
+    }
+    ~TempWorkspace() {
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+        std::filesystem::remove_all(outside, ec);
+    }
+    std::string read(const std::string& rel) {
+        std::ifstream f(root / rel, std::ios::binary);
+        std::ostringstream b;
+        b << f.rdbuf();
+        return b.str();
+    }
+};
+
+void test_file_tools() {
+    using namespace mini_agent;
+    TempWorkspace ws;
+    FileToolsConfig fc;
+    fc.workspace = std::filesystem::canonical(ws.root);
+    FileRuntime runtime(fc);
+
+    const auto tools = runtime.list();
+    check(tools.size() == 5, "five file tools listed");
+
+    auto call = [&](const char* name, const std::string& args) {
+        return runtime.call(ToolCall{"1", name, args}, [] { return false; });
+    };
+
+    // read_file: whole file is line-numbered; ranges slice; binary/majority
+    // of failures fold into is_error.
+    const auto all = call("read_file", R"({"path":"a.txt"})");
+    check(!all.is_error && all.text.find("1\talpha") != std::string::npos &&
+              all.text.find("4\tbeta") != std::string::npos,
+          "read_file numbers lines");
+    const auto range = call("read_file", R"({"path":"a.txt","from_line":2,"to_line":3})");
+    check(!range.is_error && range.text.find("2\tbeta") != std::string::npos &&
+              range.text.find("1\t") == std::string::npos &&
+              range.text.find("4\t") == std::string::npos,
+          "read_file honors from/to line");
+    check(call("read_file", R"({"path":"nope.txt"})").is_error, "read_file missing file errors");
+    check(call("read_file", "not-json").is_error, "read_file malformed args fail closed");
+
+    // Workspace boundary: traversal, absolute-escape, and dot-dot.
+    const auto escape = call("read_file", R"({"path":"../../etc/passwd"})");
+    check(escape.is_error && escape.text.find("escapes workspace") != std::string::npos,
+          "read_file blocks parent traversal");
+    // Absolute path outside root is rejected too (construct the real path).
+    const std::string outside_abs = (ws.outside / "secret.txt").string();
+    const auto abs_escape = call("read_file", std::string(R"({"path":")") + outside_abs + R"("})");
+    check(abs_escape.is_error && abs_escape.text.find("escapes workspace") != std::string::npos,
+          "read_file blocks absolute path outside root");
+    // A legit absolute path INSIDE root is allowed.
+    const auto abs_ok =
+        call("read_file", std::string(R"({"path":")") + (ws.root / "a.txt").string() + R"("})");
+    check(!abs_ok.is_error, "read_file allows absolute path inside root");
+
+    // resolve_within_workspace direct checks.
+    std::filesystem::path resolved;
+    std::string rerr;
+    check(resolve_within_workspace(ws.root, "sub/b.txt", &resolved, &rerr), "relative resolves");
+    check(!resolve_within_workspace(ws.root, "", &resolved, &rerr), "empty path rejected");
+    check(!resolve_within_workspace(ws.root, "sub/../../secret", &resolved, &rerr),
+          "sneaky traversal rejected");
+
+    // write_file: new file + overwrite, both report success and land bytes.
+    const auto created = call("write_file", R"({"path":"new.txt","content":"hello\n"})");
+    check(!created.is_error && created.text.find("created") != std::string::npos,
+          "write_file creates");
+    check(ws.read("new.txt") == "hello\n", "created content on disk");
+    const auto over = call("write_file", R"({"path":"sub/b.txt","content":"replaced\n"})");
+    check(!over.is_error && ws.read("sub/b.txt") == "replaced\n", "write_file overwrites");
+    check(call("write_file", R"({"path":"nodir/x.txt","content":"y"})").is_error,
+          "write_file missing parent errors");
+    check(call("write_file", R"({"path":"../esc.txt","content":"y"})").is_error,
+          "write_file cannot escape root");
+
+    // edit_file: unique match required unless replace_all.
+    const auto notfound = call("edit_file", R"({"path":"a.txt","old_str":"zzz","new_str":"q"})");
+    check(notfound.is_error && notfound.text.find("not found") != std::string::npos,
+          "edit_file 0 matches errors");
+    const auto ambiguous = call("edit_file", R"({"path":"a.txt","old_str":"beta","new_str":"B"})");
+    check(ambiguous.is_error && ambiguous.text.find("matches 2 places") != std::string::npos,
+          "edit_file multi-match errors");
+    const auto unique =
+        call("edit_file", R"({"path":"a.txt","old_str":"alpha","new_str":"ALPHA"})");
+    check(!unique.is_error && ws.read("a.txt").find("ALPHA") == 0, "edit_file unique replaces");
+    const auto all2 =
+        call("edit_file", R"({"path":"a.txt","old_str":"beta","new_str":"B","replace_all":true})");
+    check(!all2.is_error, "edit_file replace_all ok");
+    check(ws.read("a.txt").find("beta") == std::string::npos, "replace_all swapped both");
+
+    // list_dir: entries present.
+    const auto listed = call("list_dir", "{}");
+    check(!listed.is_error && listed.text.find("a.txt") != std::string::npos &&
+              listed.text.find("sub/") != std::string::npos,
+          "list_dir shows files and dirs");
+
+    // search_text: substring across files; single-file filter; regex.
+    const auto found = call("search_text", R"({"pattern":"gamma"})");
+    check(!found.is_error && found.text.find("a.txt:3:") != std::string::npos,
+          "search_text finds file content");
+    // after overwrite sub/b.txt is "replaced"; search a.txt's ALPHA instead
+    const auto found2 = call("search_text", R"({"pattern":"ALPHA","path_prefix":"a.txt"})");
+    check(!found2.is_error && found2.text.find("a.txt:1:") != std::string::npos,
+          "search_text single-file mode reports path:line");
+    const auto none = call("search_text", R"({"pattern":"zzzznotpresent"})");
+    check(!none.is_error && none.text == "(no matches)", "search_text no matches ok");
+    const auto regex = call("search_text", R"({"pattern":"^gamma$","is_regex":true})");
+    check(!regex.is_error && regex.text.find("gamma") != std::string::npos, "regex search works");
+    check(call("search_text", R"({"pattern":"(","is_regex":true})").is_error,
+          "invalid regex fails closed");
+
+    // preview(): unified diff for edit/write; arms the race guard.
+    {
+        // fresh copy for race test
+        {
+            std::ofstream f(ws.root / "race.txt");
+            f << "original\n";
+        }
+        ToolCall rc{"1", "edit_file",
+                    R"({"path":"race.txt","old_str":"original","new_str":"changed"})"};
+        const auto preview = runtime.preview(rc);
+        check(preview.find("-original") != std::string::npos &&
+                  preview.find("+changed") != std::string::npos,
+              "preview shows unified diff");
+        // External mutation before execute: guard refuses (009 5.3).
+        {
+            std::ofstream f(ws.root / "race.txt");
+            f << "someone else\n";
+        }
+        const auto raced = runtime.call(rc, [] { return false; });
+        check(raced.is_error &&
+                  raced.text.find("changed since the approved preview") != std::string::npos,
+              "race guard refuses stale approval");
+    }
+
+    // registry preview() routes to the owning runtime.
+    auto registry = std::make_unique<ToolRegistry>();
+    registry->add(std::make_unique<FileRuntime>(fc));
+    const auto p = registry->preview(
+        ToolCall{"1", "write_file", R"({"path":"p.txt","content":"brand new\n"})"});
+    check(p.find("+brand new") != std::string::npos, "registry.preview delegates");
+    check(registry->preview(ToolCall{"1", "run_bash", R"({"command":"ls"})"}).empty(),
+          "registry.preview empty for no-preview tool");
+}
+
+void test_v3_config_and_prompt() {
+    using namespace mini_agent;
+    // config round-trip: workspace + system_prompt presence semantics.
+    AppConfig config;
+    config.base_url = "https://x.test/v1";
+    config.api_key = "k";
+    config.model = "m";
+    config.workspace = "/tmp/somewhere";
+    std::string error;
+    const auto json = config_to_json(config);
+    check(json.find("\"workspace\": \"/tmp/somewhere\"") != std::string::npos,
+          "workspace serialized");
+    auto back = config_from_json(json, &error);
+    check(back && back->workspace == "/tmp/somewhere", "workspace round-trips");
+    check(back && !back->system_prompt.has_value(), "system_prompt absent = default");
+    // explicit empty disables; null clears back to default
+    auto disabled = config_from_json(R"({"system_prompt":""})", &error);
+    check(disabled && disabled->system_prompt.has_value() && disabled->system_prompt->empty(),
+          "empty prompt parsed as disabled");
+    auto nulled = config_from_json(R"({"system_prompt":null})", &error);
+    check(nulled && !nulled->system_prompt.has_value(), "null prompt = default");
+    auto bad = config_from_json(R"({"system_prompt":7})", &error);
+    check(!bad.has_value(), "non-string prompt rejected");
+    // old v1 files still parse (forward-read rule).
+    check(config_from_json(R"({"base_url":"b","api_key":"k","model":"m"})", &error).has_value(),
+          "v1 config loads unchanged");
+
+    // build_system_prompt: default mentions tools + workspace; override
+    // passthrough; "" disabled.
+    const auto prompt = build_system_prompt("/work/dir", "gpt-test", std::nullopt);
+    check(prompt.find("Workspace: /work/dir") != std::string::npos, "workspace line present");
+    check(prompt.find("edit_file") != std::string::npos &&
+              prompt.find("git_commit") != std::string::npos &&
+              prompt.find("never") != std::string::npos,
+          "default prompt covers tool etiquette + push ban");
+    check(build_system_prompt("/x", "m", std::string("custom only")) == "custom only",
+          "override replaces");
+    check(build_system_prompt("/x", "m", std::string()).empty(), "disabled is empty");
+
+    // inject_system_prompt: fresh chat only.
+    Chat chat;
+    check(inject_system_prompt(chat, "/w", "m", std::nullopt), "injected into empty chat");
+    check(chat.messages().size() == 1 && chat.messages()[0].role == Role::System,
+          "system message first");
+    check(!inject_system_prompt(chat, "/w2", "m", std::nullopt), "no double injection");
+    Chat nonempty;
+    Message user;
+    user.role = Role::User;
+    user.content = "hi";
+    nonempty.add(user);
+    check(!inject_system_prompt(nonempty, "/w", "m", std::nullopt),
+          "resumed sessions never gain a prompt");
+
+    // update_system_workspace: rewrites only the Workspace line.
+    chat.update_system_workspace("/new/place");
+    check(chat.messages()[0].content.find("Workspace: /new/place") != std::string::npos &&
+              chat.messages()[0].content.find("Workspace: /w\n") == std::string::npos,
+          "workspace line swapped in place");
+    check(chat.messages()[0].content.find("edit_file") != std::string::npos,
+          "rest of prompt untouched");
+    Chat custom;
+    Message note;
+    note.role = Role::System;
+    note.content = "no marker here";
+    custom.add(note);
+    custom.update_system_workspace("/ignored");
+    check(custom.messages()[0].content == "no marker here", "no marker = no rewrite");
+    Chat user_first;
+    Message u;
+    u.role = Role::User;
+    user_first.add(u);
+    user_first.update_system_workspace("/noop");
+    check(user_first.messages()[0].content.empty(), "non-system first = no-op");
+
+    // session meta: workspace round-trips through the JSON bridge.
+    SessionMeta meta;
+    meta.id = "abcd1234";
+    meta.workspace = std::string("/some/ws");
+    Chat c;
+    const auto text = session_to_json(meta, c);
+    auto loaded = session_from_json(text, &error);
+    check(loaded && loaded->meta.workspace == "/some/ws", "session workspace persists");
+    SessionMeta plain;
+    plain.id = "abcd1234";
+    check(session_from_json(session_to_json(plain, c), &error)->meta.workspace == std::nullopt,
+          "absent stays absent");
+}
+
+void test_approval_preview_rows() {
+    using namespace mini_agent;
+    // approval_rows with a preview renders the diff view (default) and
+    // switches to params when expanded (v3 design 009 5.3).
+    const std::string preview = "--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+    const auto diff_view = tui::approval_rows("edit_file", R"({"path":"x"})", false, preview);
+    bool has_plus = false;
+    bool has_hunk = false;
+    for (const auto& row : diff_view) {
+        if (row.find("+new") != std::string::npos)
+            has_plus = true;
+        if (row.find("@@") != std::string::npos)
+            has_hunk = true;
+    }
+    check(has_plus && has_hunk, "preview rows show diff");
+    const auto params_view =
+        tui::approval_rows("edit_file", R"({"path":"x","old_str":"a"})", true, preview);
+    bool shows_params = false;
+    for (const auto& row : params_view)
+        shows_params = shows_params || row.find("old_str") != std::string::npos;
+    check(shows_params, "? expands full params even with a preview");
+    // No preview: legacy command-summary view unchanged.
+    const auto legacy = tui::approval_rows("run_bash", R"({"command":"ls -la"})", false, "");
+    check(!legacy.empty() && legacy[0].find("ls -la") != std::string::npos,
+          "empty preview falls back to legacy rows");
+}
+
+void test_git_tools() {
+    using namespace mini_agent;
+    // parse_porcelain_line pure checks.
+    std::string code;
+    std::string file;
+    check(parse_porcelain_line("M  src/a.cpp", &code, &file) && code == "M " && file == "src/a.cpp",
+          "porcelain M parsed");
+    check(parse_porcelain_line("?? new.txt", &code, &file) && code == "??" && file == "new.txt",
+          "porcelain ?? parsed");
+    check(!parse_porcelain_line("## main...origin/main", &code, &file), "branch header ignored");
+    check(!parse_porcelain_line("short", &code, &file), "short line rejected");
+
+    // Real temp repository.
+    const auto tag = generate_session_id();
+    const auto repo = std::filesystem::temp_directory_path() / ("mini_agent_git_" + tag);
+    std::error_code ec;
+    std::filesystem::create_directories(repo, ec);
+    auto sh = [&](const std::string& cmd) {
+        const std::string full = "cd '" + repo.string() + "' && " + cmd;
+        return std::system(full.c_str()) == 0;
+    };
+    bool env_ok = sh("git init -q . && git config user.email t@t && git config user.name t && "
+                     "echo base > f.txt && git add f.txt && git commit -qm init");
+    if (!env_ok) {
+        std::filesystem::remove_all(repo, ec);
+        return; // no git in PATH: skip the live part (recorded limitation)
+    }
+
+    GitRuntime git(std::filesystem::canonical(repo));
+    check(git.alive(), "alive in a repository");
+    const auto tools = git.list();
+    check(tools.size() == 5, "five git tools listed");
+    for (const auto& tool : tools) {
+        check(tool.name != "git_push" && tool.name != "git_pull" && tool.name != "git_reset",
+              "no remote/history-rewrite tools exposed");
+    }
+    auto call = [&](const char* name, const std::string& args) {
+        return git.call(ToolCall{"1", name, args}, [] { return false; });
+    };
+
+    const auto status = call("git_status", "{}");
+    check(!status.is_error, "git_status runs");
+    // Modify + stage + commit flow.
+    check(sh("echo change >> f.txt"), "shell edit works");
+    const auto add = call("git_add", R"({"path":"f.txt"})");
+    check(!add.is_error && add.text.find("staged") != std::string::npos, "git_add stages");
+    // preview shows the staged file (run after add, before commit).
+    const ToolCall commit{"1", "git_commit", R"({"message":"edit f"})"};
+    const auto preview = git.preview(commit);
+    check(preview.find("f.txt") != std::string::npos &&
+              preview.find("1 staged") != std::string::npos,
+          "commit preview lists staged files");
+    const auto commit_res = git.call(commit, [] { return false; });
+    check(!commit_res.is_error && commit_res.text.find("committed:") != std::string::npos,
+          "git_commit creates local commit");
+    const auto log = call("git_log", R"({"limit":5})");
+    check(!log.is_error && log.text.find("edit f") != std::string::npos, "git_log shows it");
+    const auto diff = call("git_diff", R"({"staged":true})");
+    check(!diff.is_error, "git_diff staged runs (empty ok)");
+
+    // Fail-closed argument surfaces.
+    check(call("git_commit", R"({"message":""})").is_error, "empty message rejected");
+    check(call("git_commit", R"({"message":"a\nb"})").is_error, "multiline subject rejected");
+    check(call("git_commit", "{}").is_error, "missing message rejected");
+    check(call("git_log", R"({"limit":0})").is_error, "limit 0 rejected");
+    check(call("git_log", R"({"limit":"x"})").is_error, "string limit rejected");
+    check(call("git_add", R"({"path":"../../escape"})").is_error, "add outside workspace rejected");
+    check(call("git_diff", R"({"path":"../outside"})").is_error, "diff path escape rejected");
+    const auto push = call("git_push", "{}");
+    check(push.is_error && push.text.find("human-only") != std::string::npos,
+          "git_push refused with policy message");
+
+    // Argument injection: a message that LOOKS like flags stays data.
+    check(sh("echo more >> f.txt && git add f.txt"), "stage again");
+    const auto sneaky = call("git_commit", R"({"message":"--amend --allow-empty -m pwned"})");
+    check(!sneaky.is_error, "flag-looking message commits as literal text");
+    const auto verify = call("git_log", R"({"limit":1})");
+    check(verify.text.find("--amend --allow-empty -m pwned") != std::string::npos,
+          "literal subject landed in history intact");
+
+    const auto bare = std::filesystem::temp_directory_path() / ("mini_agent_nogit_" + tag);
+    std::filesystem::create_directories(bare, ec);
+    GitRuntime dead(std::filesystem::canonical(bare));
+    check(!dead.alive() && dead.list().empty(), "non-repository: tools disappear");
+    check(dead.call(ToolCall{"1", "git_status", "{}"}, [] { return false; }).is_error,
+          "dead runtime folds to error result");
+    std::filesystem::remove_all(bare, ec);
+    std::filesystem::remove_all(repo, ec);
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -1456,6 +1895,11 @@ int main() {
     test_run_bash_and_helpers();
     test_config_v2_fields();
     test_mcp_cli_specs();
+    test_unified_diff();
+    test_file_tools();
+    test_v3_config_and_prompt();
+    test_approval_preview_rows();
+    test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";
         return EXIT_FAILURE;

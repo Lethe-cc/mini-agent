@@ -18,7 +18,7 @@ mini-agent 已完成第一版实现（2026-11-02）：Agent 内核、OpenAI 兼�
 ```plantuml
 @startuml mini-agent-architecture
 skinparam componentStyle rectangle
-title mini-agent 模块架构（2026-11-02，均已实现）
+title mini-agent 模块架构（2026-11-05，均已实现）
 
 package "可执行入口" {
   [cli_main.cpp\n子命令解析 / 退出码] as CLI
@@ -33,6 +33,9 @@ package "agent_core (静态库)" {
   [config.cpp\nenv + 配置文件合并] as CONFIG
   [md.cpp\n宽度 / wrap / clip + Markdown] as MD
   [log.cpp\nspdlog 包装（脱敏）] as LOG
+  [tools.cpp\nToolRegistry / run_bash\nv3 FileRuntime + GitRuntime\nrun_subprocess / preview+disarm] as TOOLS
+  [diff.cpp\n行级 LCS unified diff（v3）] as DIFF
+  [mcp_stdio / mcp_http\nMCP 客户端（stdio + HTTP）] as MCP
 }
 
 package "vendored 第三方 (许可证见目录内记录)" {
@@ -43,6 +46,8 @@ package "vendored 第三方 (许可证见目录内记录)" {
 
 node "外部依赖" {
   [libcurl\n(系统包)] as CURL
+  [git\n(系统包，v3 惰性探测)] as GITCMD
+  [/bin/bash\n(系统)] as SHELL
 }
 
 cloud "OpenAI 兼容服务" as LLM
@@ -59,6 +64,13 @@ TUI --> MD
 TUI --> CONFIG
 LOOP --> CHAT
 LOOP --> PROVIDER
+LOOP --> TOOLS : ToolRegistry* + approve/on_tool
+TOOLS --> DIFF : write/edit preview
+TOOLS --> MCP : McpClient runtime
+TOOLS --> FS : workspace 内文件读写\n(边界 resolve_within_workspace)
+TOOLS --> GITCMD : 固定 argv git -C\n(仅本地；无 push)
+TOOLS --> SHELL : /bin/bash -lc (run_bash)
+MCP --> SHELL : stdio 子进程 / CURL: HTTP
 PROVIDER --> CURL : HTTPS + SSE
 PROVIDER ..> JSON
 CHAT ..> JSON
@@ -124,6 +136,7 @@ stop
 - 模型发现（2026-11-02）：`/provider <url>` 与 `/login <key>` 保存后，若 base_url+api_key 齐备则自动 `GET {base_url}/models`（独立 worker、15 s 上限），`/models` 可手动重列。返回 id 排序去重后以编号菜单呈现，输序号即选定（也可继续用 `/model <name>`，Esc dismiss）。日志记 `models_list status=start|ok|error count= elapsed_ms=` 与 `model_select model= source=menu`，仅元数据；密钥不入菜单也不入错误文本。
 - 登录状态（2026-11-02）：上述同一次 `GET /models` 兼作认证探针（**零额外请求**），`ProviderError::http_status()` 用于区分“密钥被拒”（401/403 → rejected）与“未连上”（unreachable）；`auth_status_line` / `auth_log_token` 分类 verified / rejected / refused / unreachable / unverified，展示于历史区与 `/config` 的 `login=` 行。凭据一变即重置结论；启动不探测（不击穿冷启动预算）；日志 `login status=… models=N [http_status=N]`（见 007 §5.6 规则 9）。**聊天请求也作为认证探针**（2026-11-02 修复）：主线程在回合结束把 `chat/completions` 的结果折叠进同一个 `AuthProbe`（成功=verified，401/403=rejected），聊天来源的证据在日志中以 `source=chat` 字段区分（`AuthProbe` 本身不带来源字段），因此不跑 `/models`、或 provider 不开放 `/models` 时也能正确显示连通；verdict 变化只记一条 `login … source=chat` 日志，不再往历史区打 `[auth]` 行（提示符即反馈），abort 不改变结论。
 - v2 工具层（2026-11-04，使用者文档见 [MCP 与工具使用指南](mcp-usage.md)）：`run_turn(TurnOptions)` 内层循环消费 OpenAI 兼容 `delta.tool_calls`（lenient 解析 4 类网关形状；未知形状报结构指纹错误，指纹仅含字段名与类型、无值）。工具源经 `ToolRegistry` 聚合：内置 `run_bash`（fork/exec `/bin/bash -lc`，超时杀进程组、输出 32 KiB 首尾截断）与 MCP server（`mcp.hpp` 三层：McpTransport 抽象 / McpRpcClient id 关联 / McpClient tools 对话；stdio=子进程换行分隔 JSON-RPC，Streamable HTTP=POST+SSE+会话头，仅静态 Bearer）。工具名命名空间 `server__tool`（分隔符与净化规则受 function-name 字符集约束，见 008 偏差 D1）。审批默认逐次 y/N/a/?（worker 与主线程以固定槽位+序号桥接），策略 `tool_approval=ask|allowlist|off`，env `MINI_AGENT_TOOL_APPROVAL` 覆盖、`MINI_AGENT_NO_MCP=1` 全禁。日志事件 `tools/tool_exec/tool_approve/mcp_*` 仅元数据；工具输出进 TUI 前过 `sanitize_display`。session 含工具数据自动升 `schema_version=2`，v1 构建按更高版本规则拒绝。
+- v3 编码工具层（2026-11-05 实现，设计 [009](design/009-coding-v3.md)，待人工评审）：注册表装配顺序 run_bash → **FileRuntime** → **GitRuntime** → MCP。`FileRuntime` 五工具（read_file 行号读 / write_file / edit_file 唯一匹配 fail-closed / list_dir / search_text 行级子串或正则），路径经 `resolve_within_workspace`（weakly_canonical + 末段 symlink 复查）限 session workspace 根内（软边界，ADR 007；run_bash 子进程同步 `chdir` workspace）。`GitRuntime` 五工具（status/diff/log/add/commit，固定 argv `git -C <ws> --no-pager`，模型文本永不进 shell；无 push/pull/reset 面，远端操作留人工，ADR 008 已接受）；git/仓库可用性**惰性探测** memoize，不可用时 `alive()=false` 工具整体缺席。写侧工具经 `ToolRuntime::preview/disarm` 钩子向审批块提供 unified diff（`src/diff.cpp` 自写行级 LCS，零依赖），预览 arm 竞态守卫、执行前重读不一致即拒绝（009 §5.3），拒绝走 disarm。新 session 注入默认 system prompt（`build_system_prompt`，`system_prompt` config 可覆写/禁用；`/cwd` 改 `Chat::update_system_workspace` 单行重写）；session `meta.workspace` 持久化边界。CLI：`--cwd`、`--tools allowlist`（名单外 fail-closed 拒绝，脚本安全档）。进程管理去重为共享 `run_subprocess`（execvp；超时杀进程组/abort 同 v2）。日志红线不变：仅元数据（相对路径/字节数/状态），diff 正文与文件内容不入日志。
 - provider 连通状态标志（2026-11-02）：输入提示符本身即状态标志——`connection_state()` 从配置 + 上一次 `AuthProbe` 推导出 `ConnState`，`prompt_marker()` 将其渲染为带样式的 1 列前缀（`?` 暗色未配置 / `?` 黄未验证 / `~` 青探测中 / `>` 绿已验证 / `!` 红被拒 / `x` 品红不可达）。零额外请求与零额外行，marker 不含文本因此不可能泄露 endpoint 或密钥；图形与颜色双重编码，`/help` 提供图例（见 007 §5.6 规则 10）。
 
 ## 错误处理与安全边界
@@ -138,6 +151,7 @@ stop
 | 能力 | v1 状态 | 预留 |
 | --- | --- | --- |
 | 工具调用 (function calling) | **v2 已实现**（2026-11-04，待人工评审） | [008](design/008-mcp-tools.md)：run_turn 多轮循环 + ToolRegistry + 内置 run_bash（默认逐次人审，ADR 006 提议）+ MCP 客户端（传输抽象 + stdio/Streamable HTTP，ADR 005 提议） |
+| 编码能力（文件编辑/工作区/diff 审批/git 本地提交/system prompt） | **v3 已实现**（2026-11-05，待人工评审） | [009](design/009-coding-v3.md)：FileRuntime 五工具 + 软性 workspace 边界（ADR 007）+ 自写 unified diff 审批块 + GitRuntime（无 push，ADR 008 已接受）+ 默认 system prompt + CLI `--cwd`/`--tools allowlist` |
 | 上下文压缩 | 不实现 | 历史在内存重放，可插 summarize |
 | 多 Agent / 编排 | 不实现 | `run_turn(Chat&, Provider&)` 参数注入、无全局单例 |
 | 跨折行光标移动、鼠标、语法高亮 | 不实现（v2） | 帧模型行预算与 diff 结构已就位 |

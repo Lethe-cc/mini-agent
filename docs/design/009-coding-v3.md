@@ -1,7 +1,7 @@
 # mini-agent v3 技术方案（编码能力：文件编辑工具 + 工作区边界 + diff 审批 + git 工具 + system prompt）
 
 ## 文档状态
-- 状态：草案（2026-11-05 起草；同日维护者批复 git 策略"commit 可自动，push 等人工"——[ADR 008](../decisions/008-git-tool-policy.md) 升为已接受并反映于 §4/§5.2/§6/Q2/Q3/Q4；其余内容仍待评审）。
+- 状态：已实现（2026-11-05，M1–M4 全部落地，验证见第 8 节；待人工评审）。同日维护者批复 git 策略"commit 可自动，push 等人工"——[ADR 008](../decisions/008-git-tool-policy.md) 升为已接受并反映于 §4/§5.2/§6/Q2/Q3/Q4；实现偏差见第 9 节。
 - 关联任务：维护者 2026-11-05 提出阶段目标"agent 能否进行代码修改、项目开发"，补充范围："能够修改代码和文档，git 能力，diff 显示修订，以及其他所有和项目开发相关的能力"。承接 [008](008-mcp-tools.md)（v2 工具循环，已实现）。
 - 核对日期与适用版本：2026-11-05 实读本仓库 `src/tools.cpp`、`src/loop.cpp`、`include/mini_agent/tools.hpp`、`include/mini_agent/loop.hpp`、`src/tui.cpp`（审批区块与 `style_history_line`）、`src/config.cpp`（schema_version 1）、`src/cli_main.cpp`（`ask --tools off|ask|auto`）。代码基线：main@725b21d。
 - 人工评审记录：维护者 2026-11-05 对话批复 git 策略："git 提交可以自动，push 等人工操作"（已落实至 [ADR 008](../decisions/008-git-tool-policy.md)，该 ADR 状态升为已接受；本文相应章节同日修订）。其余章节未获人工批复，推进方式仍为 AI 务实默认（design-first）。
@@ -158,32 +158,48 @@ class GitRuntime final : public ToolRuntime {  // 构造时探测 git 可用性�
 - 无 MCP/无 v3 配置且未用新命令时，CLI `ask --tools off` 与 TUI 纯对话行为与 v2 字节一致（回归钩子）。
 - 分里程碑：M1 文件工具 + 工作区 + diff 函数（纯后端 + 单测）→ M2 TUI 审批 diff 渲染 + `/cwd` + system prompt → M3 GitRuntime + CLI allowlist 档 → M4 文档（007/008 交叉引用、usage 指南、references 回写）。可分批合入，各批过 `--strict-project`。
 
-## 8. 验证计划（设计阶段，未执行）
+## 8. 验证情况（2026-11-05 实现轮，已执行）
 
-| 验收项 | 测试位置 | 命令 | 通过标准 |
-| --- | --- | --- | --- |
-| diff 正确性（LCS、hunk 头、截断、空文件新建） | `tests/cpp/agent_test.cpp` 新 `test_unified_diff` | `python3 scripts/cpp_check.py --preset linux-gcc-debug` | 断言全过 |
-| 文件工具语义（越界拒绝、edit 匹配数、行号读、cap） | 同上 `test_file_tools` | 同上 | fail-closed 分支全覆盖 |
-| git 工具（临时 init 仓库内 status/diff/log/add/commit 成功与失败路径；非仓库缺席；push 不存在） | 同上 `test_git_tools`（mkdtemp + `git init -q`，无网络） | 同上 | argv 固定、message 注入不逃逸 |
-| 审批 diff 预览-执行竞态 | 同上（预检后改文件再执行） | 同上 | 返回 is_error，不落盘 |
-| TUI 审批含 diff、y/n/a（commit 走统一档：`a` 免问生效）、`/cwd`、着色 | `tests/pty_tui_smoke.py` 扩展场景 | `python3 tests/pty_tui_smoke.py <binary>` | 手工自动化脚本通过 |
-| 双编译器 + tidy | CI / 本地 | `scripts/cpp_check.py --preset linux-{gcc,clang}-debug --tidy --warnings-as-errors` | 通过 |
-| 真机编码冒烟（人工） | 对一个 toy repo 完成"改码 → 跑测试 → commit"（ask 与 allowlist 两档各验一次） | 手动 | 交付说明记录证据 |
+| 验收项 | 测试位置或证据 | 实际执行命令 | 结果 | 限制 |
+| --- | --- | --- | --- | --- |
+| diff 正确性（LCS、hunk 头、合并、行预算截断、空文件新建、行尾归一、超限降级） | `test_unified_diff`（12 断言） | `python3 scripts/cpp_check.py --preset linux-gcc-debug` | 通过 | — |
+| 文件工具语义（越界拒绝：相对/绝对/dot-dot；edit 匹配数 0/多/replace_all；行号读与区间；write cap；list；search 子串/正则/单文件/递归/二进制跳过/`.git` 排除） | `test_file_tools`（约 30 断言，真实临时工作区） | 同上 | 通过 | search 递归深度无硬限（靠单文件字节上限跳过大文件） |
+| 审批 diff 预览-执行竞态（预览后外部改文件→执行拒绝、不落盘） | `test_file_tools` race 子用例 | 同上 | 通过 | 拒绝文案固定 "changed since the approved preview" |
+| `registry.preview/disarm` 委托 + `approval_rows` 三态（diff 默认 / `?` 展开 params / 空 preview 回退命令摘要） | `test_v3_config_and_prompt`、`test_approval_preview_rows` | 同上 | 通过 | — |
+| git 工具（临时 `git init` 仓库内 status/diff/log/add/commit 成功与失败；porcelain 解析；非仓库 `alive()=false` 缺席；push/pull/reset 名拒绝且带政策文案；flag 形 message 落为字面主体） | `test_git_tools`（mkdtemp + `git init -q`，无网络） | 同上 | 通过 | 环境无 git 时该用例整体跳过（限制非失败） |
+| TUI 审批含 diff（`+` 行绿 SGR）、y 放行落盘、历史 `[tool]` 行、`/cwd` 显示、system prompt 入首条、日志不含文件正文（仅 `tool_approve` 元数据） | `tests/pty_tui_smoke.py` v3 审批场景 + history 断言升 `[system]+N×(user,assistant)` | `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent` | 通过（75 PASS，0 FAIL） | `n`/`a` 路径为单元覆盖，pty 场景走 `y` |
+| CLI 编码闭环 E2E（多轮 read→edit→git_status→git_add→git_commit→总结） | `mock_openai_server.py` `CODEFIX` 多轮剧本 + toy 仓库 | `mini-agent ask --tools auto --cwd <toy> "CODEFIX…"` | 通过 | toy 文件实际被改、commit 落库经 shell 核对 |
+| CLI `--tools allowlist` 档（名单命中放行；名单空全拒 fail-closed） | 同上，空/非空 `tool_allowlist` 两次 | `mini-agent ask --tools allowlist … </dev/null` | 通过 | — |
+| 双编译器 + tidy -Werror + clang-format | `cpp_check.py --preset linux-{gcc,clang}-debug --tidy --warnings-as-errors`；`scripts/cpp_format.py` | 各自独立运行 | 通过 | — |
+| ASan/UBSan | `cpp_check.py --preset linux-clang-debug --sanitizers` | 同命令 | 通过 | 含 file/git 工具单测 |
+| 冷启动/无工具回归 | `test_v1_request_shape_regresssion`（既有）+ `ask` echo 剧本 | `cpp_check.py` + `mini-agent ask` | 通过 | `ask` 默认档不注入 prompt（字节一致钩子保持） |
 
-日志红线断言复用 pty smoke 既有"key never reaches the log"模式，扩展"diff 正文与文件内容不入日志"。
+`python3 scripts/check.py` 通过（含 C++ configure→build→CTest）。
 
-## 9. 待确认问题（评审前不实现）
+## 9. 实现偏差与已知限制
 
-- **Q1（范围）**：`search_text` 是否够用，还是本期就要文件级 glob 的 `list_dir` 递归形态？当前按"浅列表 + 行搜索"设计。
-- ~~Q2（off 档写侧 git 豁免）~~ **已批复**（2026-11-05："commit 可自动"）：`git_add`/`git_commit` 随统一审批档，allowlist/off 均可免问（ADR 008）。
-- ~~Q3（AllowSession 粒度）~~ **随批复落定**：`a` 键对只读三件套与写侧 git 工具均生效（与普通工具一致）。
-- ~~Q4（AGENTS.md 红线范围）~~ **已批复**（2026-11-05）：红线放宽为"提交可自动（经批准或预授权），push 等人工"；AGENTS.md"不自动提交、推送"条款已同步改写。
-- **Q4b（新增，残余风险）**：`off` 档下模型可经 `run_bash` 执行 `git push`，工具层不拦截。是否需要 `run_bash` 的 push 类命令黑名单（fail-closed 拒绝 + 提示人工）？AI 默认：本期不做（与 006 的 off 风险声明同级），如批复要求可低成本补入。
-- **Q5（优先级）**：§2 清单之外，维护者所列"其他所有项目开发相关能力"是否有本期必须项（如测试运行器封装、语言特定 lint 集成）？AI 默认判定这些可由 `run_bash` 覆盖，不单独立工具。
+实现期决定（未改公开契约）：
+
+- **D1 审批预览钩子命名**：设计 §5.4 写 `prepare(call)`；落地为 `ToolRuntime::preview(call)`（返回 diff/stat 文本）+ 新增 `disarm(call)`（拒绝后释放竞态守卫）。原因：preview 与 call 分线程（TUI worker 计算、UI 线程展示），disarm 补"已 arm 但被拒"的清理路径，设计未涵盖。装配顺序不变（run_bash → FileRuntime → GitRuntime → MCP）。
+- **D2 GitRuntime 惰性探测**：设计 §5.2 写构造时探测；实现改为**首次 list()/alive() 时探测**（`ensure_probed`：`--no-optional-locks rev-parse`，5s 超时，结果 memoize）。原因：§7/008 冷启动红线——`build_tool_registry` 不得 spawn；构造期探测会破坏无 MCP 冷启动一致性。
+- **D3 `/prompt` 未做**：§5.5 的 TUI `/prompt` 查看命令本轮未实现；`system_prompt` config 覆写（含 `""` 禁用、null 回默认）已实现并有单测。列为后续项。
+- **D4 软边界 symlink 复查限末段**：`weakly_canonical` 已解析既有中间段 symlink，实现对最终路径再 readlink 复查；与 ADR 007"防误操作不防恶意"一致，中间段完整展开留观。
+- **D5 进程管理去重**：§5.2 计划的 `run_subprocess` 已落地——run_bash 与 GitRuntime 共用 fork/exec/超时/进程组 kill 循环；程序加载由 `execv` 改 `execvp`（git 走 PATH，run_bash 仍绝对 `/bin/bash`），既有 run_bash 单测无差异。
+- **D6 实现范围裁剪（未做）**：§5.4 config `schema_version` 升 2 未执行——workspace/system_prompt/session `meta.workspace` 均为可选字段，按"未知字段忽略/缺字段取默认"的前后兼容规则实现（v2 同法），避免无收益的强制版本门槛。`MINI_AGENT_WORKSPACE` env 覆盖为新增便利项（设计未列）。
+- **D7 diff 单元预算守卫**：`DiffOptions` 增加 `max_diff_cells`（默认 4×10⁶ 单元 ≈16 MB）。纯行数上限（20000/侧）允许 20000×20000 表 ≈1.6 GB 分配（OOM 风险）；行数检查保留为快速拒绝，分配前按 `n*m` 二次拦截并降级为 "too large to preview" 注记。设计 §5.3 未预见该组合，属实现期修正（有单测）。
+
+已知限制与后续项：
+
+- `tool_approval=off` 下模型仍可经 `run_bash` 跑 `git push`——工具层不拦截（Q4b，与 ADR 006 对 off 的风险声明同级）；命令黑名单未获批复，未实现。
+- `search_text` 纯行级、无 `.gitignore` 感知（仅硬排 `.git`），`search_max_matches=200` 截断；超大仓可能慢于 ripgrep（Q1 保留）。
+- system prompt 仅在**新** session 创建时注入（`run --new`/新 `run`）；`ask` 一次性调用与恢复的历史 session 不追加（回归钩子）。`/cwd` 变更只重写首条 System 的 `Workspace:` 行（`Chat::update_system_workspace`，无该行则不动）。
+- `run_bash` 子进程 `chdir(workspace)` 失败退 126（不静默回退）；workspace 空时 runtime 用进程 cwd。
+- git_commit 审批块展示 staged 文件清单 + `diff --cached --stat`（规模），不含整段正文 diff；正文级 preview 属后续增强。
+- 真机 LLM（非 mock）端到端编码任务待维护者验证；本节证据均为 mock provider + 单元 + pty 自动化。
 
 ## 最终核对
-- [ ] 接口、配置、路径与当前代码一致。（实现后回写第 9/10 节偏差）
-- [x] 已实现与规划内容清楚区分。（本文为纯设计草案，第 8 节全部"未执行"）
-- [ ] 外部来源、版本和实际采用内容可追溯。
-- [ ] 验证结果有证据，未执行事项如实标明。
-- [ ] 索引与架构总览按需更新。（docs/design/README.md 已登记；architecture.md 待批准后更新）
+- [x] 接口、配置、路径与当前代码一致。（第 9 节偏差 D1–D7 已如实记录）
+- [x] 已实现与规划内容清楚区分。（第 8 节全部为实际执行结果；未做项在 §2 非目标与第 9 节标注）
+- [x] 外部来源、版本和实际采用内容可追溯。（§3）
+- [x] 验证结果有证据，未执行事项如实标明。（真机 LLM 冒烟标注待维护者）
+- [ ] 索引与架构总览按需更新。（docs/design/README.md 已登记 009 + ADR 007/008；architecture.md 本轮未更新——待人工评审 v3 后并入 v2 之外的工具层描述，避免把未评审内容写成既定架构）
