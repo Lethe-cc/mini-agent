@@ -12,9 +12,11 @@
   - Hermes Agent：https://github.com/NousResearch/hermes-agent（Nous Research，Python 自我改进型个人 Agent，约 259k stars）
   - Pi：https://github.com/earendil-works/pi（earendil-works，TypeScript 极简可扩展 agent harness，约 119k stars，pi.dev）
   - Codex CLI：https://github.com/openai/codex（Rust + ratatui 终端编码 Agent）
+  - Codewhale（原 deepseek-tui）：https://github.com/codewhale-hq/Codewhale（Rust 终端编码 Agent，约 41k stars；2026-08-14 从 `deepseek-tui` 更名，社区独立维护、与 DeepSeek 官方无隶属）
+  - DeepSeek Harness（dsh）：https://github.com/deepseek-ai/deepseek-harness（DeepSeek 官方开源 harness，TypeScript，约 273k stars，"Everything is a Plugin"，底层 Cordis；developer preview）+ 文档 https://deepseek-harness.github.io/deepseek-harness/
 - 固定 commit SHA / tag / 产品版本：未固定，引用前按任务当天重新核对。
-- 最近核对日期与阅读状态：**部分核对（2026-11-01）**——codex/crush/ftxui/pi 许可证经 GitHub API 与仓库文件核对；Hermes、Pi 经当天 README 与仓库元数据核对（见"实际采用情况"）。mini-swe-agent、SWE-agent、Aider、opencode 源码仍未读取。
-- 许可证及核实依据：Hermes = MIT（README badge，当天核对）；**Pi = MIT**（license API + 仓库根 LICENSE 头部核对，Copyright (c) 2025 Mario Zechner）；Crush = FSL-1.1-MIT（LICENSE.md 开头核对，非 OSI 开源，**禁止代码复制**）；openai/codex = Apache-2.0（license API 核对）；FTXUI = API 未返回，未核实；其余未核实。复制代码前必须逐仓库核实。
+- 最近核对日期与阅读状态：**部分核对（2026-11-01；2026-11-05 增补 Codewhale / DeepSeek Harness）**——codex/crush/ftxui/pi 许可证经 GitHub API 与仓库文件核对；Hermes、Pi 经当天 README 与仓库元数据核对（见"实际采用情况"）；Codewhale、dsh 经当天仓库元数据、README、LICENSE、CHANGELOG 与 Homebrew formula 核对。mini-swe-agent、SWE-agent、Aider、opencode 源码仍未读取。
+- 许可证及核实依据：Hermes = MIT（README badge，当天核对）；**Pi = MIT**（license API + 仓库根 LICENSE 头部核对，Copyright (c) 2025 Mario Zechner）；Crush = FSL-1.1-MIT（LICENSE.md 开头核对，非 OSI 开源，**禁止代码复制**）；openai/codex = Apache-2.0（license API 核对）；**Codewhale = MIT**（2026-11-05 LICENSE 文件实读，头部版权为 "Copyright (c) 2024-2025 DeepSeek-TUI Contributors"，印证前身谱系）；**DeepSeek Harness = MIT**（2026-11-05 LICENSE 文件实读，Copyright (c) 2026 DeepSeek；另附 THIRD_PARTY_NOTICES.md 披露依赖许可证）；FTXUI = API 未返回，未核实；其余未核实。复制代码前必须逐仓库核实。
 
 ## 参考目的与范围
 - 借鉴什么：
@@ -22,6 +24,8 @@
   - SWE-agent：工具接口如何为 LLM 而设计（输出裁剪、行号编辑、兜错提示），ACI 理念。
   - Aider：编辑格式选型（search/replace block、unified diff）、模型输出错误后的重试与修复流程、repo map 上下文选取。
   - Goose / Crush / opencode：工具（tool）注册与扩展机制、会话持久化、多 Provider 抽象的工程组织方式。
+  - Codewhale：与本项目形态最近的 Rust 终端 harness（Ratatui TUI、modes/permissions 审批模型、`/receipts` 审计回执、子 Agent、沙箱文档）；其拆出的 codewhale-ratatui 组件库（workbar/composer/themes）可作 TUI 布局参照。跨语言只取模式不取代码。
+  - DeepSeek Harness：架构对照组——"万物皆插件"（Cordis 运行时）与本项目"MCP client + 内置工具 + ADR 006 审批"是同一问题的两种边界划法；读 docs/architecture.md 用于评审时论证取舍，不引入其依赖或代码。
 - 重点文件或章节：待读取后填写精确路径。
 - 不参考什么：各产品的 IDE 集成、遥测、付费服务；Aider 的 benchmark 脚本；任何需要安装重依赖才能看懂的原型代码。
 - 何时阅读：实现或改进 mini_agent 的工具层、编辑协议、会话循环、错误恢复时。
@@ -46,5 +50,12 @@
 以上借鉴要点已落到 [007 第 5.6 节 TUI 帧模型](../design/007-agent-v1.md)（规划中）。
 
 **Hermes Agent（2026-11-01 README 核对，MIT）**：TUI 特性与本项目的交互目标最贴近。已采纳进 5.6 契约的两项：**interrupt-and-redirect**（Ctrl-C 中断当前响应后输入行立即可用，直接给新指令替换原请求，而非仅取消）与**斜杠命令 Tab 自动补全**（输入行前缀匹配，自绘可实现）。跨 session 记忆路线（SQLite FTS5 全文检索 + LLM 摘要）印证 5.5 "跨 session" 预留的可行性，属 v2 范畴。其 skills 自创建/自改进闭环与多渠道网关明确不参考（超出本项目范围）。
+
+**Codewhale / DeepSeek Harness（2026-11-05 元数据 + README/LICENSE/CHANGELOG/Homebrew formula 核对，源码未 clone）**：
+
+- 命名混淆风险（引用这两个名字前必读）：社区项目 `deepseek-tui`（2026-01 创建）已于 **2026-08-14 更名 Codewhale**（Homebrew formula 有 `deprecate! ... because: "renamed to codewhale"` 记录；README 自我声明 "started as deepseek-tui … not affiliated with DeepSeek"）；DeepSeek 官方 harness **deepseek-harness（dsh）**发布于次日 2026-08-13。见到 "deepseek-tui" 按资料创建时间判断指代对象；GitHub 上另有一批蹭名仿冒安装仓库，安装二进制只认 `codewhale-hq` 与 `deepseek-ai` 两个组织。
+- Codewhale（MIT，~41k★，Rust/Ratatui）：与本项目定位最接近的现役终端 harness——provider 抽象（40+ 家与本地模型）、modes/permissions（docs/MODES.md、docs/SANDBOX.md）、`/receipts` 变更与调用回执（对应本项目审批与交付说明的审计需求）、子 Agent、Runtime API（docs/RUNTIME_API.md）与非交互驱动模式（对应 `ask` 契约方向）。默认模型为 DeepSeek V4.1 Flash，README 含赞助商业链接（orcarouter），引用其"默认推荐"时注意利益相关。
+- DeepSeek Harness（MIT，~273k★，TypeScript，developer preview）："Everything is a Plugin"，插件即一切（UI/工具/行为皆为 dsh 插件，`dsh-plugin` topic 生态），默认 Web UI（`npx @deepseek-ai/dsh web`，127.0.0.1:3080），TUI 反而是社区插件壳（dsh-tui/oh-my-dsh/Martty 等）；底层 Cordis 运行时 + 论文 2608.25512（时空可组合）。官方 README/SAFETY.md 强调会破坏兼容、运行前读安全须知。借鉴定位：**架构对照样本**——与本项目 [ADR 005](../decisions/005-mcp-transport-abstraction.md)（MCP 传输抽象）/ [ADR 006](../decisions/006-tool-approval-policy.md)（工具审批）形成"插件 vs MCP 工具"两种扩展边界的答案，写设计评审时可引；源码未读前不采纳任何实现细节。
+- 两项目源码均**未精读**；许可证虽为 MIT（可合规借鉴思路），涉及代码复制时仍需按当天文件复核并遵守署名条款（Codewhale LICENSE 要求保留版权与许可声明）。
 
 **采用范围（2026-11-01 维护者确认）：主要借鉴 TUI 交互**——composer 布局、原地流式、状态行、Ctrl-C 双层语义与中断重定向、错误回显、最小斜杠命令与 Tab 补全、恢复提示；不借鉴多面板/鼠标/高亮/IDE 嵌入。各仓库具体实现文件仍未读取；跨语言（Go/Rust/Python→C++）只取模式不取代码，本仓库无第三方 TUI 依赖。

@@ -9,7 +9,7 @@
 | python-tooling | [Python 官方文档](python-tooling.md) | 修改模板脚本或 Python 应用 | 涉及相关 API 时核对 |
 | cpp-tooling | [C++ 与构建工具](cpp-tooling.md) | C++、CMake、分析工具相关任务 | 按当前标准、工具版本和任务核对，不默认读取全部 |
 | agent-frameworks | [多智能体编排框架](agent-frameworks.md)（AutoGen、LangGraph、CrewAI、MetaGPT、OpenHands） | 设计编排层、消息/状态模型、可中断性 | 未读；借鉴模式不引入依赖，引用前按当天源码核对 |
-| coding-agents | [终端编码 Agent 实现](coding-agents.md)（mini-swe-agent、SWE-agent、Aider、Goose、Crush、opencode、Hermes Agent、Codex CLI、Pi） | 实现工具层、编辑协议、会话循环、错误恢复；TUI 交互借鉴（维护者确认的主要借鉴范围） | 部分核对（2026-11-01 许可证层）；Hermes/Pi=MIT、codex=Apache-2.0 可合规借鉴思路，Crush=FSL 禁代码复制 |
+| coding-agents | [终端编码 Agent 实现](coding-agents.md)（mini-swe-agent、SWE-agent、Aider、Goose、Crush、opencode、Hermes Agent、Codex CLI、Pi、Codewhale（原 deepseek-tui）、DeepSeek Harness） | 实现工具层、编辑协议、会话循环、错误恢复；TUI 交互借鉴（维护者确认的主要借鉴范围） | 部分核对（2026-11-01 许可证层；2026-11-05 增补 Codewhale/dsh 元数据+许可证层）：Hermes/Pi/Codewhale/dsh=MIT、codex=Apache-2.0 可合规借鉴思路，Crush=FSL 禁代码复制 |
 | agent-protocols | [协议与极简实现](agent-protocols.md)（MCP 规范/官方 SDK 组/官方 servers+inspector/C++ 与 Go/Rust 社区实现/OpenMCP 调试平台/deepwiki 对端/smolagents） | 设计工具接口契约、MCP client/server 实现对照、conformance 验收选型、与外部 AI 工具互通 | MCP 规范层核对（2026-11-02，stdio+lifecycle+tools+Streamable HTTP，支撑 008）；开源实现元数据+许可证核对（2026-11-05）；源码仍未精读；涉及"符合规范"的表述必须核对当天官方文本 |
 | cli-as-tools | [CLI-as-tools / Code Mode](cli-as-tools.md)（MCP→CLI 转换器、Code Mode 沙箱、Agent Skills、趋势论证博客） | v3 tool discovery / `search_tools` / 懒注册设计；"CLI 是否取代 MCP"类问题的事实来源 | 部分核对（2026-11-05：Anthropic 博客全文实读；仓库清单 GitHub API 元数据+许可证实读；Cloudflare 博客正文与仓库源码未精读；mcpx 许可证未核实） |
 | agent-benchmarks | [评测基准与环境](agent-benchmarks.md)（SWE-bench、AgentBench、WebArena） | 设计验收标准与可自动执行的完成判据 | 未读；不复制数据集内容，不执行基准脚本 |
