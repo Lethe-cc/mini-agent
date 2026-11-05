@@ -506,8 +506,12 @@ def main():
     plain = strip_csi(appr_out)
     expect("AWAITING APPROVAL" in plain or "ALLOW write_file" in plain,
            "v3 approval block appears for write_file")
-    expect("\x1b[0;32m+hello from approval" in appr_out,
-           "v3 diff preview renders added line in green")
+    expect("\x1b[32m+hello from approval" in appr_out,
+           "v3 diff preview renders added line in green (git default)")
+    expect("\x1b[36m@@ " in appr_out,
+           "v3 diff hunk header cyan (git fragheader default)")
+    expect("\x1b[1m--- a/" in appr_out,
+           "v3 diff file header bold (git meta default)")
     expect("+hello from approval" in plain and "-(no content)" not in plain,
            "v3 diff rows visible with content")
     os.write(afd, b"y")

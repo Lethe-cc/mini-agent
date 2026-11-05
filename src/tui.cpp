@@ -569,17 +569,23 @@ std::vector<std::string> approval_rows(const std::string& tool_name,
         std::istringstream stream(preview);
         std::size_t shown = 0;
         while (std::getline(stream, line) && shown < 24) {
+            // Colour map mirrors `git diff` defaults (2026-11-05 maintainer
+            // reference screenshot): file headers bold meta, hunk header
+            // cyan, removed red, added green, context left terminal-default.
             std::string tinted;
-            if (!line.empty() && line[0] == '+')
-                tinted = tint(colors, "0;32", sanitize_display(line));
+            const bool meta_header = line.rfind("--- ", 0) == 0 || line.rfind("+++ ", 0) == 0;
+            if (meta_header)
+                tinted = tint(colors, "1", sanitize_display(line));
+            else if (!line.empty() && line[0] == '+')
+                tinted = tint(colors, "32", sanitize_display(line));
             else if (!line.empty() && line[0] == '-')
-                tinted = tint(colors, "0;31", sanitize_display(line));
+                tinted = tint(colors, "31", sanitize_display(line));
             else if (!line.empty() && line[0] == '@')
-                tinted = tint(colors, "0;35", sanitize_display(line));
+                tinted = tint(colors, "36", sanitize_display(line));
             else if (!line.empty() && line[0] == ':')
                 tinted = tint(colors, "2", sanitize_display(line));
             else
-                tinted = tint(colors, "2", sanitize_display(line));
+                tinted = std::string(sanitize_display(line)); // context: plain
             rows.push_back(std::move(tinted));
             ++shown;
         }
