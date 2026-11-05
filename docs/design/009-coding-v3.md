@@ -162,7 +162,8 @@ class GitRuntime final : public ToolRuntime {  // 构造时探测 git 可用性�
 
 | 验收项 | 测试位置或证据 | 实际执行命令 | 结果 | 限制 |
 | --- | --- | --- | --- | --- |
-| diff 正确性（LCS、hunk 头、合并、行预算截断、空文件新建、行尾归一、超限降级） | `test_unified_diff`（12 断言） | `python3 scripts/cpp_check.py --preset linux-gcc-debug` | 通过 | — |
+| diff 正确性（LCS、hunk 头、合并、行预算截断、空文件新建、行尾归一、超限降级） | `test_unified_diff`（16 断言，含 CRLF-only 变更与多 hunk 坐标单调性） | `python3 scripts/cpp_check.py --preset linux-gcc-debug` | 通过 | — |
+| diff 属性级 fuzz（2026-11-05 复查）：随机小文件对 20 万轮，未截断 diff 逐 hunk 重放 OLD→必须得 NEW、@@ 起点单调、计数与行种类一致；ASan/UBSan 下无报告 | [tools/diff_fuzz.cpp](../../tools/diff_fuzz.cpp)（手动工具，非 CTest；不变量另折入 `test_unified_diff` 两条新断言） | `g++ -std=c++17 -fsanitize=address,undefined -Iinclude tools/diff_fuzz.cpp src/diff.cpp` 后运行 | 通过（198476 次全重放） | 行预算截断的 diff 不可重放属设计（note 明示） |
 | 文件工具语义（越界拒绝：相对/绝对/dot-dot；edit 匹配数 0/多/replace_all；行号读与区间；write cap；list；search 子串/正则/单文件/递归/二进制跳过/`.git` 排除） | `test_file_tools`（约 30 断言，真实临时工作区） | 同上 | 通过 | search 递归深度无硬限（靠单文件字节上限跳过大文件） |
 | 审批 diff 预览-执行竞态（预览后外部改文件→执行拒绝、不落盘） | `test_file_tools` race 子用例 | 同上 | 通过 | 拒绝文案固定 "changed since the approved preview" |
 | `registry.preview/disarm` 委托 + `approval_rows` 三态（diff 默认 / `?` 展开 params / 空 preview 回退命令摘要） | `test_v3_config_and_prompt`、`test_approval_preview_rows` | 同上 | 通过 | — |

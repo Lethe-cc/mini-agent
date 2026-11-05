@@ -1490,6 +1490,34 @@ void test_unified_diff() {
     // Empty-input edge: split of "" is zero lines, of "\n" is one empty line.
     check(diff_split_lines("").empty(), "empty text has no lines");
     check(diff_split_lines("\n").size() == 1, "single newline is one empty line");
+    // Line-ending-only change is a real change (content keeps \r): the diff
+    // shows full-line replacement pairs, never silently "unchanged".
+    const auto crlf = diff_texts("a\r\nb\r\n", "a\nb\n");
+    check(crlf.changed && crlf.added == 2 && crlf.removed == 2,
+          "crlf-only edit is a visible change");
+    // Multi-hunk coordinates must be strictly increasing (property fuzz
+    // 2026-11-05 locked the invariant here as a cheap unit).
+    std::string many_old;
+    std::string many_new;
+    for (int i = 0; i < 100; ++i) {
+        many_old += "x" + std::to_string(i) + "\n";
+        many_new += (i % 20 == 0 ? "Y" : "x") + std::to_string(i) + "\n";
+    }
+    const auto many = diff_texts(many_old, many_new);
+    long long prev_start = -1;
+    int many_hunks = 0;
+    bool monotonic = true;
+    for (const auto& row : many.rows) {
+        if (row.kind != '@')
+            continue;
+        const auto dash = row.text.find('-');
+        const auto comma = row.text.find(',', dash);
+        const long long start = std::stoll(row.text.substr(dash + 1, comma - dash - 1));
+        monotonic = monotonic && start > prev_start;
+        prev_start = start;
+        ++many_hunks;
+    }
+    check(many_hunks == 5 && monotonic, "five hunk starts strictly increase");
 }
 
 // Creates a temp workspace dir with sample files for file-tool tests.
