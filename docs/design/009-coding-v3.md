@@ -195,11 +195,12 @@ class GitRuntime final : public ToolRuntime {  // 构造时探测 git 可用性�
 - system prompt 仅在**新** session 创建时注入（`run --new`/新 `run`）；`ask` 一次性调用与恢复的历史 session 不追加（回归钩子）。`/cwd` 变更只重写首条 System 的 `Workspace:` 行（`Chat::update_system_workspace`，无该行则不动）。
 - `run_bash` 子进程 `chdir(workspace)` 失败退 126（不静默回退）；workspace 空时 runtime 用进程 cwd。
 - git_commit 审批块展示 staged 文件清单 + `diff --cached --stat`（规模），不含整段正文 diff；正文级 preview 属后续增强。
-- 真机 LLM（非 mock）端到端编码任务待维护者验证；本节证据均为 mock provider + 单元 + pty 自动化。
+- 真机 LLM（非 mock）端到端编码任务：初始回填时标注待维护者验证，随后已获维护者实测（见下条）。其余证据为 mock provider + 单元 + pty 自动化。
+  - **2026-11-05 维护者真机实测（qwen3.8-flash，TUI）**：截图证据显示模型经 `run_bash` 执行 git 命令取回输出（`[tool] run_bash … [ok 24ms · 497 B]` 元数据行、正文不入历史区符合红线），并在回复中正确区分两份 diff 的**基线语义**——edit_file 预览对比审批时工作区文件（精确 2 行改动），`git show` 对比上次 commit（未提交的坏函数整段计为 +5 行），并如实说明"改写历史不可取、git 面不提供"。渲染侧符合 007 §5.6 规则 11（回复区 plain、工具行着色、GFM 表格/行内代码正常）。审批块弹帧另由 AI 侧 pty 抓帧验证（`ALLOW edit_file` + SGR 红绿/品红行）。该实测为人工观察记录，非自动化断言；正式验收仍以人工评审为准。
 
 ## 最终核对
 - [x] 接口、配置、路径与当前代码一致。（第 9 节偏差 D1–D7 已如实记录）
 - [x] 已实现与规划内容清楚区分。（第 8 节全部为实际执行结果；未做项在 §2 非目标与第 9 节标注）
 - [x] 外部来源、版本和实际采用内容可追溯。（§3）
-- [x] 验证结果有证据，未执行事项如实标明。（真机 LLM 冒烟标注待维护者）
-- [ ] 索引与架构总览按需更新。（docs/design/README.md 已登记 009 + ADR 007/008；architecture.md 本轮未更新——待人工评审 v3 后并入 v2 之外的工具层描述，避免把未评审内容写成既定架构）
+- [x] 验证结果有证据，未执行事项如实标明。（真机 LLM 冒烟已由维护者 2026-11-05 实测，记录见第 9 节；审批块弹帧为 AI pty 抓帧观察，均非自动化断言）
+- [x] 索引与架构总览按需更新。（docs/design/README.md 已登记 009 + ADR 007/008；architecture.md 已随实现提交更新（模块图 + v3 工具层条目 + 能力表），状态标注"待人工评审"，不代表既定架构已获批）
