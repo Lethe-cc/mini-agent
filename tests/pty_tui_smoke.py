@@ -61,7 +61,13 @@ class Handler(BaseHTTPRequestHandler):
             req_msgs = json.loads(body).get("messages", [])
         except Exception:
             req_msgs = []
-        tool_rounds = sum(1 for m in req_msgs if m.get("role") == "tool")
+        # tool results of the CURRENT turn only: everything after the last
+        # user message (a second EDITFLOW turn must not inherit round 1's
+        # tool history).
+        last_user_idx = max((i for i, m in enumerate(req_msgs)
+                             if m.get("role") == "user"), default=-1)
+        tool_rounds = sum(1 for m in req_msgs[last_user_idx + 1:]
+                          if m.get("role") == "tool")
         last_user = next((m.get("content", "") for m in reversed(req_msgs)
                           if m.get("role") == "user"), "")
         if last_user.startswith("EDITFLOW") and tool_rounds == 0:
@@ -495,7 +501,11 @@ def main():
     subprocess.run(["rm", "-rf", approval_dir], check=False)
     os.makedirs(approval_dir)
     appr_env = dict(env, MINI_AGENT_SESSION_DIR=approval_dir,
-                    MINI_AGENT_LOG=approval_dir + "/agent.log")
+                    MINI_AGENT_LOG=approval_dir + "/agent.log",
+                    # /approve persists the config (workspace included); keep
+                    # it private to this scenario so later runs sharing the
+                    # main config file never inherit a deleted workspace.
+                    MINI_AGENT_CONFIG=os.path.join(approval_dir, "config.json"))
     apid, afd = pty.fork()
     if apid == 0:
         os.execve(binary, [binary, "run", "--new", "--cwd", ws_dir], appr_env)
@@ -528,6 +538,24 @@ def main():
     cwd_out = read_all(afd, 2.5)
     expect("workspace: " in strip_csi(cwd_out),
            "v3 /cwd shows the session workspace")
+    # v3.1 runtime approval switch: query shows current policy; switching
+    # to off persists + warns; the NEXT tool call then runs WITHOUT an
+    # approval block (status row carries the auto-tools marker instead).
+    os.write(afd, b"/approve\r")
+    apq = read_all(afd, 1.5)
+    expect("approval=ask" in strip_csi(apq), "/approve queries the current policy")
+    os.write(afd, b"/approve off\r")
+    apoff = read_all(afd, 1.5)
+    plain_apoff = strip_csi(apoff)
+    expect("tool_approval=off" in plain_apoff and "WITHOUT asking" in plain_apoff,
+           "/approve off warns and switches")
+    os.write(afd, b"EDITFLOW again\r")
+    auto_run = read_all(afd, 6.0)
+    plain_auto = strip_csi(auto_run)
+    expect("AWAITING APPROVAL" not in plain_auto and "[tool] write_file" in plain_auto,
+           "off policy: tool runs with no approval block")
+    expect("auto-tools" in plain_auto, "status row shows the persistent auto-tools marker")
+    expect(os.path.exists(ws_dir + "/note.txt"), "off-policy write landed")
     # Log red-line extension: file content must never reach the log.
     os.write(afd, b"\x03\x03")
     read_all(afd, 2.0)

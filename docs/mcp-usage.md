@@ -75,7 +75,8 @@ mini-agent run [--session ID] [--new] [--mcp NAME=SPEC]
   120 秒无人按键自动按拒绝处理，worker 不会永久阻塞。
 - 执行完成打历史行：`[tool] dev__read_wiki_contents [ok 62300ms · 45 KB]`（或 `[error …]`、`[denied]`）。
 - `/tools`：列出注册表（内置 + 每个在线 server 的工具、来源），并强制握手/重列——改完配置免重启的生效手段；`/mcp`：列出配置的 server。
-- `tool_approval=off` 时状态行常显黄色 `auto-tools`。
+- **`/approve [ask|allowlist|off]`**：运行时查看/切换审批档位并持久化到 config.json（v3.1；worker 空闲时生效）。`off` 切换时回显警示行且状态行常显红色 `auto-tools`；`allowlist` 且名单为空时所有工具仍会询问（名单在 config.json `tool_allowlist` 维护）。临时覆盖也可用环境变量 `MINI_AGENT_TOOL_APPROVAL`。想"只免问这个工具"就按 `a`（会话级，不落盘）。
+- `tool_approval=off` 时状态行常显红色 `auto-tools`。
 - 深链提醒：deepwiki 类 server 的 `read_wiki_contents` 在服务端就是重操作（30–120s 常见），看状态行秒数在涨即正常；先用 `read_wiki_structure`/`ask_wiki_question` 通常更快。工具执行中的 HTTP 调用暂不可 Ctrl-C 中断（进度/取消属 v2 非目标，008 §2）。
 
 ## 5. 会话与兼容

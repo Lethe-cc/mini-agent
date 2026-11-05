@@ -40,9 +40,9 @@
 namespace mini_agent::tui {
 namespace {
 
-constexpr std::string_view kCommands[] = {"/config",   "/cwd",      "/exit",  "/help",
-                                          "/login",    "/mcp",      "/model", "/models",
-                                          "/provider", "/sessions", "/tools"};
+constexpr std::string_view kCommands[] = {"/approve", "/config",   "/cwd",      "/exit",
+                                          "/help",    "/login",    "/mcp",      "/model",
+                                          "/models",  "/provider", "/sessions", "/tools"};
 
 class RawMode {
   public:
@@ -1045,7 +1045,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     bool tools_active = false; // any tool round ran in the current turn
     if (!tool_note.empty())
         screen.commit("[info] " + tool_note + " · lazy start on first call · /tools");
-    const std::string approval_policy =
+    std::string approval_policy = // mutable via /approve while worker idle
         config.tool_approval.empty() ? std::string("ask") : config.tool_approval;
     if (approval_policy == "off" && !tool_registry->empty()) {
         screen.commit("[warn] tool_approval=off: tools run WITHOUT asking");
@@ -1336,6 +1336,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // on narrow terminals (wrap breaks mid-token at width limit).
             screen.commit("commands: /provider <url> · /login [key] · /model <name>");
             screen.commit("          /tools (tool registry) · /mcp (servers) · /cwd [path]");
+            screen.commit("          /approve ask|allowlist|off (tool gate)");
             screen.commit("          /models (list & pick) · /log <path>|off|default");
             screen.commit("          /config · /sessions · /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
@@ -1448,6 +1449,51 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             for (const auto& id : ids)
                 screen.commit("  " + id);
             screen.commit("resume after exit: mini-agent run --session <id>");
+            return true;
+        }
+        if (line.rfind("/approve", 0) == 0) {
+            // v3.1 runtime approval switch: /approve [ask|allowlist|off].
+            // Worker must be idle (policy is snapshotted per turn), same
+            // join discipline as /cwd and /tools.
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                screen.commit("approval=" + approval_policy +
+                              " · /approve ask|allowlist|off · 'a' key also "
+                              "allows a tool name for this session");
+                if (approval_policy == "allowlist") {
+                    std::string joined;
+                    for (const auto& name : config.tool_allowlist) {
+                        if (!joined.empty())
+                            joined += ", ";
+                        joined += name;
+                    }
+                    screen.commit("allowlist: " +
+                                  (joined.empty() ? std::string("(empty)") : joined));
+                }
+                return true;
+            }
+            const std::string want(arg);
+            if (want != "ask" && want != "allowlist" && want != "off") {
+                screen.commit("[error] /approve expects ask|allowlist|off");
+                return true;
+            }
+            if (worker.joinable())
+                worker.join();
+            approval_policy = want;
+            config.tool_approval = want;
+            config_snapshot = config; // worker turn snapshot refresh (same as /cwd)
+            save_and_report(false);
+            if (want == "off" && !tool_registry->empty())
+                screen.commit("[warn] tool_approval=off: tools run WITHOUT asking"
+                              " (no sandbox: run_bash executes at your user's "
+                              "privileges; git push stays human-only by tool "
+                              "absence, but shell can still reach remotes)");
+            else if (want == "allowlist" && config.tool_allowlist.empty())
+                screen.commit("[info] allowlist mode with an EMPTY list: every tool "
+                              "still asks; add names via tool_allowlist in config.json");
+            else
+                screen.commit("[ok] approval=" + approval_policy + " saved");
+            logger->event("approval_switch", {{"policy", approval_policy}});
             return true;
         }
         if (line.rfind("/cwd", 0) == 0) {
