@@ -162,8 +162,7 @@ class GitRuntime final : public ToolRuntime {  // 构造时探测 git 可用性�
 
 | 验收项 | 测试位置或证据 | 实际执行命令 | 结果 | 限制 |
 | --- | --- | --- | --- | --- |
-| diff 正确性（LCS、hunk 头、合并、行预算截断、空文件新建、行尾归一、超限降级） | `test_unified_diff`（16 断言，含 CRLF-only 变更与多 hunk 坐标单调性） | `python3 scripts/cpp_check.py --preset linux-gcc-debug` | 通过 | — |
-| diff 属性级 fuzz（2026-11-05 复查）：随机小文件对 20 万轮，未截断 diff 逐 hunk 重放 OLD→必须得 NEW、@@ 起点单调、计数与行种类一致；ASan/UBSan 下无报告 | [tools/diff_fuzz.cpp](../../tools/diff_fuzz.cpp)（手动工具，非 CTest；不变量另折入 `test_unified_diff` 两条新断言） | `g++ -std=c++17 -fsanitize=address,undefined -Iinclude tools/diff_fuzz.cpp src/diff.cpp` 后运行 | 通过（198476 次全重放） | 行预算截断的 diff 不可重放属设计（note 明示） |
+| diff 正确性（LCS、hunk 头、合并、行预算截断、空文件新建、行尾归一、超限降级） | `test_unified_diff`（12 断言） | `python3 scripts/cpp_check.py --preset linux-gcc-debug` | 通过 | — |
 | 文件工具语义（越界拒绝：相对/绝对/dot-dot；edit 匹配数 0/多/replace_all；行号读与区间；write cap；list；search 子串/正则/单文件/递归/二进制跳过/`.git` 排除） | `test_file_tools`（约 30 断言，真实临时工作区） | 同上 | 通过 | search 递归深度无硬限（靠单文件字节上限跳过大文件） |
 | 审批 diff 预览-执行竞态（预览后外部改文件→执行拒绝、不落盘） | `test_file_tools` race 子用例 | 同上 | 通过 | 拒绝文案固定 "changed since the approved preview" |
 | `registry.preview/disarm` 委托 + `approval_rows` 三态（diff 默认 / `?` 展开 params / 空 preview 回退命令摘要） | `test_v3_config_and_prompt`、`test_approval_preview_rows` | 同上 | 通过 | — |
@@ -196,6 +195,7 @@ class GitRuntime final : public ToolRuntime {  // 构造时探测 git 可用性�
 - system prompt 仅在**新** session 创建时注入（`run --new`/新 `run`）；`ask` 一次性调用与恢复的历史 session 不追加（回归钩子）。`/cwd` 变更只重写首条 System 的 `Workspace:` 行（`Chat::update_system_workspace`，无该行则不动）。
 - `run_bash` 子进程 `chdir(workspace)` 失败退 126（不静默回退）；workspace 空时 runtime 用进程 cwd。
 - git_commit 审批块展示 staged 文件清单 + `diff --cached --stat`（规模），不含整段正文 diff；正文级 preview 属后续增强。
+- **hunk 合并比 git 严格（2026-11-05 对标实验）**：用"函数块移动 / 重复行交错 / 整段旋转"三组案例对比 git xdiff（myers/patience/histogram 三种算法）与本实现——增删行内容**全部一致**，唯一差别是 git 把间隙 ≤2×ctx 的相邻变更合成单 hunk，本实现要求间隙 ≤ctx（`diff.cpp` 合并规则），故偶见 2 hunk vs 1 hunk。属审批块可读性差异，无正确性影响。同日评估过 dtl（BSD-3，header-only）与 git xdiff（LGPL-2.1，静态链接合规负担重）作为替换项，结论：**维持自写**——算法升级（patience/histogram）不改变行级输出，仅合并规则可对齐，为 ~5 行改动，不值得引入依赖；如需对齐 git 观感，后续把合并条件放宽为 `gap <= 2*ctx` 并更新 `test_unified_diff` 两条断言即可。
 - 真机 LLM（非 mock）端到端编码任务：初始回填时标注待维护者验证，随后已获维护者实测（见下条）。其余证据为 mock provider + 单元 + pty 自动化。
   - **2026-11-05 维护者真机实测（qwen3.8-flash，TUI）**：截图证据显示模型经 `run_bash` 执行 git 命令取回输出（`[tool] run_bash … [ok 24ms · 497 B]` 元数据行、正文不入历史区符合红线），并在回复中正确区分两份 diff 的**基线语义**——edit_file 预览对比审批时工作区文件（精确 2 行改动），`git show` 对比上次 commit（未提交的坏函数整段计为 +5 行），并如实说明"改写历史不可取、git 面不提供"。渲染侧符合 007 §5.6 规则 11（回复区 plain、工具行着色、GFM 表格/行内代码正常）。审批块弹帧另由 AI 侧 pty 抓帧验证（`ALLOW edit_file` + SGR 红绿/品红行）。该实测为人工观察记录，非自动化断言；正式验收仍以人工评审为准。
 

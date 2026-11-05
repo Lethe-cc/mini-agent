@@ -180,11 +180,14 @@ DiffResult diff_texts(std::string_view old_text, std::string_view new_text,
                 ++end;
                 continue;
             }
-            // keep run: peek whether another change lands within ctx lines
+            // keep run: merge with the next change when the two hunks'
+            // context would touch -- git xdiff's rule (gap <= 2*ctx), so
+            // approval blocks read exactly like `git diff` (2026-11-05
+            // comparison recorded in 009 section 9).
             std::size_t next_change = end;
             while (next_change < items.size() && items[next_change].op == 'k')
                 ++next_change;
-            if (next_change < items.size() && next_change - end <= ctx) {
+            if (next_change < items.size() && next_change - end <= 2 * ctx) {
                 end = next_change; // merge hunks
                 continue;
             }
