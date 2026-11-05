@@ -657,8 +657,7 @@ class LiveScreen {
     // (fixes 2026-11-01 duplicate-row reports: CJK double-width and
     // multi-line replies both desynced the old relative-rows model).
     void commit(std::string_view line) {
-        clear_live();
-        // History colouring (2026-11-04 readability request): classify the
+        clear_live(); // History colouring (2026-11-04 readability request): classify the
         // tag/role of plain lines centrally, so every caller gets consistent
         // hues without threading a flag through each commit site. Rows that
         // already carry SGR (markdown replies, producer-styled registry/
@@ -668,15 +667,23 @@ class LiveScreen {
         // line may exceed the clipped width of the live status row here.
         const std::string styled = style_history_line(line, colors_enabled());
         const std::size_t cols = current_cols();
+        std::size_t printed = 0;
         std::string out;
         for (auto& row : md::wrap(styled, cols)) {
             out += "\x1b[2K" + row + "\n";
+            ++printed;
         }
         ::fwrite(out.data(), 1, out.size(), stdout);
         ::fflush(stdout);
         last_frame_.clear();
         prev_rows_.clear();
         inputs_cached_ = false;
+        // Bottom-anchor tracking (2026-11-05): commit prints at the block
+        // top (clear_live left the cursor there), so the next block starts
+        // `printed` rows lower; past the bottom the terminal scrolls and
+        // the cursor rests on the last row.
+        const std::size_t rows = current_rows();
+        block_top_ = std::min(block_top_ + printed, rows > 0 ? rows - 1 : 0);
     }
 
     // Repaint the live block (pinned question + streaming tail window +
@@ -776,6 +783,26 @@ class LiveScreen {
         // the block's last row, so an unclosed span would leak into the next
         // repaint's rows (5.6 rule 2: no style may survive a row boundary).
         content.push_back(md::clip(status, cols) + "\x1b[0m");
+        // Bottom-anchored live block (2026-11-05 maintainer request): pad
+        // the TOP with blank rows so the status row rests one line above
+        // the screen bottom and the cursor sits on the last line, whether
+        // idle or streaming. Padding is dynamic -- only the space between
+        // the tracked block top and the bottom is filled, so committed
+        // history stays visible until the screen genuinely fills, then the
+        // terminal scrolls and we track the shifted top (rule 2 invariant
+        // holds: blank rows are plain "\x1b[2K" lines, no styling leaks;
+        // the cursor always ends exactly one row below the block).
+        if (rows > 1) {
+            const std::size_t used = block_top_ + content.size();
+            if (used < rows - 1) {
+                content.insert(content.begin(), (rows - 1) - used, std::string());
+            } else if (used > rows - 1) {
+                // Emitting this block scrolled the screen by the overflow:
+                // the top moved up accordingly (clamped at row 0).
+                const std::size_t scrolled = used - (rows - 1);
+                block_top_ = block_top_ > scrolled ? block_top_ - scrolled : 0;
+            }
+        }
 
         const std::string joined = join(content);
         if (joined == last_frame_ && content.size() == live_rows_) {
@@ -861,6 +888,19 @@ class LiveScreen {
     }
 
     std::size_t live_rows_ = 0;
+    // Screen row (0-based) where the live block starts. Tracked across
+    // commits (each commit prints at the block top and advances it) and
+    // scrolls (render() subtracts the overflow the emit caused), so
+    // render() can pad the top and keep the status row bottom-anchored
+    // (2026-11-05). Terminal resize is self-correcting: a smaller height
+    // makes the next frame see overflow and clamp the top back down; a
+    // taller one just pads more. After a resize the exact anchor may be
+    // off until the next commit re-advances the top (terminal reflow
+    // moves the real cursor in ways we cannot compute without a cursor
+    // position report); the block stays fully visible and correct either
+    // way -- padding only shifts where the block starts, never what it
+    // erases (live_rows_ accounting is independent).
+    std::size_t block_top_ = 0;
     std::string last_frame_;             // repaint suppression cache; reset on commit/clear
     std::vector<std::string> prev_rows_; // previous frame's rows for the diff
 
