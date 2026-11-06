@@ -112,7 +112,60 @@
 - **plan/checklist 渲染**（Codex `□` 列表、Codewhale `3/3 100%`+`[x]`）：两家都把"任务清单"做成 transcript 内可勾选的进度块；mini-agent 无 plan 工具，暂无对应物。
 - **快捷键提示常驻**（opencode 底栏、Codewhale `Shift+Tab to change`、Pi header 行）：三家都把关键键位钉在界面上而非藏进 `/help`。
 
-## 4. 横向对比表
+## 4. 底部状态栏专题（2026-11-06 增补，源码行号级调研）
+
+各家"底部一行"的设计差异比整体布局更细，单独对比（证据均为本机 checkout 行号，已抽查复核）。
+
+### 4.1 Codewhale：双行分工 + 字段级丢弃优先级
+
+- 两行：**Posture Bar**（审批档位、mode、实时计数、当前唯一适用的快捷键提示，`crates/tui/src/tui/phase_strip.rs`）+ **Metrics Line**（`workspace · git_branch · model · ctx% · goal · cost · billing_tier · balance · tokens · ttft · rate · cache · help_hint`，`crates/tui/src/tui/infoline.rs:19-31` + `ui/frame.rs:78` `info_segments()`）。
+- 仅 model、ctx%、update notice 三段可点击（等效执行 `/model`/开 context inspector，`infoline.rs:58`）。
+- **降级纪律**：每字段有 `shed_priority`——窄终端先丢 cache/tokens/计费档，再丢 help_hint、rate/ttft，再丢 cost/balance；**model 与 `ctx NN%` 永不丢**，兜底右缘截断（`infoline.rs:31`）。
+- 快捷键提示有**退休机制**：用过 `USES_TO_RETIRE = 2` 次后消失，不永久占行（`footer_hints.rs:17`）。
+- 审批档位颜色映射：Suggest/Never→Ask、Auto→AutoReview、Bypass→FullAccess 红（`underwater.rs:707-712`）；风险分级 `ApprovalStakes` 用于审批弹窗而非状态栏（`approval/policy.rs:15-36`）。
+- 配置：`status_items` 选字段、`posture_bar`/`metrics_line` 各 `full|compact|hidden` 三档（`config.example.toml:1221-1232`，运行时 `/config posture_bar compact` 可调）。
+- 数据源事件驱动（`Event::TurnUsage`/`ToolCallComplete` 累积进 `session_metrics.rs`），注释明确"渲染按 wall-clock 键控、从不按帧计数键控"（`infoline.rs:27`）。
+
+### 4.2 Codex CLI：状态行与临时提示抢同一行
+
+- Footer 双身份：平时是**可配置 status line**（`status_line` 数组，`codex-rs/config/src/types.rs:984`；字段枚举 `StatusLineItem`：ModelName/ModelWithReasoning/CurrentDir/GitBranch/ContextRemaining/ContextUsed/Permissions/ApprovalMode 等，`bottom_pane/status_line_setup.rs:60-160`；默认 model-with-reasoning · current-dir · thread-name）；`/statusline` 打开交互式 picker 配置。
+- 临时态由 `FooterMode` 枚举接管：Ctrl-C 一次后整行变 "press again to quit"（带超时自动恢复，`footer.rs:182,1343`）、Esc hint、shortcut overlay——**临时提示优先级高于 status line**。
+- context 格式 `"{percent}% context left"`（`footer.rs:957-975`），`set_context_window()` 事件驱动重绘（`bottom_pane/mod.rs:1481`）。
+- 窄终端降级：queue hint > mode cycle hint > 只剩 mode 指示器 > 隐藏左侧（`single_line_footer_layout`，`footer.rs:371-450`）。
+- 分工原则：**footer 只放摘要**，完整 token breakdown/rate limits/账户信息在 `/status` 卡片写进 transcript（`status/card.rs`）——详情不挤状态行。
+
+### 4.3 Pi：信息密度最高的压缩记法
+
+- 双行固定 + 可选第三行（`packages/coding-agent/src/modes/interactive/components/footer.ts`）：第 1 行 `~/path(branch) • sessionName`（`$HOME` 缩写为 `~`）；第 2 行左 stats 右 model，中间 padding 右对齐。
+- stats 记法：`↑`input `↓`output `R`cacheRead `W`cacheWrite tokens、`CH{n}%` cache 命中率（cacheRead/(input+cacheRead+cacheWrite)，L119-121）、`$x.xxx` 累计费用（订阅制追加 `(sub)`）、`n%/ctxWindow (auto)` context 占用（**>90% 红、>70% 黄**，L192-206）、`xp` 实验标记；右侧 `(provider) model • thinking → routedModel`。
+- token 格式化阶梯：`<1k` 原值、`<10k` 一位小数 k、`<1M` 整数 k、`<10M` 一位小数 M、否则整数 M（`formatTokens` L29-35）。
+- 性能：注释"footer renders on every frame"，实际有缓存——`(session, sessionId, leafId, entryCount, limitsModel)` 五元组做 cache key，entries append-only 故 entryCount 不变即免算（L97-143）。
+- spinner 行（"Woolgathering..."）**不属于 footer**：独立 `StatusIndicator extends Loader` 渲染在 border 区，子类含 Working/Retry（带倒计时）/Compaction/BranchSummary（`components/status-indicator.ts`）。
+- 扩展可整体替换 footer（`setFooter(factory)`，`extensions/types.ts:210-220`）；无 show/hide 开关。
+- 降级：statsLeft 超宽截断加 `...`；右侧先丢 provider 前缀、再截断、空间完全不够时只留 statsLeft（L255-287）。
+- OSC 7501 Program Status（`packages/tui/src/program-status.ts`）：向**终端**报告 idle/working/blocked/done/error（dialog 等待时 `blocked`+kind），与 footer 同源事件、不同输出通道，JSON 比较去重。
+
+### 4.4 opencode：响应式状态栏 + 键位联动
+
+- prompt 下方 footer（`packages/tui/src/feature-plugins/prompt/footer.tsx`）：上下文驱动——有子任务显示 `N subagents · N shells`（L42-55）、有 goal 显示 goal 状态、追加 `tokens (percent%) · $cost`（L56-67，`formatContextUsage` 格式 `"1,234 (56%)"`）。
+- **降级不回填**（`mini/footer.width.ts:82-106`）：优先级阶梯逐级尝试添加（spinner+status+escape 必保 → work items → model(8字符) → agent → context(compact) → model(24字符) → context(full) → cost → provider → menu → model(完整) → expanded），某级放不下则后续全部不加——**防 resize 抖动**的明确设计。
+- 独有：**快捷键提示文本跟随用户键位配置动态变化**——`shortcut(id)` 从 keymap 实时读取（`context/keymap.tsx:315-347`），interrupt 改绑 ctrl+c 后状态栏自动显示 `ctrl+c stop`。
+- 权限请求时整个 footer 翻转为 permission UI（`mini/footer.permission.tsx`，statusline 显示 `blocked`）；agent 模式（Build 等）作为独立 group 显示，`shift+tab` 循环。
+- sidebar footer 只管 `path:branch` + 无 provider 时的引导卡片，用量信息全在主 footer（`feature-plugins/sidebar/footer.tsx:76-108`）。
+
+### 4.5 横向结论与 mini-agent 落地建议
+
+| 设计问题 | 共识 | 分歧 |
+| --- | --- | --- |
+| 保底线 | **model + context% 四家都不丢** | token 明细：Pi 全量压缩记法 vs Codex 只放摘要、详情进 `/status` |
+| 窄终端 | 都有优先级降级 | Codewhale 字段 shed 序；opencode 阶梯不回填防抖；Pi 左右分治截断；Codex 整行让位临时提示 |
+| 临时态 | — | Codex quit hint 整行接管；Pi spinner 在 border 区不占 footer；Codewhale hint 用两次自动退休 |
+| 交互性 | — | Codewhale 字段可点击、Codex `/statusline` picker、opencode 提示随键位变、Pi 扩展整体替换 |
+| 费用 | 都显示 | Pi 区分 API 费/订阅 `(sub)`；Codewhale 另有 billing_tier/balance |
+
+mini-agent 状态行（现仅连通标志/auth 状态）优先补三件事：① `model · ctx% · cost` 三连（四家共识底线，ctx% 抄 Pi 的 70%/90% 黄红阈值）；② **审批档位常驻 + 变色**（Codewhale `● Full Access` 红点模式——现在只在启动打印一次）；③ 先定死降级顺序再实现（Codewhale shed_priority 思路：窄终端先丢 cost/耗时，model 与档位永不丢）。
+
+## 5. 横向对比表
 
 | 维度 | Codewhale | Pi | opencode | Codex CLI | mini-agent（现状） |
 | --- | --- | --- | --- | --- | --- |
@@ -129,7 +182,7 @@
 | 键位配置 | 无 keymap 配置 | 键位表可改+扩展 | 全量可配+leader | keymap 系统 | 硬编码 |
 | 多会话 UI | sidebar/roster | session picker | tabs+子任务面板 | resume picker | 多进程（一进程一会话） |
 
-## 5. 对 mini-agent 的启示（按投入产出排序）
+## 6. 对 mini-agent 的启示（按投入产出排序）
 
 1. **输入路径绕过渲染节流**（Pi）：本项目 poll ≤50ms tick 已把延迟压在 50ms 内，但键盘事件到达应立即触发帧——低成本、可感知。
 2. **流式"整行提交"已是共性**：四家全部只提交完整行/完整 fence（Codewhale `commit_complete_lines`、Codex `MarkdownStreamCollector`），本项目 live 块按 `md::wrap` 整行记账与之同构，方向正确；可补的是 **Codewhale 的显示速率上限**（burst 时防刷屏）与 **Codex 的自适应 catch-up**（积压追平）。
@@ -142,7 +195,7 @@
 9. **status line 项目可配**（Codex）：本项目状态行已有连通标志/auth 状态，做成 `config` 数组成本不高。
 10. **明确不做**：opencode 的 Solid.js/JSX 栈（违背零依赖与 C++ 约束）、逐字打字机（Codewhale 自述没做且列为局限）、Pi 的无审批哲学（本项目 ADR 006 审批即控制，方向相反且成文）。
 
-## 6. 使用边界
+## 7. 使用边界
 
 - 本文是**模式调研**，非实现规范；落到设计须按 [templates/design.md](../../templates/design.md) 另出设计文档并记 ADR。
 - 所有结论基于 2026-11-06 本地 checkout；外部项目演进快，引用前按当天源码复核（尤其 opencode 迁移后结构多变）。
