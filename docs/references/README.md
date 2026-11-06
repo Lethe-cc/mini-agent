@@ -15,6 +15,7 @@
 | diff-tools | [开源 diff 工具与库](diff-tools.md)（git --no-index 借用法、delta、difftastic、libXDiff、similar、diff-match-patch、kdiff3/Meld/colordiff） | 审批 diff 渲染增强、diff.cpp 算法升级、评估引入任何 diff 依赖时 | 部分核对（2026-11-05：delta/difftastic/git/xdiff/diff-match-patch 许可证层实读或 API 核实 + git --no-index 本机实测；similar LICENSE 当日不可达待补核；源码均未精读；引入依赖必须先记 ADR） |
 | agent-benchmarks | [评测基准与环境](agent-benchmarks.md)（SWE-bench、AgentBench、WebArena） | 设计验收标准与可自动执行的完成判据 | 未读；不复制数据集内容，不执行基准脚本 |
 | md-renderers | [终端 Markdown 渲染库](md-renderers.md)（md4c、cmark、glamour、glow、termimad、rich） | md 模块扩展表格/复杂语法、评估切换 md4c 时 | 许可证层已核对（2026-11-01）：md4c/glamour/glow/rich=MIT、cmark 需读原文、termimad 未核实；引入依赖必须先记 ADR |
+| tui-ui-survey | [TUI 界面调研](tui-agent-ui-survey.md)（Codewhale、Pi、opencode、Codex CLI 四家终端 Agent 交互界面横向对比） | TUI 布局/流式刷新/审批 UI/状态栏设计与取舍 | 源码层调研（2026-11-06，本机 checkout 实读：Codewhale@4df5d291、pi@2c8d1fe、opencode@69269e4、codex 快照；关键结论已抽查复核）；未运行被调研项目，动态行为未实测；opencode 许可证本轮未重核 |
 
 新增来源请复制 [参考资料模板](../../templates/reference.md) 到本目录，并在上表登记用途和阅读要求。不要将模板中的示例字段视为真实来源。agent-* 四条为设计参考登记，均未在线核对；许可证未核实前不复制任何代码。
 
