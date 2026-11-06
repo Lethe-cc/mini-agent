@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.23)
 project(mini-agent VERSION 0.1.0 LANGUAGES C CXX)
 
+# Default `cmake --install` prefix: ~/.local, so the binary lands in
+# ~/.local/bin (commonly already on PATH). An explicit -DCMAKE_INSTALL_PREFIX
+# (or a preset cache entry) always wins; CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT is
+# only true when CMake picked its own default for this configure.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT AND NOT WIN32 AND NOT "$ENV{HOME}" STREQUAL "")
+    set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local" CACHE PATH "Install prefix" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -64,6 +72,11 @@ add_executable(mini-agent src/cli_main.cpp)
 target_link_libraries(mini-agent PRIVATE agent_core)
 target_compile_definitions(mini-agent PRIVATE MINI_AGENT_VERSION="${PROJECT_VERSION}")
 starter_options(mini-agent)
+
+# `agent_core` is an internal static library (not a public API), so only the
+# CLI/TUI executable is installed: cmake --install build/linux-gcc-debug
+# copies mini-agent to ${CMAKE_INSTALL_PREFIX}/bin (default ~/.local/bin).
+install(TARGETS mini-agent RUNTIME DESTINATION bin)
 
 include(CTest)
 if(BUILD_TESTING)

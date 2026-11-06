@@ -35,6 +35,7 @@
 | 命令 | 用途 |
 | --- | --- |
 | `cmake --preset linux-gcc-debug && cmake --build --preset linux-gcc-debug` | 配置+构建（另有 `linux-clang-debug`、Release preset；Ninja） |
+| `cmake --install build/linux-gcc-debug` | 安装 `mini-agent` 可执行文件；默认前缀 `~/.local`（即 `~/.local/bin/mini-agent`），显式 `-DCMAKE_INSTALL_PREFIX=…` 时安装到该前缀 |
 | `ctest --test-dir build/linux-gcc-debug --output-on-failure` | CTest（`agent.core`、`starter.project_name`） |
 | `./build/linux-gcc-debug/agent_test` | 单元/契约测试（chat/session/loop/config/log/md/tui 纯函数） |
 | `./build/linux-gcc-debug/mcp_test` | v2 MCP 契约测试（RPC/对话层 fake transport + stdio/http mock E2E；ctest `mcp.client`） |

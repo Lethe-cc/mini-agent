@@ -31,7 +31,7 @@ CORE --> FS : 原子写(0600)+锁
 @enduml
 ```
 
-- 快速开始：`python3 scripts/init_project.py`（本仓库已完成）→ `python3 scripts/check.py --strict-project`；构建 `cmake --preset linux-gcc-debug && cmake --build --preset linux-gcc-debug`。
+- 快速开始：`python3 scripts/init_project.py`（本仓库已完成）→ `python3 scripts/check.py --strict-project`；构建 `cmake --preset linux-gcc-debug && cmake --build --preset linux-gcc-debug`；安装 `cmake --install build/linux-gcc-debug`（默认前缀 `~/.local`，二进制落到 `~/.local/bin/mini-agent`）。
 - 架构见 [docs/architecture.md](docs/architecture.md)；设计见 [docs/design/007-agent-v1.md](docs/design/007-agent-v1.md)；决策见 [docs/decisions/README.md](docs/decisions/README.md)。
 - 文档中所有示意图统一使用 PlantUML（仓库离线不渲染，可贴在线服务器或本地 `plantuml` 查看）。
 
