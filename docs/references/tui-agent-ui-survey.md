@@ -82,25 +82,25 @@
 
 ### 3.1 Pi（`images/pi-tui.png`，源：`packages/coding-agent/docs/images/interactive-mode.png`）
 
-![Pi interactive mode](images/pi-tui.png)
+<img src="images/pi-tui.png" alt="Pi interactive mode" width="750">
 
 可见要素逐层印证源码结论：顶部 header 一行快捷键提示（`escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more`）；启动资源清单（Context/Skills/Prompts/Extensions/Themes 分组列出加载项——"加载了什么"直接可见，值得借鉴）；用户输入行反显整块；**思考行斜体**（`Planning to review...`）；工具调用折叠卡片（`read docs docs/extensions.md (ctrl+o to expand)`、bash 命令卡片含 timeout 与耗时 `Took 0.0s`、省略行 `... (1 earlier lines, ctrl+o to expand)`）；底部 spinner 行 `Woolgathering...` 带装饰横线；**footer 双行状态**：上行 pwd，下行 `↑14k ↓206 R1.4k CH10.3% $0.076 (sub) 9.7%/272k (auto)`（input/output/cache-read token、cache 命中率、费用、context 用量与自动压缩阈值）+ 右侧 `(openai-codex) gpt-5.6-sol · high`（provider·model·推理档）。整体是**内联 scrollback 风格**：无滚动条、无框线包围全屏。
 
 ### 3.2 Codewhale（`images/codewhale-tui.png`，源：`web/public/codewhale-tui-0102-demo.png`）
 
-![Codewhale TUI](images/codewhale-tui.png)
+<img src="images/codewhale-tui.png" alt="Codewhale TUI" width="500">
 
 可见要素：顶部用户请求行左侧竖线标记；**工具进度块**（`✓ tool done · 3/3 · 100%` + checklist 子项 `[x]` 勾选框——todo 进度直接嵌进 transcript）；正文 markdown 回复；**右侧边缘绿色竖条**（滚动位置指示器）；composer 输入框带边框 + 占位符 `Type a message...` + 右下角 `[·]` 附件/模式标记；框下提示行 `note Workbar is off — no panel renders (/workbar bottom|top|left|right to show it)`（**把可选面板的入口直接打在界面上**）；**底部状态栏两行**：`● Full Access`（审批档位红点醒目呈现）+ `Shift+Tab to change`（档位循环快捷键）+ `work (Tab)`（工作模式）+ `Work bar (Ctrl+L)` + 方向键提示（agent 切换），第二行 `website-demo · website-demo  context 7%`（provider·model + context 百分比）。
 
 ### 3.3 opencode（`images/opencode-tui.png`，源：`packages/web/src/assets/lander/screenshot.png`）
 
-![opencode TUI](images/opencode-tui.png)
+<img src="images/opencode-tui.png" alt="opencode TUI" width="912">
 
 可见要素：顶部**会话标题条**（`# Homepage button color change in repo workflow`）右侧 `39,413  20% ($0.29)`（token 数、context 百分比、费用三连，常驻顶部）；用户消息左竖线块；工具调用行用**符号前缀区分类型**（`*` Grep、`→` Read、`□` Build 子任务），匹配计数内联（`(18 matches)`）；`~ Asking questions...` 表示 agent 反问状态；模型行 `□ Build · claude-opus-4-5`（mode·model）；输入框大留白多行；**底部快捷键提示栏** `esc interrupt · ctrl+t variants · tab agents · ctrl+p commands`（tab 切 agent、ctrl+t 切模型变体、ctrl+p 命令面板——三个特色入口都钉在底栏）。此截图为旧版 Go/bubbletea 界面，当前 TS+@opentui 版本布局更丰富（tabs/sidebar），但信息层级延续。
 
 ### 3.4 Codex CLI（`images/codex-cli-tui.png`，源：`.github/codex-cli-splash.png`）
 
-![Codex CLI TUI](images/codex-cli-tui.png)
+<img src="images/codex-cli-tui.png" alt="Codex CLI TUI" width="949">
 
 可见要素：顶部**虚线框 splash 卡片**（`>_ OpenAI Codex (v0.0.0)`、`model: gpt-5.2-codex medium  /model to change`、`directory: ~/code/codex/codex-rs`——版本/model/工作目录开局声明，`/model to change` 把改法直接写在值旁边）；`Tip:` 行提示 `/feedback`；用户输入行 `>` 前缀反显块；**思考/计划层级缩进**：`• I need to clarify...`（thinking 正文）→ `• Updated Plan` → `└` 计划描述 → **checkbox 列表**（`□` 未完成，首项青色加粗表示进行中）——plan 作为一等公民渲染进 transcript；`• Explored` 折叠段。此图为较早版本（inline 风格），当前版默认 alt-screen + 可配 status line。
 
