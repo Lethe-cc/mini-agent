@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 性质：外部参考资料调研报告（设计参考角色，非本项目规范）。
-- 调研日期：2026-11-06。方法：实读本机 checkout 源码（只读，未运行任何被调研项目的代码），关键结论经抽查复核。
+- 调研日期：2026-11-06。方法：实读本机 checkout 源码（只读，未运行任何被调研项目的代码），关键结论经抽查复核；界面截图取自各仓库官方宣传图（见第 3 节）。
 - 源码位置与修订：
 
 | 项目 | 本地路径 | 修订 | 技术栈 |
@@ -76,7 +76,43 @@
 - 通知：`notification_method = bel | osc9 | 自定义命令` + 触发条件（如 unfocused）——长任务离开终端时的打扰控制。
 - 中断/恢复：Ctrl-C 双击退出（带"press again"提示态）；`codex resume` / `/resume` 进全屏 session picker。
 
-## 3. 横向对比表
+## 3. 官方界面截图（各仓库自带，复制到本目录 `images/`）
+
+截图来自各项目仓库内的官方宣传图（非本次运行截图；动态流式行为无法从静态图判断）。许可证核对（2026-11-06 实读各仓库 LICENSE）：Codewhale=MIT、Pi=MIT、opencode=MIT、Codex CLI=Apache-2.0，图片随仓库分发、此处仅作资料引用并署名来源。
+
+### 3.1 Pi（`images/pi-tui.png`，源：`packages/coding-agent/docs/images/interactive-mode.png`）
+
+![Pi interactive mode](images/pi-tui.png)
+
+可见要素逐层印证源码结论：顶部 header 一行快捷键提示（`escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more`）；启动资源清单（Context/Skills/Prompts/Extensions/Themes 分组列出加载项——"加载了什么"直接可见，值得借鉴）；用户输入行反显整块；**思考行斜体**（`Planning to review...`）；工具调用折叠卡片（`read docs docs/extensions.md (ctrl+o to expand)`、bash 命令卡片含 timeout 与耗时 `Took 0.0s`、省略行 `... (1 earlier lines, ctrl+o to expand)`）；底部 spinner 行 `Woolgathering...` 带装饰横线；**footer 双行状态**：上行 pwd，下行 `↑14k ↓206 R1.4k CH10.3% $0.076 (sub) 9.7%/272k (auto)`（input/output/cache-read token、cache 命中率、费用、context 用量与自动压缩阈值）+ 右侧 `(openai-codex) gpt-5.6-sol · high`（provider·model·推理档）。整体是**内联 scrollback 风格**：无滚动条、无框线包围全屏。
+
+### 3.2 Codewhale（`images/codewhale-tui.png`，源：`web/public/codewhale-tui-0102-demo.png`）
+
+![Codewhale TUI](images/codewhale-tui.png)
+
+可见要素：顶部用户请求行左侧竖线标记；**工具进度块**（`✓ tool done · 3/3 · 100%` + checklist 子项 `[x]` 勾选框——todo 进度直接嵌进 transcript）；正文 markdown 回复；**右侧边缘绿色竖条**（滚动位置指示器）；composer 输入框带边框 + 占位符 `Type a message...` + 右下角 `[·]` 附件/模式标记；框下提示行 `note Workbar is off — no panel renders (/workbar bottom|top|left|right to show it)`（**把可选面板的入口直接打在界面上**）；**底部状态栏两行**：`● Full Access`（审批档位红点醒目呈现）+ `Shift+Tab to change`（档位循环快捷键）+ `work (Tab)`（工作模式）+ `Work bar (Ctrl+L)` + 方向键提示（agent 切换），第二行 `website-demo · website-demo  context 7%`（provider·model + context 百分比）。
+
+### 3.3 opencode（`images/opencode-tui.png`，源：`packages/web/src/assets/lander/screenshot.png`）
+
+![opencode TUI](images/opencode-tui.png)
+
+可见要素：顶部**会话标题条**（`# Homepage button color change in repo workflow`）右侧 `39,413  20% ($0.29)`（token 数、context 百分比、费用三连，常驻顶部）；用户消息左竖线块；工具调用行用**符号前缀区分类型**（`*` Grep、`→` Read、`□` Build 子任务），匹配计数内联（`(18 matches)`）；`~ Asking questions...` 表示 agent 反问状态；模型行 `□ Build · claude-opus-4-5`（mode·model）；输入框大留白多行；**底部快捷键提示栏** `esc interrupt · ctrl+t variants · tab agents · ctrl+p commands`（tab 切 agent、ctrl+t 切模型变体、ctrl+p 命令面板——三个特色入口都钉在底栏）。此截图为旧版 Go/bubbletea 界面，当前 TS+@opentui 版本布局更丰富（tabs/sidebar），但信息层级延续。
+
+### 3.4 Codex CLI（`images/codex-cli-tui.png`，源：`.github/codex-cli-splash.png`）
+
+![Codex CLI TUI](images/codex-cli-tui.png)
+
+可见要素：顶部**虚线框 splash 卡片**（`>_ OpenAI Codex (v0.0.0)`、`model: gpt-5.2-codex medium  /model to change`、`directory: ~/code/codex/codex-rs`——版本/model/工作目录开局声明，`/model to change` 把改法直接写在值旁边）；`Tip:` 行提示 `/feedback`；用户输入行 `>` 前缀反显块；**思考/计划层级缩进**：`• I need to clarify...`（thinking 正文）→ `• Updated Plan` → `└` 计划描述 → **checkbox 列表**（`□` 未完成，首项青色加粗表示进行中）——plan 作为一等公民渲染进 transcript；`• Explored` 折叠段。此图为较早版本（inline 风格），当前版默认 alt-screen + 可配 status line。
+
+### 3.5 截图交叉观察（源码报告之外的增量信息）
+
+- **状态密度共识**：四家都把 `model · context% · cost` 三连放在固定栏（Pi footer 右、Codewhale 状态栏第二行、opencode 顶栏右、Codex splash/`/status`），mini-agent 状态行目前只有连通/auth，信息量差距明显。
+- **审批档位的常驻可见性**：Codewhale 把 `● Full Access` 红点常驻状态栏（危险档位高可见），Codex 在 splash 声明 model+目录；mini-agent 的 `--tools` 档位只在启动时打印一次，可借鉴"常驻+变色"做法。
+- **工具卡片折叠**（Pi `ctrl+o to expand`、Codex `• Explored`）：长输出默认折叠为一行摘要+展开键，与 mini-agent 审批 diff 全文展示互补——历史区的工具结果可考虑折叠呈现。
+- **plan/checklist 渲染**（Codex `□` 列表、Codewhale `3/3 100%`+`[x]`）：两家都把"任务清单"做成 transcript 内可勾选的进度块；mini-agent 无 plan 工具，暂无对应物。
+- **快捷键提示常驻**（opencode 底栏、Codewhale `Shift+Tab to change`、Pi header 行）：三家都把关键键位钉在界面上而非藏进 `/help`。
+
+## 4. 横向对比表
 
 | 维度 | Codewhale | Pi | opencode | Codex CLI | mini-agent（现状） |
 | --- | --- | --- | --- | --- | --- |
@@ -93,7 +129,7 @@
 | 键位配置 | 无 keymap 配置 | 键位表可改+扩展 | 全量可配+leader | keymap 系统 | 硬编码 |
 | 多会话 UI | sidebar/roster | session picker | tabs+子任务面板 | resume picker | 多进程（一进程一会话） |
 
-## 4. 对 mini-agent 的启示（按投入产出排序）
+## 5. 对 mini-agent 的启示（按投入产出排序）
 
 1. **输入路径绕过渲染节流**（Pi）：本项目 poll ≤50ms tick 已把延迟压在 50ms 内，但键盘事件到达应立即触发帧——低成本、可感知。
 2. **流式"整行提交"已是共性**：四家全部只提交完整行/完整 fence（Codewhale `commit_complete_lines`、Codex `MarkdownStreamCollector`），本项目 live 块按 `md::wrap` 整行记账与之同构，方向正确；可补的是 **Codewhale 的显示速率上限**（burst 时防刷屏）与 **Codex 的自适应 catch-up**（积压追平）。
@@ -106,8 +142,8 @@
 9. **status line 项目可配**（Codex）：本项目状态行已有连通标志/auth 状态，做成 `config` 数组成本不高。
 10. **明确不做**：opencode 的 Solid.js/JSX 栈（违背零依赖与 C++ 约束）、逐字打字机（Codewhale 自述没做且列为局限）、Pi 的无审批哲学（本项目 ADR 006 审批即控制，方向相反且成文）。
 
-## 5. 使用边界
+## 6. 使用边界
 
 - 本文是**模式调研**，非实现规范；落到设计须按 [templates/design.md](../../templates/design.md) 另出设计文档并记 ADR。
 - 所有结论基于 2026-11-06 本地 checkout；外部项目演进快，引用前按当天源码复核（尤其 opencode 迁移后结构多变）。
-- 未运行任何被调研项目；界面细节来自源码与文档，动态行为（动画、闪烁、性能）未经实测。
+- 未运行任何被调研项目；界面细节来自源码、文档与仓库自带截图，动态行为（动画、闪烁、性能）未经实测。截图为各仓库宣传时点的版本，可能与当前 checkout 的界面有差异（尤其 opencode 截图为迁移前 Go 版本）。
