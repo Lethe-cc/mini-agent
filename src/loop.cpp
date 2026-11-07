@@ -76,6 +76,7 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
     // v4: per-turn usage roll-up (see TurnOptions::usage_out semantics).
     TokenUsage turn_usage;
     bool usage_seen = false;
+    ActualReasoning turn_reasoning; // v4.2
 
     for (std::size_t round = 0; round <= options.max_tool_rounds; ++round) {
         const bool last_round = round == options.max_tool_rounds;
@@ -99,6 +100,15 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
             turn_usage.prompt_tokens = result.usage.prompt_tokens;
             turn_usage.completion_tokens += result.usage.completion_tokens;
             turn_usage.total_tokens += result.usage.total_tokens;
+            turn_usage.reasoning_tokens += result.usage.reasoning_tokens;
+        }
+        // v4.2: OR the evidence flags, keep the last echoed effort.
+        if (result.reasoning.seen) {
+            turn_reasoning.seen = true;
+            turn_reasoning.has_reasoning_tokens =
+                turn_reasoning.has_reasoning_tokens || result.reasoning.has_reasoning_tokens;
+            if (!result.reasoning.effort.empty())
+                turn_reasoning.effort = result.reasoning.effort;
         }
         // Without a registry nothing can execute: keep exact v1 semantics
         // and treat any tool_calls the model hallucinated as ignorable.
@@ -143,6 +153,9 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
     // Commit: the whole turn lands in the stored chat at once (008 5.2).
     if (options.usage_out && usage_seen) {
         *options.usage_out = turn_usage; // same commit boundary as history
+    }
+    if (options.reasoning_out && turn_reasoning.seen) {
+        *options.reasoning_out = turn_reasoning; // v4.2, same boundary
     }
     // staging layout: [original prefix][user][assistant/tool ...], where
     // the only System message that can appear after the prefix is the

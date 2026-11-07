@@ -163,14 +163,30 @@ struct StatusInputs {
     long long context_window = 0;    // config; 0 = unset
     long long completion_tokens = 0; // session sum (0 = nothing reported yet)
     std::string reasoning_effort;    // config; empty = unset
+    // v4.2 (design 010 §11): reasoning ACTUALLY observed in responses.
+    // The actual reading wins over the config echo: a non-empty level is
+    // the gateway-echoed effort; seen-without-level shows "on"; no
+    // evidence at all falls back to the configured value.
+    bool reasoning_seen = false;
+    std::string reasoning_actual;
 };
-// Tinted trailing segments for the bottom status row: `ctx 45%` (or
-// `~45%` estimated, or `ctx 12.3k` when no window is configured) with the
-// 70%/90% yellow/red thresholds, `out 1.2k`, and `reasoning=<value>`.
-// Empty segments are omitted entirely; returns "" when nothing to show so
-// the pre-v4 status row stays byte-identical. Colour codes follow the
-// existing `tint` scheme (2 dim default, 33 yellow, 31 red).
+// Tinted trailing segments for the bottom status row: `ctx 45.2k/128.0k`
+// (used/max, coloured by the 70%/90% thresholds; `~` prefix when
+// estimated; single value when no window is configured), `out 1.2k`, and
+// `reasoning=<level>`. Empty segments are omitted entirely; returns ""
+// when nothing to show so the pre-v4 status row stays byte-identical.
+// Colour codes follow the existing `tint` scheme (2 dim default, 33
+// yellow, 31 red).
 std::string status_usage_segments(bool colors, const StatusInputs& inputs);
+
+// v4.2: numbered menu rows for a model's supported reasoning efforts
+// (design 010 §11). Empty when the list is empty. Marks the gateway's
+// default effort `<- default` and the current value `<- current`; the
+// footer notes mandatory-reasoning models. Selection reuses model_choice()
+// against the efforts vector.
+std::vector<std::string> reasoning_menu_rows(const std::vector<std::string>& efforts,
+                                             std::string_view current,
+                                             std::string_view default_effort, bool mandatory);
 
 // Interactive TUI over one session. Owns the raw-mode/termios lifecycle and
 // the request worker; exits with an exit code. Persists per-turn saves via

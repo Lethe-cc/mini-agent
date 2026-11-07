@@ -1100,7 +1100,7 @@ void test_tool_loop_rounds_and_commit() {
                                        const ShouldAbort&) override {
             ++n;
             if (n == 1)
-                return CompletionResult{"", {ToolCall{"t1", "echo", "{}"}}, {}};
+                return CompletionResult{"", {ToolCall{"t1", "echo", "{}"}}, {}, {}};
             throw ProviderError(ProviderErrorKind::Network, "late failure");
         }
     } thrower;
@@ -1137,8 +1137,9 @@ void test_max_tool_rounds() {
             last_tools = tools;
             last_history = c.messages().size();
             if (n < 4)
-                return CompletionResult{"", {ToolCall{"t" + std::to_string(n), "echo", "{}"}}, {}};
-            return CompletionResult{"gave up gracefully", {}, {}};
+                return CompletionResult{
+                    "", {ToolCall{"t" + std::to_string(n), "echo", "{}"}}, {}, {}};
+            return CompletionResult{"gave up gracefully", {}, {}, {}};
         }
         std::string last_tools;
         std::size_t last_history = 0;
@@ -2084,6 +2085,88 @@ void test_v4_usage_collection() {
           "estimate deterministic");
 }
 
+void test_v42_capabilities_and_menu() {
+    std::string error;
+    // OpenRouter shape: efforts list, default, mandatory, context length.
+    const auto caps = mini_agent::parse_models_meta_json(
+        R"({"data":[
+             {"id":"or/gpt","context_length":105000,
+              "reasoning":{"mandatory":false,"default_enabled":false,
+                           "supported_efforts":["high","medium","low","none"],
+                           "default_effort":"medium"}},
+             {"id":"plain","object":"model"},
+             {"id":"or/qwen","context_length":1000000,
+              "reasoning":{"mandatory":true,"supported_efforts":["xhigh","low"],
+                           "default_effort":"xhigh"}}]})",
+        &error);
+    check(caps.has_value(), "caps body parses");
+    check(caps->size() == 3, "all entries kept");
+    const mini_agent::ModelCapabilities* gpt = nullptr;
+    const mini_agent::ModelCapabilities* qwen = nullptr;
+    for (const auto& c : *caps) {
+        if (c.id == "or/gpt")
+            gpt = &c;
+        if (c.id == "or/qwen")
+            qwen = &c;
+    }
+    check(gpt && gpt->supports_reasoning && gpt->reasoning_efforts.size() == 4,
+          "gpt efforts parsed");
+    check(gpt && gpt->reasoning_default_effort == "medium", "default effort parsed");
+    check(gpt && gpt->context_length == 105000, "context length parsed");
+    check(gpt && !gpt->reasoning_mandatory, "mandatory flag parsed");
+    check(qwen && qwen->reasoning_mandatory, "mandatory true parsed");
+    // entries without metadata yield empty caps, not errors
+    const mini_agent::ModelCapabilities* plain = nullptr;
+    for (const auto& c : *caps)
+        if (c.id == "plain")
+            plain = &c;
+    check(plain && !plain->supports_reasoning && plain->context_length == 0,
+          "metadata-free entry stays empty");
+    // fail-closed like parse_models_json
+    check(!mini_agent::parse_models_meta_json("not json", &error).has_value(), "garbage rejected");
+    check(!mini_agent::parse_models_meta_json(R"({"models":[]})", &error).has_value(),
+          "missing data rejected");
+    // bare-bool reasoning flag shape (some gateways)
+    const auto flag =
+        mini_agent::parse_models_meta_json(R"({"data":[{"id":"m","reasoning":true}]})", &error);
+    check(flag && flag->at(0).supports_reasoning && flag->at(0).reasoning_efforts.empty(),
+          "bool reasoning flag supported");
+
+    // menu rows: numbering, default/current marks, mandatory note.
+    const auto rows =
+        mini_agent::tui::reasoning_menu_rows({"high", "medium", "low"}, "high", "medium", false);
+    check(rows.size() == 5, "header + 3 efforts + footer");
+    check(rows[1].find("1. high") != std::string::npos &&
+              rows[1].find("<- current") != std::string::npos,
+          "current marked");
+    check(rows[2].find("<- default") != std::string::npos, "default marked");
+    check(mini_agent::tui::reasoning_menu_rows({}, "", "", false).empty(),
+          "empty efforts -> no rows");
+    const auto mand = mini_agent::tui::reasoning_menu_rows({"xhigh"}, "", "xhigh", true);
+    check(mand[0].find("mandatory") != std::string::npos, "mandatory noted");
+    // selection reuses model_choice against the efforts vector
+    const auto pick = mini_agent::tui::model_choice({"high", "medium", "low"}, "2");
+    check(pick.has_value() && *pick == "medium", "numbered pick resolves");
+
+    // status preference: actual > seen-without-level > config echo.
+    mini_agent::tui::StatusInputs inputs;
+    inputs.reasoning_effort = "medium";
+    check(mini_agent::tui::status_usage_segments(false, inputs).find("reasoning=medium") !=
+              std::string::npos,
+          "config echo when no evidence");
+    inputs.reasoning_seen = true;
+    check(mini_agent::tui::status_usage_segments(false, inputs).find("reasoning=on") !=
+              std::string::npos,
+          "seen without level -> on");
+    inputs.reasoning_actual = "high";
+    check(mini_agent::tui::status_usage_segments(false, inputs).find("reasoning=high") !=
+              std::string::npos,
+          "actual level wins");
+    check(mini_agent::tui::status_usage_segments(false, inputs).find("reasoning=medium") ==
+              std::string::npos,
+          "config echo replaced, not appended");
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -2120,6 +2203,7 @@ int main() {
     test_v4_usage_collection();
     test_v4_config_fields();
     test_v4_status_segments();
+    test_v42_capabilities_and_menu();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

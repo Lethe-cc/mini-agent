@@ -62,10 +62,36 @@ struct TokenUsage {
     long long prompt_tokens = 0;
     long long completion_tokens = 0;
     long long total_tokens = 0;
+    // v4.2: reasoning tokens from completion_tokens_details (when the
+    // gateway reports them): >0 proves the reply actually reasoned.
+    long long reasoning_tokens = 0;
 
     bool empty() const noexcept {
         return prompt_tokens == 0 && completion_tokens == 0 && total_tokens == 0;
     }
+};
+
+// v4.2 (design 010 §11): the reasoning level as OBSERVED in response
+// messages -- distinct from the configured intent. Sources, in trust
+// order: gateway echo of `reasoning_effort` in the chunk payload,
+// usage.reasoning_tokens > 0, streamed reasoning content deltas.
+struct ActualReasoning {
+    bool seen = false;                 // any reasoning evidence at all
+    std::string effort;                // echoed level string, empty when not echoed
+    bool has_reasoning_tokens = false; // usage proved reasoning output
+};
+
+// v4.2 (design 010 §11): per-model capability metadata harvested from
+// GET /models when the gateway exposes it (OpenRouter does; standard
+// OpenAI does not -- absent fields stay empty and callers fall back to
+// config). Purely advisory: config remains the authoritative source.
+struct ModelCapabilities {
+    std::string id;
+    long long context_length = 0;               // 0 = gateway did not say
+    std::vector<std::string> reasoning_efforts; // supported levels, wire order
+    std::string reasoning_default_effort;       // empty = unknown
+    bool reasoning_mandatory = false;           // model cannot stop thinking
+    bool supports_reasoning = false;            // any reasoning metadata seen
 };
 
 // Result of one completion: final text plus any tool calls the model
@@ -74,7 +100,8 @@ struct TokenUsage {
 struct CompletionResult {
     std::string text;
     std::vector<ToolCall> tool_calls;
-    TokenUsage usage; // v4: last-seen usage chunk for this round trip
+    TokenUsage usage;          // v4: last-seen usage chunk for this round trip
+    ActualReasoning reasoning; // v4.2: evidence seen in this response
 
     bool has_tool_calls() const noexcept {
         return !tool_calls.empty();
@@ -102,6 +129,10 @@ class Provider {
     // override it. The api_key is used only in the Authorization header and
     // never appears in the returned ids or in any ProviderError text.
     virtual std::vector<std::string> list_models();
+    // v4.2 capability listing: same endpoint as list_models but retains
+    // context_length/reasoning metadata. Base implementation throws
+    // ProviderError(Protocol) like list_models; OpenAiProvider overrides.
+    virtual std::vector<ModelCapabilities> list_model_capabilities();
 };
 
 // Test-visible wrapper around the internal request builder (008 section 7
@@ -126,6 +157,16 @@ long long estimate_context_tokens(std::string_view text);
 std::optional<std::vector<std::string>> parse_models_json(std::string_view body,
                                                           std::string* error);
 
+// v4.2 (design 010 §11): same GET /models body, but keeps the capability
+// metadata a plain id list would drop: per-model context_length and the
+// reasoning block (supported_efforts / default_effort / mandatory).
+// Fail-closed like parse_models_json (malformed root -> nullopt); entries
+// without metadata simply yield empty fields (advisory data, never an
+// error). Only used when the gateway exposes the fields (OpenRouter yes,
+// standard OpenAI no).
+std::optional<std::vector<ModelCapabilities>> parse_models_meta_json(std::string_view body,
+                                                                     std::string* error);
+
 // OpenAI-compatible Chat Completions (POST {base_url}/chat/completions,
 // stream=true, SSE). Protocol shape is a MUST-VERIFY fact against the
 // chosen provider's current docs before relying on it (design 007 section 3).
@@ -145,6 +186,8 @@ class OpenAiProvider final : public Provider {
     // OpenAI-compatible GET {base_url}/models. Throws ProviderError on
     // network/HTTP/protocol failure; never echoes the api_key.
     std::vector<std::string> list_models() override;
+    // v4.2: same endpoint, capability-preserving parse (design 010 §11).
+    std::vector<ModelCapabilities> list_model_capabilities() override;
 
   private:
     ProviderConfig config_;

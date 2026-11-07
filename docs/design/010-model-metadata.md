@@ -88,6 +88,7 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 - D2：估算器为粗粒度字符类计数，CJK 判定用 UTF-8 首字节范围近似（E3..EF 三字节段），kana/部分汉字外字符可能归类偏差——设计上接受（估算带 `~`，不承诺精度）。
 - D3：`/context off` 与 `/reasoning off` 语义为"清除并落盘"，与 `/log off` 的哨兵值模式不同（那两个字段无"显式禁用"与"未设置"的三态需求）。
 - D4：usage 不写入 session 文件——resume 后状态栏从估算重新开始，直到下一 turn 拿到真实 usage。持久化留待与 cost 表一起设计。
+- D5（v4.2）：reasoning_effort 回显位置只覆盖顶层与 choices[0] 两种已见形态；真实 OpenRouter 用顶层，长尾兼容网关若有第三种位置需按 008 R2 逐网关核实。
 
 ## 10. v4.1 修订（2026-11-07 维护者反馈）
 
@@ -95,6 +96,25 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 
 - **ctx 改为"已占用/最大"格式**：`ctx 45.2k/128.0k`，比裸百分比信息量高；着色阈值仍按 `used/max` 百分比（70% 黄、90% 红）。窗口未配置时保持 `ctx ~1.2k` 单值形态。
 - **思考级别不显示是设计行为**：`reasoning=` 段仅在配置了 `reasoning_effort` 时出现（未设 = 请求不带该字段 = 无可显示值）。该会话未设置此项，属预期；设置入口 `/reasoning low|medium|high` 或 env `MINI_AGENT_REASONING_EFFORT`。
+
+## 11. v4.2 修订（2026-11-07 维护者需求：候选级别实时获取 + 实际级别从报文提取）
+
+维护者提出两点：① `/reasoning` 的候选级别应实时从 provider 获取；② 状态栏的 reasoning 应显示**实际生效**级别（从回答报文提取），而非配置回显。
+
+实现（provider → loop → TUI 三层）：
+
+- **能力元数据**：`parse_models_meta_json`（与 `parse_models_json` 同一 GET /models 体、同一 fail-closed 守卫）保留每模型 `context_length` 与 OpenRouter 形态的 `reasoning{mandatory, supported_efforts[], default_effort}`（兼容裸 bool 形态）；`Provider::list_model_capabilities()` 虚函数 + `OpenAiProvider` 实现，共享 `fetch_models_body` 传输段（api_key 只进 header 的约束不变）。标准 OpenAI 无这些字段 → caps 为空，行为回落到 v4 形态。
+- **TUI 缓存与选择器**：models worker 一次请求同时产 ids+caps（HTTP 次数不增加）；`/reasoning` 无参时若当前模型在 caps 中有 `reasoning_efforts`，输出编号菜单（`reasoning_menu_rows`，标 `<- default`/`<- current`，mandatory 提示），选择复用 `model_choice`；Esc 可关菜单。
+- **实际级别三路证据**：SSE 解析顶层或 choices[0] 的 `reasoning_effort` 回显串（记 level）、`delta.reasoning_content`/`delta.reasoning` 非空串（记 seen，思考正文不进回复流不落存储）、`usage.completion_tokens_details.reasoning_tokens>0`（记 seen+tokens 标志）。`ActualReasoning` 经 `CompletionResult.reasoning` → `TurnOptions::reasoning_out`（与 usage 同提交边界：仅成功 turn）→ `TurnResult.reasoning` → 主线程状态。
+- **状态栏优先级**：`reasoning=` 显示实测 level > 实测 seen 无 level 显示 `on` > 无证据回显配置值；模型切换复位证据（`reset_usage_readings`）。sticky 语义：seen 一旦为真保持到换模型——后续普通 turn 不再显示旧配置值误导，也不谎称 off。
+
+取舍记录：
+
+- 思考**正文**本期仍不显示/不存储（维护者需求是"级别"不是"内容"）；三路证据即 §2 非目标里 reasoning 内容渲染的接入点，需要时加 `on_reasoning` 回调即可。
+- caps 是提示性数据：`/reasoning <任意值>` 字面量路径不校验、不拦截（配置权威原则不变）；菜单只是把网关声明的档位摆出来。
+- 实测中 mock 暴露回显位置分歧（顶层 vs choices[0]），解析器两处都查——真实 OpenRouter 用顶层，兼容网关形态未穷举（记 §9 D5）。
+
+验证（2026-11-07）：`test_v42_capabilities_and_menu`（解析三形态/失败关闭/菜单行/编号选择/状态优先级）通过；agent_test 全量、CTest 3/3、`check.py --strict-project`、`cpp_format.py` 全过；宽 PTY（200 列）E2E：`/models`→`/reasoning` 菜单出 3 档带 default 标记、编号 2 选中 medium、REASONTEST turn 后状态行 `ctx 123/131.1k · out 45 · reasoning=high`（实测 high 压过配置 medium）——全 PASS。
 
 ## 最终核对
 

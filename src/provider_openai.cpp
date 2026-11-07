@@ -369,7 +369,8 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     std::string full;
     std::string http_error;
     std::string finish_reason;
-    TokenUsage usage; // v4: filled by the usage chunk when the gateway sends one
+    TokenUsage usage;          // v4: filled by the usage chunk when the gateway sends one
+    ActualReasoning reasoning; // v4.2: evidence collected across all chunks
     ToolCallAccumulator tool_calls;
     SseLines lines;
     lines.on_data_ = [&](std::string&& payload) {
@@ -388,6 +389,19 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
             throw ProviderError(ProviderErrorKind::Protocol, msg);
         }
         const auto choices = parsed.find("choices");
+        // v4.2: a `reasoning_effort` string echoes the effective level
+        // back. Gateways place it at the payload top level (OpenRouter)
+        // or per-choice (observed mock/compat shapes) -- check both.
+        const auto note_effort = [&reasoning](const nlohmann::json& node) {
+            if (auto re = node.find("reasoning_effort");
+                re != node.end() && re->is_string() && !re->get_ref<const std::string&>().empty()) {
+                reasoning.effort = re->get<std::string>();
+                reasoning.seen = true;
+            }
+        };
+        note_effort(parsed);
+        if (choices != parsed.end() && choices->is_array() && !choices->empty())
+            note_effort(choices->front());
         // v4: usage chunk (stream_options.include_usage) carries `usage`
         // with an empty/absent choices array -- read it before the choices
         // guard below returns early. Last-seen wins (gateways that emit
@@ -409,6 +423,23 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
                 usage.completion_tokens = num("output_tokens");
             if (usage.total_tokens == 0)
                 usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+            // v4.2: reasoning output tokens (OpenAI
+            // completion_tokens_details.reasoning_tokens; some gateways
+            // nest under usage.completion_token_details -- try both).
+            for (const char* details_key :
+                 {"completion_tokens_details", "completion_token_details"}) {
+                if (auto details = u->find(details_key);
+                    details != u->end() && details->is_object()) {
+                    if (auto rt = details->find("reasoning_tokens"); rt != details->end() &&
+                                                                     rt->is_number_integer() &&
+                                                                     rt->get<long long>() > 0) {
+                        usage.reasoning_tokens = rt->get<long long>();
+                        reasoning.seen = true;
+                        reasoning.has_reasoning_tokens = true;
+                    }
+                    break;
+                }
+            }
         }
         if (choices == parsed.end() || !choices->is_array() || choices->empty()) {
             return;
@@ -433,6 +464,16 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
             }
             if (auto fc = delta->find("function_call"); fc != delta->end() && fc->is_object()) {
                 tool_calls.feed_legacy(*fc);
+            }
+            // v4.2: reasoning content deltas prove the model actually
+            // thought this round. Displayed nowhere yet (design 010 §11:
+            // status reading only); never folded into the reply text.
+            for (const char* key : {"reasoning_content", "reasoning"}) {
+                if (auto rc = delta->find(key); rc != delta->end() && rc->is_string() &&
+                                                !rc->get_ref<const std::string&>().empty()) {
+                    reasoning.seen = true;
+                    break;
+                }
             }
         }
         // Non-streaming delivery inside the SSE stream: complete call
@@ -493,6 +534,7 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     result.text = std::move(full);
     result.tool_calls = tool_calls.finish();
     result.usage = usage;
+    result.reasoning = std::move(reasoning);
     // Fail LOUD where an earlier build stayed silent: the stream carried
     // tool_call fragments (or finish_reason "tool_calls") but nothing
     // completed -- a gateway shape we do not parse (fragments without
@@ -578,20 +620,30 @@ std::vector<std::string> Provider::list_models() {
     throw ProviderError(ProviderErrorKind::Protocol, "provider does not support model listing");
 }
 
-std::vector<std::string> OpenAiProvider::list_models() {
-    if (config_.base_url.empty() || config_.api_key.empty()) {
+std::vector<ModelCapabilities> Provider::list_model_capabilities() {
+    throw ProviderError(ProviderErrorKind::Protocol,
+                        "provider does not support model capability listing");
+}
+
+namespace {
+// Shared GET {base_url}/models transport for list_models and
+// list_model_capabilities (v4.2): returns the response body; throws
+// ProviderError on network/HTTP failure. The api_key only ever enters the
+// Authorization header (never the returned body handling or error text).
+std::string fetch_models_body(const ProviderConfig& config) {
+    if (config.base_url.empty() || config.api_key.empty()) {
         throw ProviderError(ProviderErrorKind::Protocol, "provider config incomplete");
     }
     CURL* curl = ::curl_easy_init();
     if (!curl) {
         throw ProviderError(ProviderErrorKind::Network, "curl init failed");
     }
-    const std::string url = config_.base_url;
+    const std::string url = config.base_url;
     const auto trimmed = url.find_last_not_of('/');
     std::string endpoint = trimmed == std::string::npos ? url : url.substr(0, trimmed + 1);
     endpoint += "/models";
 
-    const std::string auth = "Authorization: Bearer " + config_.api_key;
+    const std::string auth = "Authorization: Bearer " + config.api_key;
     const std::string accept = "Accept: application/json";
     struct curl_slist* headers = nullptr;
     headers = ::curl_slist_append(headers, auth.c_str());
@@ -606,8 +658,8 @@ std::vector<std::string> OpenAiProvider::list_models() {
     ::curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
     ::curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
     ::curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
-                       static_cast<long>(config_.connect_timeout_seconds));
-    ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(config_.total_timeout_seconds));
+                       static_cast<long>(config.connect_timeout_seconds));
+    ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(config.total_timeout_seconds));
     ::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
@@ -628,15 +680,89 @@ std::vector<std::string> OpenAiProvider::list_models() {
         throw ProviderError(ProviderErrorKind::HttpStatus, "HTTP status " + std::to_string(status),
                             static_cast<int>(status));
     }
+    return body;
+}
+} // namespace
+
+std::optional<std::vector<ModelCapabilities>> parse_models_meta_json(std::string_view body,
+                                                                     std::string* error) {
+    auto parsed = nlohmann::json::parse(body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        if (error)
+            *error = "models response is not a JSON object";
+        return std::nullopt;
+    }
+    const auto data = parsed.find("data");
+    if (data == parsed.end() || !data->is_array()) {
+        if (error)
+            *error = "models response missing data array";
+        return std::nullopt;
+    }
+    std::vector<ModelCapabilities> caps;
+    for (const auto& entry : *data) {
+        if (!entry.is_object())
+            continue;
+        const auto id = entry.find("id");
+        if (id == entry.end() || !id->is_string())
+            continue; // same skip rule as parse_models_json
+        ModelCapabilities model;
+        model.id = id->get<std::string>();
+        if (auto cl = entry.find("context_length");
+            cl != entry.end() && cl->is_number_integer() && cl->get<long long>() > 0)
+            model.context_length = cl->get<long long>();
+        // OpenRouter shape: reasoning = {mandatory, default_enabled,
+        // supported_efforts[], default_effort}. Any other shape (a bare
+        // bool like some gateways use) only flips supports_reasoning.
+        if (auto r = entry.find("reasoning"); r != entry.end()) {
+            if (r->is_object()) {
+                model.supports_reasoning = true;
+                if (auto m = r->find("mandatory"); m != r->end() && m->is_boolean())
+                    model.reasoning_mandatory = m->get<bool>();
+                if (auto d = r->find("default_effort"); d != r->end() && d->is_string())
+                    model.reasoning_default_effort = d->get<std::string>();
+                if (auto se = r->find("supported_efforts"); se != r->end() && se->is_array()) {
+                    for (const auto& level : *se)
+                        if (level.is_string())
+                            model.reasoning_efforts.push_back(level.get<std::string>());
+                }
+            } else if (r->is_boolean() && r->get<bool>()) {
+                model.supports_reasoning = true;
+            }
+        }
+        caps.push_back(std::move(model));
+    }
+    std::sort(caps.begin(), caps.end(),
+              [](const ModelCapabilities& a, const ModelCapabilities& b) { return a.id < b.id; });
+    caps.erase(std::unique(caps.begin(), caps.end(),
+                           [](const ModelCapabilities& a, const ModelCapabilities& b) {
+                               return a.id == b.id;
+                           }),
+               caps.end());
+    return caps;
+}
+
+std::vector<std::string> OpenAiProvider::list_models() {
+    const std::string body = fetch_models_body(config_);
     std::string parse_error;
     auto ids = parse_models_json(body, &parse_error);
     if (!ids) {
-        // 2xx means the credentials were accepted even though the body was
-        // unusable: carry the status so the caller can still report the key
-        // as verified rather than as a login failure.
-        throw ProviderError(ProviderErrorKind::Protocol, parse_error, static_cast<int>(status));
+        // A 2xx that failed to parse still proves the credentials were
+        // accepted: carry no status so callers report the key as verified
+        // rather than as a login failure (fetch_models_body already threw
+        // for non-2xx).
+        throw ProviderError(ProviderErrorKind::Protocol, parse_error);
     }
     return *ids;
+}
+
+std::vector<ModelCapabilities> OpenAiProvider::list_model_capabilities() {
+    const std::string body = fetch_models_body(config_);
+    std::string parse_error;
+    auto caps = parse_models_meta_json(body, &parse_error);
+    if (!caps) {
+        throw ProviderError(ProviderErrorKind::Protocol, parse_error);
+    }
+    return *caps;
 }
 
 } // namespace mini_agent

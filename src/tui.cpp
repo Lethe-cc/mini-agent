@@ -115,6 +115,8 @@ struct TurnResult {
     // v4: provider usage rolled up by run_turn (zero when the gateway
     // reported nothing). Read by the main thread after join().
     TokenUsage usage;
+    // v4.2: reasoning evidence observed in the responses (design 010 §11).
+    ActualReasoning reasoning;
     // Credential evidence from the completion request. The worker fills these
     // in and the main thread folds them into `auth` (the worker must never
     // touch main-thread state such as `auth`, `logger` or `screen`).
@@ -685,10 +687,37 @@ std::string status_usage_segments(bool colors, const StatusInputs& inputs) {
     if (inputs.completion_tokens > 0) {
         segment("2", "out " + format_token_count(inputs.completion_tokens));
     }
-    if (!inputs.reasoning_effort.empty()) {
-        segment("2", "reasoning=" + inputs.reasoning_effort);
+    if (!inputs.reasoning_effort.empty() || inputs.reasoning_seen) {
+        // v4.2: the actual (response-observed) level wins over the config
+        // echo; "on" covers reasoning evidence without a level string.
+        std::string level = !inputs.reasoning_actual.empty()
+                                ? inputs.reasoning_actual
+                                : (inputs.reasoning_seen ? "on" : inputs.reasoning_effort);
+        segment("2", "reasoning=" + level);
     }
     return out;
+}
+
+std::vector<std::string> reasoning_menu_rows(const std::vector<std::string>& efforts,
+                                             std::string_view current,
+                                             std::string_view default_effort, bool mandatory) {
+    if (efforts.empty())
+        return {};
+    const bool colors = colors_enabled();
+    std::vector<std::string> rows;
+    rows.push_back(tint(colors, "1",
+                        "reasoning effort (" + std::to_string(efforts.size()) + " supported" +
+                            (mandatory ? ", mandatory for this model" : "") + "):"));
+    for (std::size_t i = 0; i < efforts.size(); ++i) {
+        std::string row = "  " + std::to_string(i + 1) + ". " + efforts[i];
+        if (!default_effort.empty() && efforts[i] == default_effort)
+            row += "  <- default";
+        if (!current.empty() && efforts[i] == current)
+            row += "  <- current";
+        rows.push_back(row);
+    }
+    rows.push_back(tint(colors, "2", "  type a number to select; /reasoning off clears"));
+    return rows;
 }
 
 // ---------------------------------------------------------------- live screen
@@ -1083,6 +1112,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     struct ModelsResult {
         bool ok = false;
         std::vector<std::string> ids;
+        std::vector<ModelCapabilities> caps; // v4.2: same GET, richer parse
         std::string error;
         int http_status = 0; // 0 = no response arrived (auth unverifiable)
         bool network_error = false;
@@ -1092,6 +1122,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     std::chrono::steady_clock::time_point models_start;
     bool model_menu_open = false;
     std::vector<std::string> model_choices; // ids backing the open menu
+    // v4.2 (design 010 §11): capability metadata from the last successful
+    // /models fetch (main-thread only; the worker fills models_result.caps).
+    std::vector<ModelCapabilities> model_caps;
+    bool reasoning_menu_open = false;
+    std::vector<std::string> reasoning_choices; // efforts backing the open menu
     int tab_state = 0;
     bool streaming = false;
     std::size_t last_prompt_chars = 0;
@@ -1105,11 +1140,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     bool status_usage_reported = false;
     long long estimated_chat_tokens = 0;
     bool estimate_dirty = true;
+    // v4.2: reasoning ACTUALLY observed in responses (status preference).
+    bool status_reasoning_seen = false;
+    std::string status_reasoning_actual;
     auto context_reading = [&]() -> StatusInputs {
         StatusInputs inputs;
         inputs.context_window = config.context_window;
         inputs.reasoning_effort = config.reasoning_effort;
         inputs.completion_tokens = status_completion_tokens;
+        inputs.reasoning_seen = status_reasoning_seen;
+        inputs.reasoning_actual = status_reasoning_actual;
         if (status_usage_reported && status_context_tokens > 0) {
             inputs.context_tokens = status_context_tokens;
             inputs.context_estimated = status_context_estimated;
@@ -1131,6 +1171,18 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         status_usage_reported = false;
         status_context_estimated = false;
         estimate_dirty = true;
+        status_reasoning_seen = false; // v4.2: evidence belongs to the old model
+        status_reasoning_actual.clear();
+        reasoning_menu_open = false;
+        reasoning_choices.clear();
+    };
+    // v4.2: cached capability lookup for the current model (empty when the
+    // gateway exposed no metadata or the model is not in the list).
+    auto caps_for_model = [&]() -> ModelCapabilities {
+        for (const auto& cap : model_caps)
+            if (cap.id == config.model)
+                return cap;
+        return {};
     };
     auto turn_start = steady_now();
     auto last_ctrl_c = std::chrono::steady_clock::time_point{};
@@ -1352,6 +1404,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // worker copies it into `result` (join-then-read discipline).
             TokenUsage turn_usage;
             turn_options.usage_out = &turn_usage;
+            ActualReasoning turn_reasoning; // v4.2
+            turn_options.reasoning_out = &turn_reasoning;
             try {
                 // Run the (possibly multi-round) turn on a detached copy:
                 // run_turn commits the whole turn to its Chat only on
@@ -1367,6 +1421,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     [&] { return abort_requested.load(); }, turn_options);
                 session.chat = std::move(turn_chat);
                 r.usage = turn_usage;
+                r.reasoning = turn_reasoning;
                 r.ok = true;
             } catch (const ProviderError& e) {
                 r.error = e.what();
@@ -1429,10 +1484,18 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             pc.total_timeout_seconds =
                 pc.total_timeout_seconds < 15 ? pc.total_timeout_seconds : 15;
             try {
-                OpenAiProvider provider(std::move(pc));
-                r.ids = provider.list_models();
+                OpenAiProvider provider(pc);
+                // v4.2: one GET carries both the id list and the optional
+                // capability metadata (OpenRouter-style gateways). Gateways
+                // without the fields simply yield empty caps -- ids stay.
+                r.caps = provider.list_model_capabilities();
+                for (const auto& cap : r.caps)
+                    r.ids.push_back(cap.id);
                 r.ok = true;
             } catch (const ProviderError& e) {
+                // parse_models_meta_json shares parse_models_json's fail-
+                // closed root/data guards, so a Protocol error here would
+                // fail the id-only path identically -- no fallback needed.
                 r.error = e.what();
                 r.http_status = e.http_status();
                 r.network_error = e.kind() == ProviderErrorKind::Network;
@@ -1634,7 +1697,23 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit("reasoning_effort=" +
                               (config.reasoning_effort.empty() ? std::string("(not set)")
                                                                : config.reasoning_effort) +
-                              "; usage /reasoning <low|medium|high|value> or /reasoning off");
+                              "; usage /reasoning <level> or /reasoning off");
+                // v4.2 (§11): cached capabilities for the current model ->
+                // numbered picker over the gateway's supported levels (the
+                // same interaction as /models). A literal value still works
+                // for models without advertised metadata.
+                const auto caps = caps_for_model();
+                if (!caps.reasoning_efforts.empty()) {
+                    reasoning_choices = caps.reasoning_efforts;
+                    reasoning_menu_open = true;
+                    for (const auto& row : reasoning_menu_rows(
+                             reasoning_choices, config.reasoning_effort,
+                             caps.reasoning_default_effort, caps.reasoning_mandatory))
+                        screen.commit(row);
+                } else if (caps.supports_reasoning) {
+                    screen.commit("[info] gateway marks this model as reasoning-capable "
+                                  "but lists no levels; set one explicitly");
+                }
             } else if (arg == "off") {
                 config.reasoning_effort.clear();
                 save_and_report();
@@ -1900,6 +1979,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         // request): same effect as the first Ctrl-C, without
                         // the double-press-to-quit escalation.
                         abort_requested = true;
+                    } else if (reasoning_menu_open) {
+                        reasoning_menu_open = false;
+                        reasoning_choices.clear();
+                        screen.commit("[cancel] reasoning menu dismissed; /reasoning re-opens");
                     } else if (model_menu_open) {
                         // Lone ESC while the model list is up dismisses it
                         // (nothing else to interrupt); the fetched list stays
@@ -1930,6 +2013,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         // other input dismisses the menu and falls through
                         // unchanged, so /model <name> and ordinary questions
                         // keep working while the list is on screen.
+                        if (reasoning_menu_open) {
+                            reasoning_menu_open = false;
+                            // Same numbered-choice helper as the model menu.
+                            if (const auto pick = model_choice(reasoning_choices, line)) {
+                                config.reasoning_effort = *pick;
+                                save_and_report();
+                                logger->event(
+                                    "reasoning_select",
+                                    {{"level", config.reasoning_effort}, {"source", "menu"}});
+                                screen.commit("reasoning_effort=" + config.reasoning_effort);
+                                line.clear();
+                            }
+                        }
                         if (model_menu_open) {
                             model_menu_open = false;
                             if (const auto pick = model_choice(model_choices, line)) {
@@ -2001,6 +2097,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                               {"count", std::to_string(models_result.ids.size())},
                                               {"elapsed_ms", std::to_string(ms)}});
                 model_choices = models_result.ids;
+                model_caps = std::move(models_result.caps); // v4.2
+                models_result.caps.clear();
                 model_menu_open = !model_choices.empty();
                 if (model_menu_open) {
                     for (const auto& row : model_menu_rows(model_choices, config.model))
@@ -2060,6 +2158,15 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     status_usage_reported = true;
                 }
                 estimate_dirty = true;
+                // v4.2: last successful turn's evidence wins; the echoed
+                // level replaces a previous one, "seen" is sticky so a
+                // later plain turn does not silently claim "off" (the
+                // model may simply not have needed to think).
+                if (result.reasoning.seen) {
+                    status_reasoning_seen = true;
+                    if (!result.reasoning.effort.empty())
+                        status_reasoning_actual = result.reasoning.effort;
+                }
                 logger->event("turn", {{"status", "ok"},
                                        {"elapsed_ms", std::to_string(elapsed_ms)},
                                        {"chars_in", std::to_string(last_prompt_chars)},

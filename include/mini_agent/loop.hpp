@@ -36,6 +36,11 @@ struct TurnOptions {
     // (same commit boundary as the chat history); zero when no provider
     // in the chain reported usage.
     TokenUsage* usage_out = nullptr;
+    // v4.2 (design 010 §11): optional out-pointer for reasoning evidence
+    // OBSERVED in the responses (effort echo / reasoning tokens / content
+    // deltas). Written on success only; `seen` ORs across rounds, the
+    // echoed effort keeps the last non-empty value.
+    ActualReasoning* reasoning_out = nullptr;
 };
 
 // Runs one user turn, possibly several provider round-trips when the model

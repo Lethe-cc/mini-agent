@@ -75,6 +75,17 @@ SCRIPTS = {
                 "arguments": '{"text":"injected ok"}'}}]}}]},
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     ],
+    # v4.2 reasoning flow: reasoning_content deltas + effort echo +
+    # reasoning_tokens in usage (all three actual-level evidence sources).
+    "REASONTEST": [
+        {"choices": [{"delta": {"reasoning_content": "thinking hard about it"}}]},
+        {"choices": [{"delta": {"reasoning_content": ", step by step"}}]},
+        {"choices": [{"delta": {"content": "answer after thought"},
+                      "reasoning_effort": "high"}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}],
+         "usage": {"prompt_tokens": 50, "completion_tokens": 20, "total_tokens": 70,
+                   "completion_tokens_details": {"reasoning_tokens": 12}}},
+    ],
     # unrecognized shape: fragments without any id/name -- client must
     # raise a protocol error with the structure fingerprint (008 D3)
     "BADSHAPE": [
@@ -135,8 +146,13 @@ class Handler(BaseHTTPRequestHandler):
         payload = {
             "object": "list",
             "data": [
+                # v4.2: OpenRouter-style capability metadata on one entry,
+                # plain OpenAI shape (id only) on the other.
                 {"id": "mock-small", "object": "model"},
-                {"id": "mock-large", "object": "model"},
+                {"id": "mock-large", "object": "model", "context_length": 131072,
+                 "reasoning": {"mandatory": False, "default_enabled": False,
+                               "supported_efforts": ["high", "medium", "low"],
+                               "default_effort": "medium"}},
             ],
         }
         body = json.dumps(payload).encode()
@@ -159,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
         has_tools = bool(body.get("tools"))
         saw_tool_result = any(m.get("role") == "tool" for m in messages)
         prefix1 = ("TOOLTEST", "VARFLAT", "VARFC", "VAROBJ", "VARQWEN",
-                   "VARMSG", "INJECT", "BADSHAPE")
+                   "VARMSG", "INJECT", "BADSHAPE", "REASONTEST")
         if last_user.startswith("CODEFIX") and has_tools:
             # v3 multi-round coding flow: pick the script by how many tool
             # results came back (read/edit/status/add/commit, then summary).
