@@ -177,6 +177,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(resp)
             return
+        # v4.5 stage-2 probe shape: an oversized prompt gets the INPUT
+        # range rejection (DashScope fires the max_tokens validator first,
+        # so the client must chase the input bound separately).
+        if sum(len(str(m.get("content", ""))) for m in messages) > 1000000:
+            payload = {"error": {"message": "<400> Range of input length should be [1, 983616]"}}
+            resp = json.dumps(payload).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+            return
         last_user = next(
             (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
         )

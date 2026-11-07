@@ -911,33 +911,24 @@ std::vector<ModelCapabilities> OpenAiProvider::list_model_capabilities() {
     return *caps;
 }
 
-ProbeOutcome OpenAiProvider::probe_context_window() {
-    if (config_.base_url.empty() || config_.api_key.empty() || config_.model.empty())
-        throw ProviderError(ProviderErrorKind::Protocol, "provider config incomplete");
+namespace {
+// One non-streaming chat POST for probing: returns (http_status, body).
+// Network/config failures throw like the rest of the transport.
+std::pair<long, std::string> probe_post_chat(const ProviderConfig& config,
+                                             const nlohmann::json& request) {
     CURL* curl = ::curl_easy_init();
     if (!curl)
         throw ProviderError(ProviderErrorKind::Network, "curl init failed");
-    const std::string url = config_.base_url;
+    const std::string url = config.base_url;
     const auto trimmed = url.find_last_not_of('/');
     std::string endpoint = trimmed == std::string::npos ? url : url.substr(0, trimmed + 1);
     endpoint += "/chat/completions";
-
-    // Tiny prompt + absurd max_tokens: gateways validate before billing,
-    // so this is one cheap non-streaming request whose rejection carries
-    // the authoritative numbers. 1e9 exceeds every current limit.
-    nlohmann::json req;
-    req["model"] = config_.model;
-    req["messages"] = {{{"role", "user"}, {"content", "ping"}}};
-    req["max_tokens"] = 1000000000;
-    req["stream"] = false;
-    const std::string body = req.dump();
-
-    const std::string auth = "Authorization: Bearer " + config_.api_key;
+    const std::string body = request.dump();
+    const std::string auth = "Authorization: Bearer " + config.api_key;
     const std::string type = "Content-Type: application/json";
     struct curl_slist* headers = nullptr;
     headers = ::curl_slist_append(headers, auth.c_str());
     headers = ::curl_slist_append(headers, type.c_str());
-
     std::string response_body;
     char error_buffer[CURL_ERROR_SIZE] = {0};
     ::curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
@@ -949,28 +940,64 @@ ProbeOutcome OpenAiProvider::probe_context_window() {
     ::curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
     ::curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
     ::curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
-                       static_cast<long>(config_.connect_timeout_seconds));
+                       static_cast<long>(config.connect_timeout_seconds));
     ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     ::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-
     const CURLcode code = ::curl_easy_perform(curl);
     long status = 0;
     ::curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     ::curl_slist_free_all(headers);
     ::curl_easy_cleanup(curl);
-
     if (code != CURLE_OK) {
         const std::string detail = error_buffer[0] ? error_buffer : ::curl_easy_strerror(code);
         throw ProviderError(ProviderErrorKind::Network, "network error: " + detail);
     }
-    if (status >= 200 && status < 300) {
-        // The gateway ACCEPTED the absurd max_tokens (silent clamp): no
-        // boundary can be learned from it. Never parse a success body.
-        return {};
-    }
-    return parse_context_probe_error(response_body);
+    return {status, response_body};
+}
+} // namespace
+
+ProbeOutcome OpenAiProvider::probe_context_window() {
+    if (config_.base_url.empty() || config_.api_key.empty() || config_.model.empty())
+        throw ProviderError(ProviderErrorKind::Protocol, "provider config incomplete");
+
+    // Stage 1: tiny prompt + absurd max_tokens. Gateways validate before
+    // billing, so a rejection is free and carries a bound. Which bound
+    // depends on the validator that fires first (v4.3.1): vLLM/OpenAI
+    // report the total window; DashScope-family reports the OUTPUT cap,
+    // which is NOT a usable ctx denominator.
+    nlohmann::json req;
+    req["model"] = config_.model;
+    req["messages"] = {{{"role", "user"}, {"content", "ping"}}};
+    req["max_tokens"] = 1000000000;
+    req["stream"] = false;
+    const auto [status1, body1] = probe_post_chat(config_, req);
+    if (status1 >= 200 && status1 < 300)
+        return {}; // silent clamp: nothing learnable, never parse a success
+    auto first = parse_context_probe_error(body1);
+    if (first.kind == ProbeLimitKind::Window || first.kind == ProbeLimitKind::InputCap)
+        return first; // the maintainer's preferred reading is already in hand
+
+    // Stage 2 (v4.5, design 010 section 16): stage 1 only proved the
+    // OUTPUT cap, so chase the INPUT bound -- the one that matters for
+    // the ctx reading. One oversized prompt with max_tokens=1: the input
+    // validator fires before any real generation, so the rejection is
+    // again free. ~300k words ~= 400k tokens exceeds every current
+    // window's input side while staying under request-size ceilings.
+    nlohmann::json req2;
+    req2["model"] = config_.model;
+    req2["messages"] = {{{"role", "user"}, {"content", std::string(2400000, 'a')}}};
+    req2["max_tokens"] = 1;
+    req2["stream"] = false;
+    const auto [status2, body2] = probe_post_chat(config_, req2);
+    auto second =
+        (status2 >= 200 && status2 < 300) ? ProbeOutcome{} : parse_context_probe_error(body2);
+    if (second.kind == ProbeLimitKind::Window || second.kind == ProbeLimitKind::InputCap)
+        return second;
+    // Nothing better found: fall back to stage 1's honest OutputCap so
+    // the caller can still tell the user what was learned.
+    return first;
 }
 
 } // namespace mini_agent

@@ -166,6 +166,17 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 
 验证（2026-11-08）：`test_v44_debug_log`（JSON 往返/失败关闭/路径推导/off 哨兵回落）通过；CLI E2E：`ask --debug` 后 `/tmp/dbgtest.log.debug` 含 REQUEST+SSE 全帧、0600、元数据日志零正文；TUI PTY E2E 四断言 PASS（`/debug on` 提示路径、开 `/models` 后 dump 仍只有 1 个 REQUEST 即仅对话落盘、正文在、列表载荷不在）。全量 agent_test/CTest/strict-project/cpp_format 通过。
 
+## 16. v4.5 修订（2026-11-08 维护者反馈："一般看重输入大小"）
+
+ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1 探测只回输出上限。探测升级为**二段**：
+
+- stage 1（同 v4.3）：小 prompt + 超大 max_tokens。拿到 Window/InputCap 直接返回（OpenRouter/vLLM 一步到位）。
+- 只有 stage 1 落在 OutputCap 时才发 stage 2：约 2.4MB 纯字符 prompt + `max_tokens=1`——输入校验器先于任何真实生成开火，被拒请求不计费，DashScope 回 `Range of input length [1, 983616]` → InputCap 返回并保存（提示语 "input limit"）。填充长度远大于当前一切模型的输入上限，成本上界固定。
+- stage 2 仍拿不到（静默 clamp/未知形态）时回退 stage 1 的 OutputCap 诚实展示，绝不存为窗口。
+- 传输段抽 `probe_post_chat`（两段共用）；`/models` 与 dump 边界不变。
+
+验证（2026-11-08）：mock 增加输入拒绝路径后 PTY E2E 两断言 PASS——`/context probe` 经两段拿到 `input limit: 983.6k (983616 tokens)` 并持久化 `context_window=983616`；agent_test 全量、CTest 3/3、strict-project、cpp_format 通过（解析层单测覆盖不变，二段逻辑属传输编排、由 E2E 覆盖）。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。
