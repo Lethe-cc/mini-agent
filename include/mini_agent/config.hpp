@@ -40,6 +40,13 @@ struct AppConfig {
     std::string api_key; // never log or echo
     std::string model;
     std::string log_file; // optional diagnostics path (design 007 §7)
+    // v4.4: opt-in raw request/response capture for debugging. OFF by
+    // default; the metadata-only Logger guarantee holds unless the user
+    // explicitly enables this. When on, chat completions dump their raw
+    // request body and SSE payloads to "<log path>.debug" (0600).
+    // Auxiliary requests (GET /models listing, context-window probe) are
+    // NEVER captured -- only conversation traffic.
+    bool debug_log = false;
 
     // v3 (design 009 section 5.4): workspace root for file/git tools and
     // run_bash cwd. Empty = process cwd at launch. Never logged in full

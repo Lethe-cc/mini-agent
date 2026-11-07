@@ -183,6 +183,16 @@ ProviderConfig AppConfig::to_provider() const {
     p.api_key = api_key;
     p.model = model;
     p.reasoning_effort = reasoning_effort; // v4: empty == field omitted
+    if (debug_log) {
+        // v4.4: raw chat traffic goes next to the diagnostics log path.
+        // config.log_file already carries the env override (merged in
+        // load_config_merged); the "off" sentinel disables the metadata
+        // log but debug stays on, so fall back to the default base.
+        std::string base = log_file;
+        if (base.empty() || base == "off")
+            base = "/tmp/mini-agent-" + std::to_string(static_cast<long>(::getuid())) + ".log";
+        p.debug_log_path = base + ".debug";
+    }
     if (const char* timeout = env_nonempty("MINI_AGENT_TIMEOUT_SECONDS")) {
         const long parsed = std::strtol(timeout, nullptr, 10);
         if (parsed > 0)
@@ -213,6 +223,8 @@ std::string config_to_json(const AppConfig& config) {
     if (!config.log_file.empty()) {
         root["log_file"] = config.log_file;
     }
+    if (config.debug_log) // v4.4: written only when on (design 010 §15)
+        root["debug_log"] = true;
     // v3 fields (design 009 section 5.4): optional, written only when set.
     if (!config.workspace.empty())
         root["workspace"] = config.workspace;
@@ -287,6 +299,17 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
     config.api_key = get_str("api_key");
     config.model = get_str("model");
     config.log_file = get_str("log_file");
+    // v4.4: debug_log must be a bool when present; anything else fails
+    // closed like the other typed fields.
+    if (auto it = parsed.find("debug_log"); it != parsed.end()) {
+        if (it->is_boolean())
+            config.debug_log = it->get<bool>();
+        else {
+            if (error)
+                *error = "config debug_log must be a boolean";
+            return std::nullopt;
+        }
+    }
 
     // v3 optional fields.
     config.workspace = get_str("workspace");
@@ -441,6 +464,8 @@ AppConfig load_config_merged(std::string* file_error) {
         config.model = v;
     if (const char* v = env_nonempty("MINI_AGENT_LOG"))
         config.log_file = v;
+    if (env_nonempty("MINI_AGENT_DEBUG"))
+        config.debug_log = true; // v4.4: tri-state opt-in (unset keeps file)
     if (const char* v = env_nonempty("MINI_AGENT_WORKSPACE"))
         config.workspace = v; // v3: scripts pin the boundary per invocation
     if (const char* v = env_nonempty("MINI_AGENT_CONTEXT_WINDOW")) {

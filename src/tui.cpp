@@ -41,7 +41,7 @@ namespace mini_agent::tui {
 namespace {
 
 constexpr std::string_view kCommands[] = {
-    "/approve", "/config", "/context", "/cwd",      "/exit",      "/help",     "/login",
+    "/approve", "/config", "/context", "/cwd",      "/debug",     "/exit",     "/help", "/login",
     "/mcp",     "/model",  "/models",  "/provider", "/reasoning", "/sessions", "/tools"};
 
 class RawMode {
@@ -1556,6 +1556,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("          /tools (tool registry) · /mcp (servers) · /cwd [path]");
             screen.commit("          /approve ask|allowlist|off (tool gate)");
             screen.commit("          /models (list & pick) · /log <path>|off|default");
+            screen.commit("          /debug on|off (raw chat traffic dump)");
             screen.commit("          /config · /sessions · /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
             screen.commit("configure them in any order, any number of sittings.");
@@ -1657,6 +1658,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                           std::string(config.api_key.empty() ? "(not set)" : "***set***"));
             screen.commit("login=" + std::string(auth_log_token(auth)));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
+            screen.commit("debug_log=" + std::string(config.debug_log ? "on" : "off"));
             // v4 fields (design 010).
             screen.commit("context_window=" +
                           (config.context_window > 0
@@ -1794,6 +1796,33 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             } else {
                 config.reasoning_effort = std::string(arg);
                 save_and_report();
+            }
+            return true;
+        }
+        if (line.rfind("/debug", 0) == 0) {
+            // v4.4 (design 010 §15): raw chat-traffic dump toggle. ON
+            // appends every chat REQUEST body and SSE payload to
+            // "<log path>.debug" (0600). Model listing and the context
+            // probe are never dumped. Bodies contain conversation content
+            // -- the point of the flag -- while the api_key stays in the
+            // Authorization header only.
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                const auto pc = config.to_provider();
+                screen.commit(std::string("debug=") + (config.debug_log ? "on" : "off") +
+                              (config.debug_log ? " · file: " + pc.debug_log_path : std::string()) +
+                              "; usage /debug on|off");
+            } else if (arg == "on") {
+                config.debug_log = true;
+                save_and_report();
+                screen.commit("[ok] debug on · raw chat traffic -> " +
+                              config.to_provider().debug_log_path);
+            } else if (arg == "off") {
+                config.debug_log = false;
+                save_and_report();
+                screen.commit("[ok] debug off · no further dumps");
+            } else {
+                screen.commit("[error] /debug expects on|off");
             }
             return true;
         }

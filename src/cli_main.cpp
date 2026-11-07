@@ -38,11 +38,12 @@ void print_usage(std::ostream& out) {
     out << "mini-agent " MINI_AGENT_VERSION
         << " - a mini AI agent\n"
            "usage:\n"
-           "  mini-agent ask [--tools M] [--cwd PATH] \"question\"  one-shot to stdout\n"
+           "  mini-agent ask [--tools M] [--cwd PATH] [--debug] \"question\"  one-shot to stdout\n"
            "  mini-agent ask [--tools M] --cwd PATH -   read question from stdin\n"
            "      --tools off|ask|allowlist|auto  (default off: non-interactive contract)\n"
            "          allowlist: only tool_allowlist names execute (script-safe, v3)\n"
-           "  mini-agent run [--session ID] [--cwd PATH]  session (TUI; v1 line-mode)\n"
+           "      --debug  dump raw chat request/response to <log path>.debug (v4.4)\n"
+           "  mini-agent run [--session ID] [--cwd PATH] [--debug]  session (TUI; v1 line-mode)\n"
            "  mini-agent session list|rm ID  manage sessions\n"
            "  mini-agent mcp list            show configured MCP servers\n"
            "  --mcp NAME=SPEC (ask/run/mcp)  add one server this session:\n"
@@ -215,6 +216,10 @@ int cmd_ask(int argc, char** argv) {
             config.workspace = argv[i] + 6;
             continue;
         }
+        if (std::strcmp(argv[i], "--debug") == 0) {
+            config.debug_log = true; // v4.4: raw chat traffic dump (010 §15)
+            continue;
+        }
         positional.emplace_back(argv[i]);
     }
     if (tools_mode != "off" && tools_mode != "ask" && tools_mode != "auto" &&
@@ -378,6 +383,7 @@ int cmd_run(int argc, char** argv) {
     std::string session_id;
     bool fresh = false;
     std::string workspace_flag;
+    bool debug_flag = false; // v4.4
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--session") == 0 && i + 1 < argc) {
             session_id = argv[++i];
@@ -391,9 +397,11 @@ int cmd_run(int argc, char** argv) {
             workspace_flag = argv[++i]; // v3: session workspace override
         } else if (std::strncmp(argv[i], "--cwd=", 6) == 0) {
             workspace_flag = argv[i] + 6;
+        } else if (std::strcmp(argv[i], "--debug") == 0) {
+            debug_flag = true; // v4.4: raw chat traffic dump (design 010 §15)
         } else {
             std::cerr << "usage: mini-agent run [--session ID] [--new] "
-                         "[--cwd PATH] [--mcp NAME=SPEC]\n";
+                         "[--cwd PATH] [--mcp NAME=SPEC] [--debug]\n";
             return kConfigError;
         }
     }
@@ -402,6 +410,8 @@ int cmd_run(int argc, char** argv) {
     const bool configured = load_app_config(&config, &config_error);
     if (!workspace_flag.empty())
         config.workspace = workspace_flag; // CLI flag beats file/env (v3 009 5.4)
+    if (debug_flag)
+        config.debug_log = true; // v4.4: CLI flag beats file/env
     std::string mcp_error;
     if (!apply_mcp_flags(argc, argv, &config, &mcp_error)) {
         std::cerr << "error: " << mcp_error << '\n';

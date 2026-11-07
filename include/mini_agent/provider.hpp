@@ -39,6 +39,11 @@ struct ProviderConfig {
     std::string model;
     std::size_t connect_timeout_seconds = 5;
     std::size_t total_timeout_seconds = 120;
+    // v4.4: non-empty = append raw chat request bodies and SSE payload
+    // lines to this file (design 010 §15). list_models() and
+    // probe_context_window() never write to it. The api_key lives in the
+    // Authorization header only and is never part of a dumped payload.
+    std::string debug_log_path;
     // v4 (design 010): empty = field omitted from the request body, i.e.
     // byte-identical v1..v3 request (regression hook). When set it is
     // passed through verbatim as `reasoning_effort` -- the server is the

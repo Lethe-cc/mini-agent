@@ -153,6 +153,19 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 
 验证（2026-11-08）：`test_v43_probe_parse` 重写为 kind 断言（三形态分类 + 含糊参数拒绝 + 回显值/越界/空体拒绝）；mock 的 DashScope max_tokens 拒绝路径 E2E 三断言 PASS——OutputCap 正确分类显示 `131.1k`、未持久化为窗口、`/context 983616` 后读数 `983.6k (983616)`。全量 agent_test/CTest/strict-project/cpp_format 通过。
 
+## 15. v4.4 修订（2026-11-08 维护者需求：debug 选项记录原始请求/回复）
+
+需求：开启后打印 debug 日志，记录每次请求和回复的原始内容，**token 相关的请求不打印**（解读为 `GET /models` 列表与 `/context probe` 这类非对话辅助请求；usage 是对话响应的一部分、照常落）。
+
+实现：
+
+- `AppConfig.debug_log`（bool，默认 off；JSON 仅开启时写出、非 bool 整份失败关闭）；env `MINI_AGENT_DEBUG` 非空即开；CLI `ask`/`run --debug`（flag 压过文件/env）；TUI `/debug on|off` 即时切换并落盘。
+- `ProviderConfig::debug_log_path` 由 `to_provider()` 推导：`<log_file>.debug`（log_file 为空或 "off" 时回落默认基路径 `/tmp/mini-agent-<uid>.log.debug`），0600、append-only、进程内互斥。
+- dump 点**只在** `OpenAiProvider::complete_chat`：请求体一条 `=== REQUEST ===`、每条 SSE 帧一条 `=== SSE ===`（含 `[DONE]`）。`list_models`/`probe_context_window` 走独立代码路径、天然不经过 dump——"辅助请求不打印"由构造保证而非运行时判断。
+- 安全边界：api_key 只进 Authorization header，dump 的 payload 不含它；对话正文**会**进 dump（这是 debug 的用途），文件权限 0600 + 与元数据 Logger 分文件，`log.hpp` 的"零正文"硬保证不受影响。
+
+验证（2026-11-08）：`test_v44_debug_log`（JSON 往返/失败关闭/路径推导/off 哨兵回落）通过；CLI E2E：`ask --debug` 后 `/tmp/dbgtest.log.debug` 含 REQUEST+SSE 全帧、0600、元数据日志零正文；TUI PTY E2E 四断言 PASS（`/debug on` 提示路径、开 `/models` 后 dump 仍只有 1 个 REQUEST 即仅对话落盘、正文在、列表载荷不在）。全量 agent_test/CTest/strict-project/cpp_format 通过。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

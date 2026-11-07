@@ -30,6 +30,34 @@
 
 ## mini-agent 业务开发
 
+### 新 Linux 主机编译安装依赖
+
+构建目标二进制只需要以下四件（全部系统包，无网络抓取；`third_party/` 的 nlohmann/json、md4c、spdlog 已 vendored 进仓库，无需安装）：
+
+| 依赖 | 最低版本 | Debian/Ubuntu | Fedora/RHEL | Arch | 用途 |
+| --- | --- | --- | --- | --- | --- |
+| GCC 或 Clang | C++17（GCC 7+/Clang 5+；实测 GCC 14、AppleClang 21） | `g++` | `gcc-c++` | `gcc` | 编译器 |
+| CMake | 3.23 | `cmake` | `cmake` | `cmake` | 构建配置（presets） |
+| Ninja | 任意 | `ninja-build` | `ninja-build` | `ninja` | 生成器（全部 preset 使用 Ninja） |
+| libcurl 开发包 | 任意 HTTPS 构建 | `libcurl4-openssl-dev` | `libcurl-devel` | `libcurl` | 唯一链接的外部库（`find_package(CURL REQUIRED)`） |
+
+可选（质量门禁/开发工具，非构建必需）：`clang-format`（`scripts/cpp_format.py`）、`clang-tidy`（仅 `-DSTARTER_CLANG_TIDY=ON`）、`python3` ≥3.11（模板脚本与 mock/E2E 测试，纯标准库）。
+
+最小安装 + 构建 + 安装二进制（默认落 `~/.local/bin/mini-agent`）：
+
+```sh
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y g++ cmake ninja-build libcurl4-openssl-dev
+# Fedora/RHEL: sudo dnf install -y gcc-c++ cmake ninja-build libcurl-devel
+# Arch: sudo pacman -S --needed base-devel cmake ninja libcurl
+
+cmake --preset linux-gcc-debug && cmake --build --preset linux-gcc-debug
+ctest --test-dir build/linux-gcc-debug --output-on-failure   # 可选自检
+cmake --install build/linux-gcc-debug
+```
+
+不用 preset 的最小路径：`cmake -S . -B build && cmake --build build && cmake --install build`（仍需 CMake/Ninja 或改用 `-G "Unix Makefiles"` 免装 Ninja）。
+
 本仓库已接入 C++ 业务（v1 已实现）。业务代码在 `src/` + `include/mini_agent/`，架构见 [系统架构](architecture.md)。
 
 | 命令 | 用途 |
@@ -50,6 +78,8 @@
 原有配置：环境变量 `MINI_AGENT_BASE_URL`/`MINI_AGENT_API_KEY`/`MINI_AGENT_MODEL` 优先于 `~/.config/mini-agent/config.json`；也可全部不设，在 TUI 内用 `/provider`、`/login`、`/model` 配置。模板见 `.env.example`（注释为英文；真实密钥只放本地 `.env` 或 shell 环境）。
 
 v4 模型元数据（设计 [010](design/010-model-metadata.md)）：`context_window`（正整数 token 数，状态栏 ctx"已用/最大"的分母与着色阈值来源；0/未设 = 只显示已用 token 单值；非法值整份配置失败关闭）与 `reasoning_effort`（字符串，非空即原样透传进每个 chat 请求；未设 = 请求体与 v3 字节一致）。env 覆盖 `MINI_AGENT_CONTEXT_WINDOW`、`MINI_AGENT_REASONING_EFFORT`；TUI 内 `/context <tokens>|off`、`/reasoning <value>|off` 即时设置并落盘。配置即权威来源：不探测、不被服务端应答覆盖。TUI 底部状态栏在 `model=… · session=…` 之后追加用量段：`ctx 45.2k/128.0k`（已占用/最大，按百分比 ≥70% 黄、≥90% 红；provider 未回 usage 时带 `~` 如 `ctx ~12.3k/128.0k`；未设窗口时单值 `ctx ~12.3k`）、`out 1.2k`（会话累计输出 token）、`reasoning=low`；全部未设/无数据时状态行与 v3 完全一致。token 用量经 `stream_options.include_usage` 从 SSE 末尾 usage chunk 采集（prompt 取末轮=实时上下文占用，completion/total 跨轮累加；失败 turn 不写入）；切模型复位读数。不支持 `reasoning_effort` 的网关报 400 时，TUI 提示 `/reasoning off`（配置值保留，不静默剔除）。
+
+v4.4（设计 010 §15）：debug 原始流量转储——`debug_log` 配置布尔（env `MINI_AGENT_DEBUG`、CLI `ask`/`run --debug`、TUI `/debug on|off`），开启后每次 chat 请求把 REQUEST 体与每条 SSE 帧追加写入 `<log path>.debug`（0600，与诊断日志同基路径）。**只有对话流量**：`/models` 列表与 `/context probe` 辅助请求按构造永不落盘；api_key 只存在于 Authorization header、不在任何 dump 里。dump 含对话正文（这正是开关的用途），按机密文件对待；元数据 Logger 的"零正文"保证不受影响（两者是不同文件）。
 
 v4.2（设计 010 §11）：`/reasoning` 不带参数时，若上次 `/models` 拉到的能力元数据里有当前模型的候选档位（OpenRouter 等网关的 `reasoning.supported_efforts`），直接出编号菜单选择（标 `<- default`/`<- current`）；无档位数据时仍可 `/reasoning <字面量>`。状态栏 `reasoning=` 优先显示**响应实测**级别（v4.2.1 优先级：网关回显档位 > 被本轮思考证据确认的配置值 > 有证据但无任何档位知识时 `on` > 无证据回显配置值），证据来自回显字段、`delta.reasoning_content` 思考流与 `usage.reasoning_tokens` 三路；读数只反映最近一次成功 turn（无证据即清空，不残留），切模型复位。`context_window` 未配置时 ctx 分母兜底用网关 caps 的 `context_length`（OpenRouter 形态可得）。思考正文本期不显示、不存储。
 

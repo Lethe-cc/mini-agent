@@ -1,11 +1,16 @@
 #include "mini_agent/provider.hpp"
 
 #include <curl/curl.h>
+#include <sys/stat.h>
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
 #include <set>
 #include <sstream>
 
@@ -65,6 +70,35 @@ size_t curl_accumulate(char* ptr, size_t size, size_t nmemb, void* userdata) {
     static_cast<std::string*>(userdata)->append(ptr, size * nmemb);
     return size * nmemb;
 }
+
+namespace {
+// v4.4 (design 010 §15): raw chat-traffic debug dump. Opt-in via
+// ProviderConfig::debug_log_path; append-only, 0600, one file shared by
+// all providers in the process. Only the conversation path calls this
+// (complete_chat): GET /models and the context probe never dump, so
+// auxiliary traffic stays out of the file by construction. Bodies here
+// are model I/O content -- the api_key lives in the Authorization
+// header only and is never part of a dumped payload.
+void debug_dump(const std::string& path, std::string_view tag, std::string_view payload) {
+    if (path.empty())
+        return;
+    static std::mutex dump_mutex;
+    std::lock_guard<std::mutex> lock(dump_mutex);
+    const bool fresh = !std::filesystem::exists(path);
+    std::ofstream file(path, std::ios::app);
+    if (!file)
+        return; // debug is best-effort; never breaks the request path
+    file << "=== " << tag << " "
+         << std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count()
+         << "ms ===\n"
+         << payload << '\n';
+    file.close();
+    if (fresh)
+        ::chmod(path.c_str(), 0600);
+}
+} // namespace
 
 std::string request_body(const Chat& chat, const std::string& model, const std::string& tools_json,
                          const std::string& reasoning_effort = {}, bool include_usage = false) {
@@ -371,9 +405,12 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     std::string finish_reason;
     TokenUsage usage;          // v4: filled by the usage chunk when the gateway sends one
     ActualReasoning reasoning; // v4.2: evidence collected across all chunks
+    // v4.4: chat traffic only (design 010 §15). One dump per round trip.
+    debug_dump(config_.debug_log_path, "REQUEST", body);
     ToolCallAccumulator tool_calls;
     SseLines lines;
     lines.on_data_ = [&](std::string&& payload) {
+        debug_dump(config_.debug_log_path, "SSE", payload);
         if (payload == "[DONE]")
             return;
         auto parsed = nlohmann::json::parse(payload, nullptr, false);

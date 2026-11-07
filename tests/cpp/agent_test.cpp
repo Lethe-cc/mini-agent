@@ -2208,6 +2208,36 @@ void test_v43_probe_parse() {
     check(ambig.kind == K::Unknown && ambig.value == 0, "ambiguous param -> Unknown");
 }
 
+void test_v44_debug_log() {
+    std::string error;
+    // config round-trip: written only when on; non-bool fails closed.
+    const auto on = mini_agent::config_from_json(R"({"model":"m","debug_log":true})", &error);
+    check(on.has_value() && on->debug_log, "debug_log parses");
+    check(mini_agent::config_to_json(*on).find("debug_log") != std::string::npos,
+          "debug_log written when on");
+    const auto off = mini_agent::config_from_json(R"({"model":"m"})", &error);
+    check(off.has_value() && !off->debug_log, "default off");
+    check(mini_agent::config_to_json(*off).find("debug_log") == std::string::npos,
+          "off omitted from output");
+    check(!mini_agent::config_from_json(R"({"debug_log":"yes"})", &error).has_value(),
+          "non-bool debug_log rejected");
+
+    // path derivation: <log_file>.debug; "off"/empty fall back to default.
+    mini_agent::AppConfig cfg;
+    cfg.base_url = "https://x.test/v1";
+    cfg.api_key = "k";
+    cfg.model = "m";
+    cfg.debug_log = true;
+    cfg.log_file = "/var/tmp/my.log";
+    check(cfg.to_provider().debug_log_path == "/var/tmp/my.log.debug", "debug path from log_file");
+    cfg.log_file = "off";
+    check(cfg.to_provider().debug_log_path.find(".debug") != std::string::npos &&
+              cfg.to_provider().debug_log_path.find("off") == std::string::npos,
+          "off sentinel falls back to default base");
+    cfg.debug_log = false;
+    check(cfg.to_provider().debug_log_path.empty(), "off -> no path");
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -2246,6 +2276,7 @@ int main() {
     test_v4_status_segments();
     test_v42_capabilities_and_menu();
     test_v43_probe_parse();
+    test_v44_debug_log();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";
