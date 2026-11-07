@@ -154,6 +154,24 @@ std::vector<std::string> approval_rows(const std::string& tool_name,
 // one row per tool (sanitized), header + count footer.
 std::vector<std::string> tool_registry_rows(const std::vector<std::string>& rendered_tools);
 
+// ---------------------------------------------------------------- v4 status
+
+// Context-window / reasoning-effort configuration values (design 010).
+struct StatusInputs {
+    long long context_tokens = 0; // last prompt size (usage or estimate)
+    bool context_estimated = false;
+    long long context_window = 0;    // config; 0 = unset
+    long long completion_tokens = 0; // session sum (0 = nothing reported yet)
+    std::string reasoning_effort;    // config; empty = unset
+};
+// Tinted trailing segments for the bottom status row: `ctx 45%` (or
+// `~45%` estimated, or `ctx 12.3k` when no window is configured) with the
+// 70%/90% yellow/red thresholds, `out 1.2k`, and `reasoning=<value>`.
+// Empty segments are omitted entirely; returns "" when nothing to show so
+// the pre-v4 status row stays byte-identical. Colour codes follow the
+// existing `tint` scheme (2 dim default, 33 yellow, 31 red).
+std::string status_usage_segments(bool colors, const StatusInputs& inputs);
+
 // Interactive TUI over one session. Owns the raw-mode/termios lifecycle and
 // the request worker; exits with an exit code. Persists per-turn saves via
 // store (atomic + lock already provided). Returns process exit code.

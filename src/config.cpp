@@ -182,6 +182,7 @@ ProviderConfig AppConfig::to_provider() const {
     p.base_url = base_url;
     p.api_key = api_key;
     p.model = model;
+    p.reasoning_effort = reasoning_effort; // v4: empty == field omitted
     if (const char* timeout = env_nonempty("MINI_AGENT_TIMEOUT_SECONDS")) {
         const long parsed = std::strtol(timeout, nullptr, 10);
         if (parsed > 0)
@@ -219,6 +220,11 @@ std::string config_to_json(const AppConfig& config) {
         // "" (explicit disable) is written; absent = built-in default.
         root["system_prompt"] = *config.system_prompt;
     }
+    // v4 fields (design 010): written only when set.
+    if (config.context_window > 0)
+        root["context_window"] = config.context_window;
+    if (!config.reasoning_effort.empty())
+        root["reasoning_effort"] = config.reasoning_effort;
     // v2 fields (design 008 section 5.3): written only when they differ
     // from defaults, keeping v1-era files compact and diff-clean.
     if (config.tool_approval != "ask")
@@ -293,6 +299,21 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
             return std::nullopt;
         }
     }
+
+    // v4 optional fields (design 010). context_window must be a positive
+    // integer when present; a non-positive or non-integer value fails
+    // closed (config is authoritative -- a silently-dropped window would
+    // make the status bar lie).
+    if (auto it = parsed.find("context_window"); it != parsed.end()) {
+        if (it->is_number_integer() && it->get<int64_t>() > 0) {
+            config.context_window = it->get<int64_t>();
+        } else {
+            if (error)
+                *error = "config context_window must be a positive integer";
+            return std::nullopt;
+        }
+    }
+    config.reasoning_effort = get_str("reasoning_effort");
 
     // v2 optional fields; unknown/absent -> defaults (forward-read rule).
     if (auto approval = get_str("tool_approval"); !approval.empty()) {
@@ -422,6 +443,13 @@ AppConfig load_config_merged(std::string* file_error) {
         config.log_file = v;
     if (const char* v = env_nonempty("MINI_AGENT_WORKSPACE"))
         config.workspace = v; // v3: scripts pin the boundary per invocation
+    if (const char* v = env_nonempty("MINI_AGENT_CONTEXT_WINDOW")) {
+        const long long parsed_window = std::strtoll(v, nullptr, 10);
+        if (parsed_window > 0)
+            config.context_window = parsed_window; // v4: invalid keeps file config
+    }
+    if (const char* v = env_nonempty("MINI_AGENT_REASONING_EFFORT"))
+        config.reasoning_effort = v; // v4: verbatim passthrough value
     if (const char* v = env_nonempty("MINI_AGENT_TOOL_APPROVAL"); v && *v) {
         const std::string approval = v;
         if (approval == "ask" || approval == "allowlist" || approval == "off")

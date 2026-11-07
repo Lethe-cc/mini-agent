@@ -40,9 +40,9 @@
 namespace mini_agent::tui {
 namespace {
 
-constexpr std::string_view kCommands[] = {"/approve", "/config",   "/cwd",      "/exit",
-                                          "/help",    "/login",    "/mcp",      "/model",
-                                          "/models",  "/provider", "/sessions", "/tools"};
+constexpr std::string_view kCommands[] = {
+    "/approve", "/config", "/context", "/cwd",      "/exit",      "/help",     "/login",
+    "/mcp",     "/model",  "/models",  "/provider", "/reasoning", "/sessions", "/tools"};
 
 class RawMode {
   public:
@@ -112,6 +112,9 @@ struct TurnResult {
     bool aborted = false;
     std::string reply;
     std::string error;
+    // v4: provider usage rolled up by run_turn (zero when the gateway
+    // reported nothing). Read by the main thread after join().
+    TokenUsage usage;
     // Credential evidence from the completion request. The worker fills these
     // in and the main thread folds them into `auth` (the worker must never
     // touch main-thread state such as `auth`, `logger` or `screen`).
@@ -646,6 +649,45 @@ std::vector<std::string> tool_registry_rows(const std::vector<std::string>& rend
     return rows;
 }
 
+std::string status_usage_segments(bool colors, const StatusInputs& inputs) {
+    // Pi-style compact token counts: <1k raw, <1M one-decimal k, else M.
+    auto format_token_count = [](long long n) {
+        if (n < 1000)
+            return std::to_string(n);
+        char buf[32];
+        if (n < 1000000)
+            std::snprintf(buf, sizeof(buf), "%.1fk", static_cast<double>(n) / 1000.0);
+        else
+            std::snprintf(buf, sizeof(buf), "%.1fM", static_cast<double>(n) / 1000000.0);
+        return std::string(buf);
+    };
+    // v4 trailing segments (design 010): ctx reading, out sum, reasoning.
+    // Each segment is ` · ` + tinted text; the whole row keeps the
+    // pre-v4 shape when every input is unset (returns "").
+    std::string out;
+    auto segment = [&](const char* sgr, const std::string& text) {
+        out += " \u00b7 ";
+        out += tint(colors, sgr, text);
+    };
+    if (inputs.context_tokens > 0) {
+        const std::string approx = inputs.context_estimated ? "~" : "";
+        if (inputs.context_window > 0) {
+            const long long percent = inputs.context_tokens * 100 / inputs.context_window;
+            const char* sgr = percent >= 90 ? "31" : (percent >= 70 ? "33" : "2");
+            segment(sgr, "ctx " + approx + std::to_string(percent) + "%");
+        } else {
+            segment("2", "ctx " + approx + format_token_count(inputs.context_tokens));
+        }
+    }
+    if (inputs.completion_tokens > 0) {
+        segment("2", "out " + format_token_count(inputs.completion_tokens));
+    }
+    if (!inputs.reasoning_effort.empty()) {
+        segment("2", "reasoning=" + inputs.reasoning_effort);
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------- live screen
 
 namespace {
@@ -1050,6 +1092,43 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     int tab_state = 0;
     bool streaming = false;
     std::size_t last_prompt_chars = 0;
+    // v4 status-bar state: usage readings folded from successful turns
+    // (main-thread only, written after worker join). When no provider ever
+    // reported usage, the ctx reading falls back to a character estimate
+    // of the outgoing chat, recomputed lazily at turn boundaries.
+    long long status_context_tokens = 0;
+    long long status_completion_tokens = 0;
+    bool status_context_estimated = false;
+    bool status_usage_reported = false;
+    long long estimated_chat_tokens = 0;
+    bool estimate_dirty = true;
+    auto context_reading = [&]() -> StatusInputs {
+        StatusInputs inputs;
+        inputs.context_window = config.context_window;
+        inputs.reasoning_effort = config.reasoning_effort;
+        inputs.completion_tokens = status_completion_tokens;
+        if (status_usage_reported && status_context_tokens > 0) {
+            inputs.context_tokens = status_context_tokens;
+            inputs.context_estimated = status_context_estimated;
+        } else {
+            if (estimate_dirty) {
+                estimated_chat_tokens = estimate_context_tokens(chat_to_json(session.chat));
+                estimate_dirty = false;
+            }
+            inputs.context_tokens = estimated_chat_tokens;
+            inputs.context_estimated = true;
+        }
+        return inputs;
+    };
+    // v4: switching models invalidates every usage reading (the window and
+    // all prior counts belong to the old route).
+    auto reset_usage_readings = [&] {
+        status_context_tokens = 0;
+        status_completion_tokens = 0;
+        status_usage_reported = false;
+        status_context_estimated = false;
+        estimate_dirty = true;
+    };
     auto turn_start = steady_now();
     auto last_ctrl_c = std::chrono::steady_clock::time_point{};
 
@@ -1266,6 +1345,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 std::lock_guard<std::mutex> lock(tool_mutex);
                 tool_events.push_back(std::move(round));
             };
+            // v4: run_turn writes here only on a successful turn; the
+            // worker copies it into `result` (join-then-read discipline).
+            TokenUsage turn_usage;
+            turn_options.usage_out = &turn_usage;
             try {
                 // Run the (possibly multi-round) turn on a detached copy:
                 // run_turn commits the whole turn to its Chat only on
@@ -1280,6 +1363,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     [&](std::string_view d) { deltas.append(d); },
                     [&] { return abort_requested.load(); }, turn_options);
                 session.chat = std::move(turn_chat);
+                r.usage = turn_usage;
                 r.ok = true;
             } catch (const ProviderError& e) {
                 r.error = e.what();
@@ -1424,6 +1508,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             } else {
                 config.model = std::string(arg);
                 session.meta.model = config.model;
+                reset_usage_readings(); // v4: window/counts belong to the old model
                 save_and_report(true);
             }
             return true;
@@ -1478,6 +1563,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                           std::string(config.api_key.empty() ? "(not set)" : "***set***"));
             screen.commit("login=" + std::string(auth_log_token(auth)));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
+            // v4 fields (design 010).
+            screen.commit("context_window=" + (config.context_window > 0
+                                                   ? std::to_string(config.context_window)
+                                                   : std::string("(not set)")));
+            screen.commit("reasoning_effort=" + (config.reasoning_effort.empty()
+                                                     ? std::string("(not set)")
+                                                     : config.reasoning_effort));
             screen.commit("config file: " + default_config_path().string() +
                           " (env overrides file)");
             return true;
@@ -1489,6 +1581,65 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             for (const auto& id : ids)
                 screen.commit("  " + id);
             screen.commit("resume after exit: mini-agent run --session <id>");
+            return true;
+        }
+        if (line.rfind("/context", 0) == 0) {
+            // v4 (design 010): model context window for the status-bar
+            // ctx% reading. Config is authoritative -- no probing.
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                const auto inputs = context_reading();
+                std::string shown = config.context_window > 0
+                                        ? std::to_string(config.context_window)
+                                        : std::string("(not set)");
+                screen.commit("context_window=" + shown +
+                              "; usage /context <tokens> or /context off");
+                screen.commit("ctx reading: " +
+                              (inputs.context_tokens > 0
+                                   ? (inputs.context_estimated ? "~" : "") +
+                                         std::to_string(inputs.context_tokens) + " tokens" +
+                                         (config.context_window > 0
+                                              ? " = " +
+                                                    std::to_string(inputs.context_tokens * 100 /
+                                                                   config.context_window) +
+                                                    "% of window"
+                                              : std::string())
+                                   : std::string("(no data yet)")) +
+                              (status_usage_reported ? " · provider-reported" : " · estimated"));
+            } else if (arg == "off" || arg == "0") {
+                config.context_window = 0;
+                save_and_report();
+                screen.commit("[ok] context window cleared · status shows tokens, no %");
+            } else {
+                const long long parsed_window = std::strtoll(std::string(arg).c_str(), nullptr, 10);
+                if (parsed_window <= 0) {
+                    screen.commit("[error] /context expects a positive token count");
+                    return true;
+                }
+                config.context_window = parsed_window;
+                save_and_report();
+            }
+            return true;
+        }
+        if (line.rfind("/reasoning", 0) == 0) {
+            // v4 (design 010): reasoning_effort passthrough. Verbatim
+            // value; the server is the arbiter (400 -> hint, no auto-drop:
+            // config is authoritative and silent removal would lie about
+            // what was sent).
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                screen.commit("reasoning_effort=" +
+                              (config.reasoning_effort.empty() ? std::string("(not set)")
+                                                               : config.reasoning_effort) +
+                              "; usage /reasoning <low|medium|high|value> or /reasoning off");
+            } else if (arg == "off") {
+                config.reasoning_effort.clear();
+                save_and_report();
+                screen.commit("[ok] reasoning effort cleared · requests omit the field");
+            } else {
+                config.reasoning_effort = std::string(arg);
+                save_and_report();
+            }
             return true;
         }
         if (line.rfind("/approve", 0) == 0) {
@@ -1781,6 +1932,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             if (const auto pick = model_choice(model_choices, line)) {
                                 config.model = *pick;
                                 session.meta.model = config.model;
+                                reset_usage_readings(); // v4
                                 save_and_report();
                                 logger->event("model_select",
                                               {{"model", config.model}, {"source", "menu"}});
@@ -1892,6 +2044,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 std::chrono::duration_cast<std::chrono::milliseconds>(steady_now() - turn_start)
                     .count();
             if (result.ok) {
+                // v4: fold this turn's usage into the status-bar readings.
+                // prompt side = live context (last round), completion side
+                // = session sum. Turns without a usage chunk leave the
+                // estimate fallback in play (context_estimated flips).
+                if (!result.usage.empty()) {
+                    if (result.usage.prompt_tokens > 0) {
+                        status_context_tokens = result.usage.prompt_tokens;
+                        status_context_estimated = false;
+                    }
+                    status_completion_tokens += result.usage.completion_tokens;
+                    status_usage_reported = true;
+                }
+                estimate_dirty = true;
                 logger->event("turn", {{"status", "ok"},
                                        {"elapsed_ms", std::to_string(elapsed_ms)},
                                        {"chars_in", std::to_string(last_prompt_chars)},
@@ -1922,6 +2087,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.clear_live();
                 screen.commit("You: " + last_user);
                 screen.commit("[error] " + result.error);
+                // v4: a 400 right after we started sending reasoning_effort
+                // is most likely the gateway rejecting the field -- name the
+                // probable cause and the fix instead of leaving the raw error.
+                if (result.http_status == 400 && !config.reasoning_effort.empty())
+                    screen.commit("[hint] if this gateway does not support reasoning_effort, "
+                                  "clear it with /reasoning off (config value is otherwise "
+                                  "kept verbatim)");
                 if (tools_active)
                     screen.commit("[note] tools already ran this turn; their side "
                                   "effects were not rolled back");
@@ -2048,6 +2220,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             }
             if (approval_policy == "off" && !tool_registry->empty())
                 status += tint(sc, "1;31", " · auto-tools"); // persistent danger marker (008 5.4)
+            // v4: usage tail (ctx/out/reasoning) before transient states so
+            // streaming/approval messages keep their established position.
+            status += status_usage_segments(sc, context_reading());
             if (approval_pending()) {
                 unsigned long long seq = approval_slot.request_seq.load();
                 ToolCall snapshot;

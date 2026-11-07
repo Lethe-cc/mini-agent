@@ -182,6 +182,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         for chunk in seq:
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+        # v4: OpenAI semantics -- the usage chunk only arrives when the
+        # client asked for it via stream_options.include_usage, and it
+        # carries an empty choices array.
+        if (body.get("stream_options") or {}).get("include_usage"):
+            usage = {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 123,
+                    "completion_tokens": 45,
+                    "total_tokens": 168,
+                },
+            }
+            self.wfile.write(f"data: {json.dumps(usage)}\n\n".encode())
         self.wfile.write(b"data: [DONE]\n\n")
 
     def log_message(self, *args):

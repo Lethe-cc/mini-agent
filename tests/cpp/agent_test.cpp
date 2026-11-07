@@ -1100,7 +1100,7 @@ void test_tool_loop_rounds_and_commit() {
                                        const ShouldAbort&) override {
             ++n;
             if (n == 1)
-                return CompletionResult{"", {ToolCall{"t1", "echo", "{}"}}};
+                return CompletionResult{"", {ToolCall{"t1", "echo", "{}"}}, {}};
             throw ProviderError(ProviderErrorKind::Network, "late failure");
         }
     } thrower;
@@ -1137,8 +1137,8 @@ void test_max_tool_rounds() {
             last_tools = tools;
             last_history = c.messages().size();
             if (n < 4)
-                return CompletionResult{"", {ToolCall{"t" + std::to_string(n), "echo", "{}"}}};
-            return CompletionResult{"gave up gracefully", {}};
+                return CompletionResult{"", {ToolCall{"t" + std::to_string(n), "echo", "{}"}}, {}};
+            return CompletionResult{"gave up gracefully", {}, {}};
         }
         std::string last_tools;
         std::size_t last_history = 0;
@@ -1874,6 +1874,216 @@ void test_git_tools() {
     std::filesystem::remove_all(repo, ec);
 }
 
+// v4: provider that reports token usage through complete_chat.
+class FakeUsageProvider final : public mini_agent::Provider {
+  public:
+    FakeUsageProvider(std::vector<mini_agent::TokenUsage> usages, int fail_on_call = -1)
+        : usages_(std::move(usages)), fail_on_call_(fail_on_call) {
+    }
+    std::string complete(const mini_agent::Chat&, const std::function<void(std::string_view)>&,
+                         const mini_agent::ShouldAbort&) override {
+        return "plain";
+    }
+    mini_agent::CompletionResult
+    complete_chat(const mini_agent::Chat&, const std::string&,
+                  const std::function<void(std::string_view)>& on_delta,
+                  const mini_agent::ShouldAbort&) override {
+        if (index_ == fail_on_call_) {
+            throw mini_agent::ProviderError(mini_agent::ProviderErrorKind::Network,
+                                            "fake network failure");
+        }
+        mini_agent::CompletionResult result;
+        result.text = "r" + std::to_string(index_);
+        // Round 1 of a multi-round turn must request a tool so the loop
+        // makes a second provider call and the usage accumulate branch runs.
+        if (emit_tool_call_first && index_ == 0)
+            result.tool_calls.push_back(mini_agent::ToolCall{"t1", "echo", "{}"});
+        on_delta(result.text);
+        if (index_ < static_cast<int>(usages_.size()))
+            result.usage = usages_[static_cast<std::size_t>(index_)];
+        ++index_;
+        return result;
+    }
+
+    bool emit_tool_call_first = false;
+
+  private:
+    std::vector<mini_agent::TokenUsage> usages_;
+    int index_ = 0;
+    int fail_on_call_ = -1;
+};
+
+void test_v4_config_fields() {
+    std::string error;
+    // context_window round-trips through JSON; reasoning_effort too.
+    const auto parsed = mini_agent::config_from_json(
+        R"({"model":"m","context_window":128000,"reasoning_effort":"high"})", &error);
+    check(parsed.has_value(), "v4 fields parse");
+    check(parsed->context_window == 128000, "context_window parsed");
+    check(parsed->reasoning_effort == "high", "reasoning_effort parsed");
+    const auto text = mini_agent::config_to_json(*parsed);
+    check(text.find("128000") != std::string::npos, "context_window written");
+    check(text.find("reasoning_effort") != std::string::npos, "reasoning written");
+
+    // fail-closed: a non-positive or non-integer context_window is rejected.
+    check(!mini_agent::config_from_json(R"({"context_window":0})", &error).has_value(),
+          "zero window rejected");
+    check(!mini_agent::config_from_json(R"({"context_window":-5})", &error).has_value(),
+          "negative window rejected");
+    check(!mini_agent::config_from_json(R"({"context_window":"big"})", &error).has_value(),
+          "non-integer window rejected");
+
+    // defaults: absent fields stay unset and are omitted from output.
+    const auto bare = mini_agent::config_from_json(R"({"model":"m"})", &error);
+    check(bare.has_value() && bare->context_window == 0 && bare->reasoning_effort.empty(),
+          "v4 defaults unset");
+    check(mini_agent::config_to_json(*bare).find("context_window") == std::string::npos,
+          "unset window omitted from output");
+
+    // to_provider carries reasoning_effort (empty == omitted in the body).
+    mini_agent::AppConfig cfg;
+    cfg.base_url = "https://x.test/v1";
+    cfg.api_key = "k";
+    cfg.model = "m";
+    cfg.reasoning_effort = "medium";
+    check(cfg.to_provider().reasoning_effort == "medium", "provider carries reasoning effort");
+}
+
+void test_v4_status_segments() {
+    using mini_agent::tui::StatusInputs;
+    // Nothing set -> empty string keeps the pre-v4 status row byte-identical.
+    check(mini_agent::tui::status_usage_segments(false, StatusInputs{}).empty(),
+          "no inputs -> no segments");
+
+    // ctx% with the 70/90 colour thresholds (colour codes present when on).
+    StatusInputs mid;
+    mid.context_tokens = 80000;
+    mid.context_window = 100000; // 80% -> yellow 33
+    const auto mid_line = mini_agent::tui::status_usage_segments(true, mid);
+    check(mid_line.find("ctx 80%") != std::string::npos, "ctx percent shown");
+    check(mid_line.find("\x1b[33m") != std::string::npos, "80% is yellow");
+    StatusInputs high = mid;
+    high.context_tokens = 95000; // 95% -> red 31
+    check(mini_agent::tui::status_usage_segments(true, high).find("\x1b[31m") != std::string::npos,
+          "95% is red");
+    StatusInputs low = mid;
+    low.context_tokens = 30000; // 30% -> dim 2
+    check(mini_agent::tui::status_usage_segments(true, low).find("\x1b[2m") != std::string::npos,
+          "30% is dim");
+
+    // estimated flag adds the ~ prefix; no window falls back to a token count.
+    StatusInputs est;
+    est.context_tokens = 5000;
+    est.context_estimated = true;
+    const auto est_line = mini_agent::tui::status_usage_segments(false, est);
+    check(est_line.find("ctx ~") != std::string::npos, "estimate marked with tilde");
+    StatusInputs winless;
+    winless.context_tokens = 5000;
+    check(mini_agent::tui::status_usage_segments(false, winless).find("ctx 5.0k") !=
+              std::string::npos,
+          "no window -> token count");
+
+    // reasoning + out segments append in order.
+    StatusInputs full;
+    full.context_tokens = 1000;
+    full.context_window = 100000;
+    full.completion_tokens = 2500;
+    full.reasoning_effort = "high";
+    const auto full_line = mini_agent::tui::status_usage_segments(false, full);
+    check(full_line.find("out 2.5k") != std::string::npos, "out sum shown");
+    check(full_line.find("reasoning=high") != std::string::npos, "reasoning shown");
+    // colours off -> no escape bytes at all.
+    check(mini_agent::tui::status_usage_segments(false, full).find('\x1b') == std::string::npos,
+          "colors off strips SGR");
+}
+
+void test_v4_usage_collection() {
+    // request body: v4 fields appear only when set (regression hook).
+    mini_agent::Chat chat;
+    chat.add(mini_agent::Message{mini_agent::Role::User, "q", std::nullopt, {}});
+    const std::string base = mini_agent::preview_chat_request_body(chat, "m", "");
+    check(base.find("stream_options") == std::string::npos, "usage opt-in omitted by default");
+    check(base.find("reasoning_effort") == std::string::npos, "reasoning omitted when unset");
+    const std::string with_usage = mini_agent::preview_chat_request_body(chat, "m", "", "", true);
+    check(with_usage.find("\"stream_options\"") != std::string::npos &&
+              with_usage.find("\"include_usage\":true") != std::string::npos,
+          "usage opt-in present when requested");
+    const std::string with_reasoning =
+        mini_agent::preview_chat_request_body(chat, "m", "", "high", true);
+    check(with_reasoning.find("\"reasoning_effort\":\"high\"") != std::string::npos,
+          "reasoning effort passed through verbatim");
+
+    // loop roll-up: last prompt wins, completion/total accumulate. With no
+    // registry the turn is a single round, so exactly the first usage lands
+    // (the multi-round accumulate rule is the loop's own contract).
+    FakeUsageProvider provider({
+        {100, 10, 110}, // round 1
+        {150, 20, 170}, // never reached without a tools registry
+    });
+    mini_agent::Chat loop_chat;
+    loop_chat.add(mini_agent::Message{mini_agent::Role::User, "sys", std::nullopt, {}});
+    mini_agent::TurnOptions options;
+    mini_agent::TokenUsage usage;
+    options.usage_out = &usage;
+    mini_agent::run_turn(
+        loop_chat, provider, "hi", [](std::string_view) {}, [] { return false; }, options);
+    check(usage.prompt_tokens == 100, "prompt_tokens = last round");
+    check(usage.completion_tokens == 10, "completion_tokens accumulate");
+    check(usage.total_tokens == 110, "total_tokens accumulate");
+
+    // Multi-round: with a tools registry the loop runs two provider calls,
+    // so the accumulate branch is exercised -- prompt takes the LAST round,
+    // completion/total sum across rounds.
+    FakeUsageProvider multi({
+        {100, 10, 110}, // round 1 (requests a tool)
+        {150, 20, 170}, // round 2 (final text): newer prompt replaces 100
+    });
+    multi.emit_tool_call_first = true;
+    mini_agent::Chat multi_chat;
+    multi_chat.add(mini_agent::Message{mini_agent::Role::User, "sys", std::nullopt, {}});
+    auto reg = std::make_unique<mini_agent::ToolRegistry>();
+    reg->add(std::unique_ptr<mini_agent::ToolRuntime>(new FakeRuntime()));
+    mini_agent::TurnOptions multi_options;
+    multi_options.tools = reg.get();
+    mini_agent::TokenUsage multi_usage;
+    multi_options.usage_out = &multi_usage;
+    mini_agent::run_turn(
+        multi_chat, multi, "hi", [](std::string_view) {}, [] { return false; }, multi_options);
+    check(multi_usage.prompt_tokens == 150, "multi-round prompt = last");
+    check(multi_usage.completion_tokens == 30, "multi-round completion sums");
+    check(multi_usage.total_tokens == 280, "multi-round total sums");
+
+    // failed turn: usage_out untouched (same commit boundary as history).
+    FakeUsageProvider failing({{100, 10, 110}}, 0);
+    mini_agent::Chat fail_chat;
+    fail_chat.add(mini_agent::Message{mini_agent::Role::User, "sys", std::nullopt, {}});
+    mini_agent::TokenUsage untouched{7, 7, 7};
+    options.usage_out = &untouched;
+    bool threw = false;
+    try {
+        mini_agent::run_turn(
+            fail_chat, failing, "hi", [](std::string_view) {}, [] { return false; }, options);
+    } catch (const mini_agent::ProviderError&) {
+        threw = true;
+    }
+    check(threw && untouched.prompt_tokens == 7, "failed turn leaves usage_out");
+
+    // estimator: coarse but monotonic, empty input -> 0.
+    check(mini_agent::estimate_context_tokens("") == 0, "estimate empty is zero");
+    check(mini_agent::estimate_context_tokens("hello world this is a plain english sentence") > 0,
+          "estimate ascii positive");
+    const long long ascii = mini_agent::estimate_context_tokens(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); // 64 a's
+    const long long cjk =
+        mini_agent::estimate_context_tokens("你好你好你好你好你好你好你好你好"
+                                            "你好你好你好你好你好你好你好你好"); // 32 han
+    check(ascii == 16, "ascii ~4 chars per token");
+    check(cjk == 32, "cjk ~1 token per codepoint");
+    check(mini_agent::estimate_context_tokens(std::string(64, 'a')) ==
+              mini_agent::estimate_context_tokens(std::string(64, 'a')),
+          "estimate deterministic");
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -1907,6 +2117,9 @@ int main() {
     test_file_tools();
     test_v3_config_and_prompt();
     test_approval_preview_rows();
+    test_v4_usage_collection();
+    test_v4_config_fields();
+    test_v4_status_segments();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

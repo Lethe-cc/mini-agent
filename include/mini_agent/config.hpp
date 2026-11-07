@@ -49,6 +49,17 @@ struct AppConfig {
     // (design 009 section 5.5).
     std::optional<std::string> system_prompt;
 
+    // v4 (design 010): model metadata the gateway cannot be trusted to
+    // provide. Config is the authoritative source -- no probing, no
+    // override by server replies.
+    // context_window: divisor for the status-bar ctx% reading; 0 = unset
+    // (status bar then shows token counts without a percentage).
+    long long context_window = 0;
+    // reasoning_effort: verbatim passthrough into the request body when
+    // non-empty ("low"|"medium"|"high"|provider-specific); empty = field
+    // omitted == pre-v4 byte-identical request.
+    std::string reasoning_effort;
+
     // v2 tool layer (design 008 §5.3). Approval policy: "ask" (default,
     // human-in-the-loop per ADR 006), "allowlist", "off".
     std::string tool_approval = "ask";

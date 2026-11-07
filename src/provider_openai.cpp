@@ -66,11 +66,23 @@ size_t curl_accumulate(char* ptr, size_t size, size_t nmemb, void* userdata) {
     return size * nmemb;
 }
 
-std::string request_body(const Chat& chat, const std::string& model,
-                         const std::string& tools_json) {
+std::string request_body(const Chat& chat, const std::string& model, const std::string& tools_json,
+                         const std::string& reasoning_effort = {}, bool include_usage = false) {
     nlohmann::json root;
     root["model"] = model;
     root["stream"] = true;
+    // v4: ask the gateway to append a final usage chunk to the SSE stream.
+    // Off by default so preview_chat_request_body (and thus the v1
+    // byte-identical regression hook) keeps the historical shape; the real
+    // completion path turns it on.
+    if (include_usage) {
+        root["stream_options"] = {{"include_usage", true}};
+    }
+    // v4: verbatim passthrough when configured; omitted otherwise (server
+    // default). Empty == byte-identical pre-v4 request.
+    if (!reasoning_effort.empty()) {
+        root["reasoning_effort"] = reasoning_effort;
+    }
     root["messages"] = nlohmann::json::parse(chat_to_json(chat));
     // Assistant messages carrying tool_calls must send the wire shape
     // {id, type:"function", function:{name, arguments}} (design 008 5.2:
@@ -306,8 +318,9 @@ class ToolCallAccumulator {
 // builder (anon-namespace) to agent_test so the no-tools path can be proven
 // byte-identical after the v2 merge. Not part of any public interface.
 std::string preview_chat_request_body(const Chat& chat, const std::string& model,
-                                      const std::string& tools_json) {
-    return request_body(chat, model, tools_json);
+                                      const std::string& tools_json,
+                                      const std::string& reasoning_effort, bool include_usage) {
+    return request_body(chat, model, tools_json, reasoning_effort, include_usage);
 }
 
 std::string OpenAiProvider::complete(const Chat& chat,
@@ -322,7 +335,9 @@ CompletionResult Provider::complete_chat(const Chat& chat, const std::string&,
     // v1 fallback for providers without a tool loop (design 008 section
     // 5.2): tools are advertised in the request but the base transport
     // returns text only.
-    return CompletionResult{complete(chat, on_delta, should_abort), {}};
+    CompletionResult text_only; // v1 fallback: no tool loop, no usage
+    text_only.text = complete(chat, on_delta, should_abort);
+    return text_only;
 }
 
 CompletionResult
@@ -341,7 +356,8 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     std::string endpoint = trimmed == std::string::npos ? url : url.substr(0, trimmed + 1);
     endpoint += "/chat/completions";
 
-    const std::string body = request_body(chat, config_.model, tools_json);
+    const std::string body = request_body(chat, config_.model, tools_json, config_.reasoning_effort,
+                                          /*include_usage = */ true);
     const std::string auth = "Authorization: Bearer " + config_.api_key;
     const std::string type = "Content-Type: application/json";
     const std::string accept = "Accept: text/event-stream";
@@ -353,6 +369,7 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     std::string full;
     std::string http_error;
     std::string finish_reason;
+    TokenUsage usage; // v4: filled by the usage chunk when the gateway sends one
     ToolCallAccumulator tool_calls;
     SseLines lines;
     lines.on_data_ = [&](std::string&& payload) {
@@ -371,6 +388,28 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
             throw ProviderError(ProviderErrorKind::Protocol, msg);
         }
         const auto choices = parsed.find("choices");
+        // v4: usage chunk (stream_options.include_usage) carries `usage`
+        // with an empty/absent choices array -- read it before the choices
+        // guard below returns early. Last-seen wins (gateways that emit
+        // per-chunk usage end with the authoritative total).
+        if (auto u = parsed.find("usage"); u != parsed.end() && u->is_object()) {
+            const auto num = [&u](const char* key) -> long long {
+                if (auto it = u->find(key); it != u->end() && it->is_number_integer())
+                    return it->get<long long>();
+                return 0;
+            };
+            usage.prompt_tokens = num("prompt_tokens");
+            usage.completion_tokens = num("completion_tokens");
+            usage.total_tokens = num("total_tokens");
+            // Some gateways use Anthropic-style names; fold them in only
+            // when the OpenAI keys were absent (008 R2 divergence rule).
+            if (usage.prompt_tokens == 0)
+                usage.prompt_tokens = num("input_tokens");
+            if (usage.completion_tokens == 0)
+                usage.completion_tokens = num("output_tokens");
+            if (usage.total_tokens == 0)
+                usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+        }
         if (choices == parsed.end() || !choices->is_array() || choices->empty()) {
             return;
         }
@@ -453,6 +492,7 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     CompletionResult result;
     result.text = std::move(full);
     result.tool_calls = tool_calls.finish();
+    result.usage = usage;
     // Fail LOUD where an earlier build stayed silent: the stream carried
     // tool_call fragments (or finish_reason "tool_calls") but nothing
     // completed -- a gateway shape we do not parse (fragments without
@@ -497,6 +537,41 @@ std::optional<std::vector<std::string>> parse_models_json(std::string_view body,
     std::sort(ids.begin(), ids.end());
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
     return ids;
+}
+
+long long estimate_context_tokens(std::string_view text) {
+    // Coarse character-class estimate (v4 fallback when a gateway sends no
+    // usage chunk). Walk UTF-8 codepoints: ASCII letters/digits/punct run
+    // at ~4 chars/token, CJK & fullwidth at ~1.5 chars each, everything
+    // else ~3. Never exact -- callers must mark results with `~`.
+    long long ascii_chars = 0;
+    long long cjk_codepoints = 0;
+    long long other_codepoints = 0;
+    std::size_t i = 0;
+    while (i < text.size()) {
+        const unsigned char b0 = static_cast<unsigned char>(text[i]);
+        std::size_t len = 1;
+        if (b0 < 0x80) {
+            ++ascii_chars;
+        } else {
+            if ((b0 >> 5) == 0b110)
+                len = 2;
+            else if ((b0 >> 4) == 0b1110)
+                len = 3;
+            else if ((b0 >> 3) == 0b11110)
+                len = 4;
+            // U+4E00..U+9FFF, U+3040..U+30FF (kana), U+AC00..U+D7AF (hangul),
+            // U+FF00..U+FFEF (fullwidth): decode only 3-byte range cheaply.
+            const bool likely_cjk = len == 3 && b0 >= 0xE3 && b0 <= 0xEF;
+            if (likely_cjk)
+                ++cjk_codepoints;
+            else
+                ++other_codepoints;
+        }
+        i += len;
+    }
+    const long long tokens = ascii_chars / 4 + cjk_codepoints + other_codepoints / 3;
+    return tokens > 0 ? tokens : (text.empty() ? 0 : 1);
 }
 
 std::vector<std::string> Provider::list_models() {

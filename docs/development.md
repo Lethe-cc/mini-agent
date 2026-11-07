@@ -49,6 +49,8 @@
 
 原有配置：环境变量 `MINI_AGENT_BASE_URL`/`MINI_AGENT_API_KEY`/`MINI_AGENT_MODEL` 优先于 `~/.config/mini-agent/config.json`；也可全部不设，在 TUI 内用 `/provider`、`/login`、`/model` 配置。模板见 `.env.example`（注释为英文；真实密钥只放本地 `.env` 或 shell 环境）。
 
+v4 模型元数据（设计 [010](design/010-model-metadata.md)）：`context_window`（正整数 token 数，状态栏 ctx% 的除数；0/未设 = 只显示 token 数不显示百分比；非法值整份配置失败关闭）与 `reasoning_effort`（字符串，非空即原样透传进每个 chat 请求；未设 = 请求体与 v3 字节一致）。env 覆盖 `MINI_AGENT_CONTEXT_WINDOW`、`MINI_AGENT_REASONING_EFFORT`；TUI 内 `/context <tokens>|off`、`/reasoning <value>|off` 即时设置并落盘。配置即权威来源：不探测、不被服务端应答覆盖。TUI 底部状态栏在 `model=… · session=…` 之后追加用量段：`ctx 45%`（≥70% 黄、≥90% 红；provider 未回 usage 时显示 `ctx ~12.3k` 字符类估算）、`out 1.2k`（会话累计输出 token）、`reasoning=low`；全部未设/无数据时状态行与 v3 完全一致。token 用量经 `stream_options.include_usage` 从 SSE 末尾 usage chunk 采集（prompt 取末轮=实时上下文占用，completion/total 跨轮累加；失败 turn 不写入）；切模型复位读数。不支持 `reasoning_effort` 的网关报 400 时，TUI 提示 `/reasoning off`（配置值保留，不静默剔除）。
+
 运行时提示文案约定：面向用户的字符串（TUI/CLI 提示、状态行、历史前缀、补全菜单）一律英文；代码注释同为英文。设计/架构等中文文档是项目工作语言，不受此限。新增 UI 文案时同步更新 `tests/pty_tui_smoke.py` 中的对应断言。
 
 ## 接入业务技术栈

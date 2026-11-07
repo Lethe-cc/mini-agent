@@ -73,6 +73,9 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
 
     std::set<std::string> session_allowed; // Approval::AllowSession scope
     std::string final_text;
+    // v4: per-turn usage roll-up (see TurnOptions::usage_out semantics).
+    TokenUsage turn_usage;
+    bool usage_seen = false;
 
     for (std::size_t round = 0; round <= options.max_tool_rounds; ++round) {
         const bool last_round = round == options.max_tool_rounds;
@@ -89,6 +92,14 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
             staging.add(std::move(note));
         }
         auto result = ask_provider(staging, provider, tools_for_round, on_delta, abort);
+        // v4: last round's prompt_tokens wins (live context reading);
+        // completion/total accumulate across rounds (workload reading).
+        if (!result.usage.empty()) {
+            usage_seen = true;
+            turn_usage.prompt_tokens = result.usage.prompt_tokens;
+            turn_usage.completion_tokens += result.usage.completion_tokens;
+            turn_usage.total_tokens += result.usage.total_tokens;
+        }
         // Without a registry nothing can execute: keep exact v1 semantics
         // and treat any tool_calls the model hallucinated as ignorable.
         if (!tools_enabled || !result.has_tool_calls() || last_round) {
@@ -130,6 +141,9 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
     }
 
     // Commit: the whole turn lands in the stored chat at once (008 5.2).
+    if (options.usage_out && usage_seen) {
+        *options.usage_out = turn_usage; // same commit boundary as history
+    }
     // staging layout: [original prefix][user][assistant/tool ...], where
     // the only System message that can appear after the prefix is the
     // transient max-rounds note -- never persisted.

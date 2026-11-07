@@ -1,0 +1,94 @@
+# mini-agent v4 技术方案（模型元数据：token 用量采集 + 上下文窗口 + 思考级别 + 底部状态栏）
+
+## 文档状态
+- 状态：已实现（2026-11-07，验证见第 8 节；待人工评审）。
+- 关联任务：维护者 2026-11-06 提问"agent 能否获取模型上下文长度/使用量/思考级别"，确认三者现状均不可得后，2026-11-07 批复"开始补全这些功能，显示位置就在底部 bar"。承接 [009](009-coding-v3.md)（v3 编码能力，已实现）。
+- 核对日期与适用版本：2026-11-07 实读本仓库 `src/provider_openai.cpp`、`src/loop.cpp`、`src/config.cpp`、`src/tui.cpp` 与 [TUI 界面调研](../references/tui-agent-ui-survey.md)（状态栏专题第 4 节，四家共识 model·ctx%·cost 底线）。
+- 人工评审记录：无。
+
+## 1. 背景与目标
+
+v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用量数据：请求体不发 `stream_options.include_usage`（usage chunk 被 SSE 解析器的 choices 空数组守卫直接丢弃）、`/models` 元数据只取 id、无 reasoning 通道。调研结论（references 调研文档 §4.5）：四家参考 agent 的底部状态栏共识底线是 `model · ctx% · cost`，本项目缺后两者数据源。
+
+成功判据（可验证）：
+
+- provider 回 usage 时，状态栏显示真实 `ctx NN%`（prompt_tokens ÷ 配置窗口）与 `out` 累计；无 usage 时回退字符类估算并带 `~` 标记。
+- `context_window`、`reasoning_effort` 两个配置项：文件/env/TUI 三入口一致，配置即权威来源（不探测、不被服务端应答覆盖）。
+- 未配置任何 v4 项时：请求体、状态行与 v3 字节一致（回归钩子，007/008/009 惯例）。
+
+## 2. 范围与非目标
+
+本期交付：
+
+- **usage 采集**：请求体 `stream_options.include_usage`；SSE 解析 usage chunk（含 `input_tokens/output_tokens` 兼容命名折叠）；`CompletionResult::usage`；`TurnOptions::usage_out` 跨轮汇总（prompt=末轮、completion/total 累加；仅成功 turn 提交，与历史同一提交边界）。
+- **估算兜底**：纯函数 `estimate_context_tokens`（ASCII≈4 字符/token、CJK≈1/codepoint、其余≈3；粗估，UI 标 `~`）。
+- **配置**：`AppConfig.context_window`（正整数，非法值整份配置失败关闭）与 `reasoning_effort`（字符串原样透传）；env `MINI_AGENT_CONTEXT_WINDOW`/`MINI_AGENT_REASONING_EFFORT`；`ProviderConfig.reasoning_effort` 经 `to_provider()` 贯通。
+- **TUI**：底部状态栏用量段 `status_usage_segments`（`ctx NN%` 70% 黄/90% 红、`out`、`reasoning=`）；`/context <tokens>|off`、`/reasoning <value>|off` 命令；`/config` 展示两字段；模型切换复位读数；400 + reasoning 已设时提示 `/reasoning off`。
+
+非目标（明确排除）：
+
+- 费用（cost）显示：需要 per-model 单价表，本期无数据源，留 v5。
+- cache 命中率（Pi 的 `CH%`）：依赖网关回 `cache_read_input_tokens` 类字段，兼容面太窄。
+- context 压缩（/compact）：ctx% 高时仅变色提示，不动历史。
+- 服务端元数据探测（/models 的 context_length 等）：按维护者决策"配置即权威"，不实现探测优先级。
+- CLI `ask` 输出用量：维护者指定显示位置为 TUI 底部 bar；CLI 保持脚本契约不变。
+
+## 3. 约束与参考资料
+
+- 零新增第三方依赖（各版本硬约束）：全部用现有 libcurl + nlohmann。
+- 借鉴模式（不复制代码，MIT/Apache-2.0 许可合规，见 [coding-agents](../references/coding-agents.md) 与 [TUI 调研](../references/tui-agent-ui-survey.md)）：Pi footer 的 ctx 阈值配色与 `~` 估算标记；Codewhale `estimated_context_tokens` 的"usage 优先、估算兜底"次序；Codewhale 状态栏"model 与 ctx% 永不丢弃"的底线（本实现暂用既有 md::clip 截断，未做字段级 shed——记为已知限制）。
+- OpenAI `stream_options.include_usage` 语义（末个 chunk、choices 为空数组）为公开协议事实；实现按"last-seen wins"容错逐 chunk 上报的网关。
+
+## 4. 方案与关键取舍
+
+- **usage 汇总语义**：prompt_tokens 取末轮（= 实时上下文占用，状态栏 ctx 的正确读数），completion/total 跨轮累加（= 本 turn 工作量）。备选"全部累加"会把多轮工具 turn 的 ctx 虚高数倍，弃。
+- **估算只在完全无 usage 时启用**：一旦某 turn 拿到真实 prompt_tokens 就永久优先，直到模型切换复位。避免真实/估算值交替抖动。
+- **`stream_options` 不进 preview 钩子默认路径**：`preview_chat_request_body` 新参数默认关闭，v1 字节一致回归测试原样通过；真实请求路径显式开启。
+- **reasoning 失败不静默剔除**：400 时提示 `/reasoning off` 但保留配置值——静默改写会让用户误以为参数已生效（配置权威原则的另一面）。
+- **context_window 非法值整份失败**：与 tool_approval 的宽松容错不同，窗口值参与显示计算，静默丢弃会让 ctx% 消失得像 bug；fail-closed 更早暴露拼写错误。
+
+## 5. 详细设计
+
+- `include/mini_agent/provider.hpp`：`TokenUsage{prompt,completion,total}` + `CompletionResult::usage`；`ProviderConfig::reasoning_effort`；`estimate_context_tokens` 声明。
+- `src/provider_openai.cpp`：`request_body` 增两参数（默认值保持旧字节形状）；SSE `on_data_` 在 choices 守卫**之前**读 `usage` 对象（含 input/output_tokens 折叠）；`estimate_context_tokens` 实现（UTF-8 首字节分类）。
+- `include/mini_agent/loop.hpp` / `src/loop.cpp`：`TurnOptions::usage_out` 指针；每轮 `ask_provider` 后合并进 `turn_usage`；提交段写回（仅 `usage_seen`）。
+- `include/mini_agent/config.hpp` / `src/config.cpp`：两字段 + JSON 读写 + env 覆盖 + `to_provider()` 透传 reasoning。
+- `include/mini_agent/tui.hpp` / `src/tui.cpp`：`StatusInputs` + `status_usage_segments`（纯函数可测）；`TurnResult::usage`；run_loop 读数状态（`context_reading`/`reset_usage_readings` lambda，估算带 `estimate_dirty` 惰性重算）；状态行在 auto-tools 之后、瞬时态之前拼接；`/context`、`/reasoning` 命令；`/config` 两行展示；模型选择两处复位；400 hint。
+- `tests/mock_openai_server.py`：仅当请求带 `stream_options.include_usage` 时追加 usage chunk（123/45/168），对齐真实网关语义。
+
+## 6. 异常与安全
+
+- usage chunk 字段缺失/非整数 → 计 0，不报错（显示降级为估算路径）。
+- 日志零新增敏感面：usage 是纯计数，logger `turn` 事件本期未加 token 字段（避免与消息正文混淆），估算与显示全部本地。
+- `reasoning_effort` 值原样透传：来自用户配置，不来自模型输出，无注入面；错误提示仅回显字段名不回显值。
+
+## 7. 兼容性
+
+- 无 v4 配置时请求体/状态行与 v3 字节一致（回归钩子）。
+- session 文件无变化（usage 不持久化，进程内读数）；config schema_version 保持 1（新字段可选、旧构建忽略即回退默认，无破坏）。
+- 旧网关忽略 `stream_options`：无 usage chunk，状态栏走估算路径，功能不失效。
+
+## 8. 验证情况（2026-11-07 实现轮，已执行）
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| 单元 | `agent_test`（新增 `test_v4_usage_collection`/`test_v4_config_fields`/`test_v4_status_segments`，含多轮 usage 累加 FakeUsageProvider） | 全部通过 |
+| 回归 | `test_v1_request_shape_regresssion`（默认参数路径） | 通过：无 v4 配置请求体不变 |
+| CTest | `ctest --test-dir build/linux-gcc-debug` | 3/3 通过 |
+| 质量门禁 | `python3 scripts/check.py --strict-project`（gcc-debug configure+build+CTest） | PASS，无告警（-Wall -Wextra -Wpedantic） |
+| 格式 | `python3 scripts/cpp_format.py` | 通过 |
+| mock E2E | `mini-agent ask` 对 mock（usage chunk 条件发送） | 回复正常，协议兼容 |
+| TUI 实屏 | 临时 PTY 驱动（`run` + env 配置 + mock）：断言状态栏出现 `ctx`/`out`/`reasoning=low` 段与 `/context` 读数 | 4/4 PASS |
+
+未验证：真实 OpenAI/DeepSeek 网关的 usage chunk 时序（mock 对齐公开协议，真机待维护者冒烟）；Release/clang preset 组合（本轮 gcc-debug；CI 四组合覆盖）。
+
+## 9. 实现偏差与已知限制
+
+- D1：状态栏字段级 shed 优先级（Codewhale 式"窄终端按序丢弃"）未实现，沿用既有 `md::clip` 右缘截断；窄终端可能截掉 reasoning 段。留待状态栏重构时统一处理。
+- D2：估算器为粗粒度字符类计数，CJK 判定用 UTF-8 首字节范围近似（E3..EF 三字节段），kana/部分汉字外字符可能归类偏差——设计上接受（估算带 `~`，不承诺精度）。
+- D3：`/context off` 与 `/reasoning off` 语义为"清除并落盘"，与 `/log off` 的哨兵值模式不同（那两个字段无"显式禁用"与"未设置"的三态需求）。
+- D4：usage 不写入 session 文件——resume 后状态栏从估算重新开始，直到下一 turn 拿到真实 usage。持久化留待与 cost 表一起设计。
+
+## 最终核对
+
+代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

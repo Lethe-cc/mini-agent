@@ -39,6 +39,11 @@ struct ProviderConfig {
     std::string model;
     std::size_t connect_timeout_seconds = 5;
     std::size_t total_timeout_seconds = 120;
+    // v4 (design 010): empty = field omitted from the request body, i.e.
+    // byte-identical v1..v3 request (regression hook). When set it is
+    // passed through verbatim as `reasoning_effort` -- the server is the
+    // arbiter of accepted values (config is the authoritative source).
+    std::string reasoning_effort;
 };
 
 // Abort hook: called from the streaming callback; return true to stop the
@@ -48,12 +53,28 @@ using ShouldAbort = std::function<bool()>;
 // ToolCall itself lives in chat.hpp (storage shape == wire shape here;
 // arguments_json is raw model output, never parsed at this layer).
 
+// Token usage reported by the provider for one completion (v4, design
+// 010). All zero when the gateway sent no usage chunk (some servers
+// ignore stream_options.include_usage; then callers fall back to
+// estimate_context_tokens). prompt_tokens counts the FULL outgoing context
+// (system + history + tools), so it doubles as the context-usage reading.
+struct TokenUsage {
+    long long prompt_tokens = 0;
+    long long completion_tokens = 0;
+    long long total_tokens = 0;
+
+    bool empty() const noexcept {
+        return prompt_tokens == 0 && completion_tokens == 0 && total_tokens == 0;
+    }
+};
+
 // Result of one completion: final text plus any tool calls the model
 // requested. When tool_calls is non-empty the text is usually empty or a
 // lead-in; the loop treats invocations as the authoritative outcome.
 struct CompletionResult {
     std::string text;
     std::vector<ToolCall> tool_calls;
+    TokenUsage usage; // v4: last-seen usage chunk for this round trip
 
     bool has_tool_calls() const noexcept {
         return !tool_calls.empty();
@@ -85,8 +106,18 @@ class Provider {
 
 // Test-visible wrapper around the internal request builder (008 section 7
 // byte-identical no-tools regression). Not part of the Provider interface.
+// v4 optional params default to the pre-v4 shape, so the existing
+// regression call sites stay byte-identical.
 std::string preview_chat_request_body(const Chat& chat, const std::string& model,
-                                      const std::string& tools_json);
+                                      const std::string& tools_json,
+                                      const std::string& reasoning_effort = {},
+                                      bool include_usage = false);
+
+// v4 (design 010): character-class token estimate, the no-usage fallback
+// for the context reading. ASCII words ~4 chars/token, CJK codepoints
+// ~1.5 chars each, other scripts ~3; deliberately coarse -- the UI marks
+// estimated values with a `~` prefix. Pure function, test-visible.
+long long estimate_context_tokens(std::string_view text);
 
 // Parses an OpenAI-compatible GET /models body into model ids (sorted,
 // deduplicated). Fail-closed (design 007 section 5.5): malformed JSON, a

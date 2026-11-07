@@ -28,6 +28,14 @@ struct TurnOptions {
     // Abort hook applied to tool execution as well (kills bash group,
     // stops MCP calls between rounds). Null treated as never-abort.
     ShouldAbort should_abort;
+    // v4 (design 010): optional out-pointer accumulating provider usage
+    // across the turn's round trips. Semantics chosen for the status bar:
+    // prompt_tokens = the LAST round's prompt size (the live context
+    // reading), completion_tokens/total_tokens = sums over all rounds
+    // (workload/cost reading). Only written when the whole turn succeeded
+    // (same commit boundary as the chat history); zero when no provider
+    // in the chain reported usage.
+    TokenUsage* usage_out = nullptr;
 };
 
 // Runs one user turn, possibly several provider round-trips when the model
