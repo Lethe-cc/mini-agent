@@ -11,7 +11,7 @@ mini-agent v1 的全部 C++ 实现。构建目标见根目录 `CMakeLists.txt`�
 | `config.cpp` | `config.hpp` | 配置合并：env（`MINI_AGENT_*`）优先于 `~/.config/mini-agent/config.json`；原子保存 0600；v4 字段 `context_window`（正整数、非法值整份配置失败关闭）与 `reasoning_effort`（原样字符串），env `MINI_AGENT_CONTEXT_WINDOW`/`MINI_AGENT_REASONING_EFFORT` |
 | `md.cpp` | `md.hpp` | ANSI 感知的显示宽度/硬换行 `wrap`/单行 `clip`；Markdown 渲染（`third_party/md4c` 解析 + 自写 SGR writer，ADR 004） |
 | `log.cpp` | `log.hpp` | spdlog 包装的诊断日志：key=value 元数据，密钥与消息正文零输出；`redact_url` 剥离 URL userinfo |
-| `tui.cpp` | `tui.hpp` | 自绘 TUI（ADR 003）：termios RAII、poll ≤50ms 帧循环、live 块行级 diff + CSI 2026 同步输出、UTF-8 光标编辑 + ↑/↓ 历史、斜杠命令与 Tab 补全菜单；模型选取（`/provider`+`/login` 后自动列模型、`/models` 重列、编号选择，见 007 §5.6 规则 7）与分批配置提示 `config_next_hint`（规则 8）、登录状态展示 `auth_status_line` / `AuthProbe`（规则 9）与提示符连通标志 `connection_state` / `prompt_marker`（输入提示符即标志，规则 10）；v4 底部状态栏用量段 `status_usage_segments`（ctx%/out/reasoning，70%/90% 黄红阈值，估算带 `~`；无配置时状态行与 v3 字节一致）、`/context` `/reasoning` 命令与模型切换读数复位 |
+| `tui.cpp` | `tui.hpp` | 自绘 TUI（ADR 003）：termios RAII、poll ≤50ms 帧循环、live 块行级 diff + CSI 2026 同步输出、UTF-8 光标编辑 + ↑/↓ 历史、斜杠命令与 Tab 补全菜单；模型选取（`/provider`+`/login` 后自动列模型、`/models` 重列、编号选择，见 007 §5.6 规则 7）与分批配置提示 `config_next_hint`（规则 8）、登录状态展示 `auth_status_line` / `AuthProbe`（规则 9）与提示符连通标志 `connection_state` / `prompt_marker`（输入提示符即标志，规则 10）；v4 底部状态栏用量段 `status_usage_segments`（ctx 已占用/最大、out、reasoning，按 ctx% 70%/90% 黄红阈值着色，估算带 `~`；无配置时状态行与 v3 字节一致）、`/context` `/reasoning` 命令与模型切换读数复位 |
 | `cli_main.cpp` | — | 子命令 `ask` / `run` / `session list|rm`，退出码 0/1/2 契约 |
 | `project.cpp` | `starter/project.hpp` | 模板骨架遗留（starter_test 使用），非业务代码 |
 

@@ -674,7 +674,10 @@ std::string status_usage_segments(bool colors, const StatusInputs& inputs) {
         if (inputs.context_window > 0) {
             const long long percent = inputs.context_tokens * 100 / inputs.context_window;
             const char* sgr = percent >= 90 ? "31" : (percent >= 70 ? "33" : "2");
-            segment(sgr, "ctx " + approx + std::to_string(percent) + "%");
+            // v4.1: used/max form carries both readings at a glance; the
+            // percent lives on as the colour threshold (70% yellow/90% red).
+            segment(sgr, "ctx " + approx + format_token_count(inputs.context_tokens) + "/" +
+                             format_token_count(inputs.context_window));
         } else {
             segment("2", "ctx " + approx + format_token_count(inputs.context_tokens));
         }

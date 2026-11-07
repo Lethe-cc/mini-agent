@@ -12,7 +12,7 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 
 成功判据（可验证）：
 
-- provider 回 usage 时，状态栏显示真实 `ctx NN%`（prompt_tokens ÷ 配置窗口）与 `out` 累计；无 usage 时回退字符类估算并带 `~` 标记。
+- provider 回 usage 时，状态栏显示真实 `ctx 已用/最大`（prompt_tokens ÷ 配置窗口决定着色阈值）与 `out` 累计；无 usage 时回退字符类估算并带 `~` 标记。
 - `context_window`、`reasoning_effort` 两个配置项：文件/env/TUI 三入口一致，配置即权威来源（不探测、不被服务端应答覆盖）。
 - 未配置任何 v4 项时：请求体、状态行与 v3 字节一致（回归钩子，007/008/009 惯例）。
 
@@ -23,7 +23,7 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 - **usage 采集**：请求体 `stream_options.include_usage`；SSE 解析 usage chunk（含 `input_tokens/output_tokens` 兼容命名折叠）；`CompletionResult::usage`；`TurnOptions::usage_out` 跨轮汇总（prompt=末轮、completion/total 累加；仅成功 turn 提交，与历史同一提交边界）。
 - **估算兜底**：纯函数 `estimate_context_tokens`（ASCII≈4 字符/token、CJK≈1/codepoint、其余≈3；粗估，UI 标 `~`）。
 - **配置**：`AppConfig.context_window`（正整数，非法值整份配置失败关闭）与 `reasoning_effort`（字符串原样透传）；env `MINI_AGENT_CONTEXT_WINDOW`/`MINI_AGENT_REASONING_EFFORT`；`ProviderConfig.reasoning_effort` 经 `to_provider()` 贯通。
-- **TUI**：底部状态栏用量段 `status_usage_segments`（`ctx NN%` 70% 黄/90% 红、`out`、`reasoning=`）；`/context <tokens>|off`、`/reasoning <value>|off` 命令；`/config` 展示两字段；模型切换复位读数；400 + reasoning 已设时提示 `/reasoning off`。
+- **TUI**：底部状态栏用量段 `status_usage_segments`（`ctx 已用/最大`，按百分比 70% 黄/90% 红着色、`out`、`reasoning=`）；`/context <tokens>|off`、`/reasoning <value>|off` 命令；`/config` 展示两字段；模型切换复位读数；400 + reasoning 已设时提示 `/reasoning off`。
 
 非目标（明确排除）：
 
@@ -88,6 +88,13 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 - D2：估算器为粗粒度字符类计数，CJK 判定用 UTF-8 首字节范围近似（E3..EF 三字节段），kana/部分汉字外字符可能归类偏差——设计上接受（估算带 `~`，不承诺精度）。
 - D3：`/context off` 与 `/reasoning off` 语义为"清除并落盘"，与 `/log off` 的哨兵值模式不同（那两个字段无"显式禁用"与"未设置"的三态需求）。
 - D4：usage 不写入 session 文件——resume 后状态栏从估算重新开始，直到下一 turn 拿到真实 usage。持久化留待与 cost 表一起设计。
+
+## 10. v4.1 修订（2026-11-07 维护者反馈）
+
+维护者实机看到 `ctx ~1.2k`（未设 context_window 的降级形态）并反馈两点：
+
+- **ctx 改为"已占用/最大"格式**：`ctx 45.2k/128.0k`，比裸百分比信息量高；着色阈值仍按 `used/max` 百分比（70% 黄、90% 红）。窗口未配置时保持 `ctx ~1.2k` 单值形态。
+- **思考级别不显示是设计行为**：`reasoning=` 段仅在配置了 `reasoning_effort` 时出现（未设 = 请求不带该字段 = 无可显示值）。该会话未设置此项，属预期；设置入口 `/reasoning low|medium|high` 或 env `MINI_AGENT_REASONING_EFFORT`。
 
 ## 最终核对
 

@@ -1960,7 +1960,7 @@ void test_v4_status_segments() {
     mid.context_tokens = 80000;
     mid.context_window = 100000; // 80% -> yellow 33
     const auto mid_line = mini_agent::tui::status_usage_segments(true, mid);
-    check(mid_line.find("ctx 80%") != std::string::npos, "ctx percent shown");
+    check(mid_line.find("ctx 80.0k/100.0k") != std::string::npos, "ctx used/max shown");
     check(mid_line.find("\x1b[33m") != std::string::npos, "80% is yellow");
     StatusInputs high = mid;
     high.context_tokens = 95000; // 95% -> red 31
