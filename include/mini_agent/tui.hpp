@@ -164,9 +164,10 @@ struct StatusInputs {
     long long completion_tokens = 0; // session sum (0 = nothing reported yet)
     std::string reasoning_effort;    // config; empty = unset
     // v4.2 (design 010 §11): reasoning ACTUALLY observed in responses.
-    // The actual reading wins over the config echo: a non-empty level is
-    // the gateway-echoed effort; seen-without-level shows "on"; no
-    // evidence at all falls back to the configured value.
+    // v4.2.1 refresh semantics: reflects the LAST successful turn only.
+    // Display preference: echoed level > configured level confirmed by
+    // evidence > "on" (evidence, no level known) > config echo (intent,
+    // unconfirmed).
     bool reasoning_seen = false;
     std::string reasoning_actual;
 };

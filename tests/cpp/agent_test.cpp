@@ -2155,9 +2155,16 @@ void test_v42_capabilities_and_menu() {
               std::string::npos,
           "config echo when no evidence");
     inputs.reasoning_seen = true;
-    check(mini_agent::tui::status_usage_segments(false, inputs).find("reasoning=on") !=
+    // v4.2.1: evidence + a configured level confirms that level (gateways
+    // like qwen echo no effort string; showing "on" would be a downgrade).
+    check(mini_agent::tui::status_usage_segments(false, inputs).find("reasoning=medium") !=
               std::string::npos,
-          "seen without level -> on");
+          "seen with config -> config level confirmed");
+    mini_agent::tui::StatusInputs bare;
+    bare.reasoning_seen = true; // evidence, no level known anywhere
+    check(mini_agent::tui::status_usage_segments(false, bare).find("reasoning=on") !=
+              std::string::npos,
+          "seen without any level -> on");
     inputs.reasoning_actual = "high";
     check(mini_agent::tui::status_usage_segments(false, inputs).find("reasoning=high") !=
               std::string::npos,

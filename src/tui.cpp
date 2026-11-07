@@ -688,11 +688,19 @@ std::string status_usage_segments(bool colors, const StatusInputs& inputs) {
         segment("2", "out " + format_token_count(inputs.completion_tokens));
     }
     if (!inputs.reasoning_effort.empty() || inputs.reasoning_seen) {
-        // v4.2: the actual (response-observed) level wins over the config
-        // echo; "on" covers reasoning evidence without a level string.
-        std::string level = !inputs.reasoning_actual.empty()
-                                ? inputs.reasoning_actual
-                                : (inputs.reasoning_seen ? "on" : inputs.reasoning_effort);
+        // v4.2.1: the reading refreshes every successful turn (no sticky
+        // "on"). Preference: gateway-echoed level > configured level when
+        // this turn's messages proved reasoning > bare "on" when proof
+        // exists with no level known > config echo as unconfirmed intent.
+        std::string level;
+        if (!inputs.reasoning_actual.empty())
+            level = inputs.reasoning_actual;
+        else if (inputs.reasoning_seen && !inputs.reasoning_effort.empty())
+            level = inputs.reasoning_effort; // config confirmed by evidence
+        else if (inputs.reasoning_seen)
+            level = "on"; // evidence, no level known anywhere
+        else
+            level = inputs.reasoning_effort; // intent, unconfirmed
         segment("2", "reasoning=" + level);
     }
     return out;
@@ -1143,9 +1151,23 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // v4.2: reasoning ACTUALLY observed in responses (status preference).
     bool status_reasoning_seen = false;
     std::string status_reasoning_actual;
+    // v4.2: cached capability lookup for the current model (empty when the
+    // gateway exposed no metadata or the model is not in the list).
+    auto caps_for_model = [&]() -> ModelCapabilities {
+        for (const auto& cap : model_caps)
+            if (cap.id == config.model)
+                return cap;
+        return {};
+    };
     auto context_reading = [&]() -> StatusInputs {
         StatusInputs inputs;
         inputs.context_window = config.context_window;
+        // v4.2.1: config stays authoritative, but an unset window falls
+        // back to the gateway's advertised context_length (cached caps)
+        // so the ctx reading gets its /max denominator without extra
+        // config work on OpenRouter-style gateways.
+        if (inputs.context_window <= 0)
+            inputs.context_window = caps_for_model().context_length;
         inputs.reasoning_effort = config.reasoning_effort;
         inputs.completion_tokens = status_completion_tokens;
         inputs.reasoning_seen = status_reasoning_seen;
@@ -1175,14 +1197,6 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         status_reasoning_actual.clear();
         reasoning_menu_open = false;
         reasoning_choices.clear();
-    };
-    // v4.2: cached capability lookup for the current model (empty when the
-    // gateway exposed no metadata or the model is not in the list).
-    auto caps_for_model = [&]() -> ModelCapabilities {
-        for (const auto& cap : model_caps)
-            if (cap.id == config.model)
-                return cap;
-        return {};
     };
     auto turn_start = steady_now();
     auto last_ctrl_c = std::chrono::steady_clock::time_point{};
@@ -2158,15 +2172,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     status_usage_reported = true;
                 }
                 estimate_dirty = true;
-                // v4.2: last successful turn's evidence wins; the echoed
-                // level replaces a previous one, "seen" is sticky so a
-                // later plain turn does not silently claim "off" (the
-                // model may simply not have needed to think).
-                if (result.reasoning.seen) {
-                    status_reasoning_seen = true;
-                    if (!result.reasoning.effort.empty())
-                        status_reasoning_actual = result.reasoning.effort;
-                }
+                // v4.2.1: the reading reflects the LAST successful turn
+                // only (no sticky "on"): fold the fresh evidence wholesale,
+                // clearing it when this turn showed none.
+                status_reasoning_seen = result.reasoning.seen;
+                status_reasoning_actual = result.reasoning.effort;
                 logger->event("turn", {{"status", "ok"},
                                        {"elapsed_ms", std::to_string(elapsed_ms)},
                                        {"chars_in", std::to_string(last_prompt_chars)},

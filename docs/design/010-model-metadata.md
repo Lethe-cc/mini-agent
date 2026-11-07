@@ -116,6 +116,16 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 
 验证（2026-11-07）：`test_v42_capabilities_and_menu`（解析三形态/失败关闭/菜单行/编号选择/状态优先级）通过；agent_test 全量、CTest 3/3、`check.py --strict-project`、`cpp_format.py` 全过；宽 PTY（200 列）E2E：`/models`→`/reasoning` 菜单出 3 档带 default 标记、编号 2 选中 medium、REASONTEST turn 后状态行 `ctx 123/131.1k · out 45 · reasoning=high`（实测 high 压过配置 medium）——全 PASS。
 
+## 12. v4.2.1 修订（2026-11-07 维护者实机反馈：`reasoning=on` 与 `ctx 3.1k` 显示不符预期）
+
+维护者真机（qwen3.8-flash）看到 `ctx 3.1k · out 34 · reasoning=on`，认为不对。诊断：qwen 网关有思考流（delta.reasoning_content）但**不回显档位字符串**，v4.2 规则"seen 无 level → on"于是压过了配置值并 sticky 常驻；`ctx` 无 `/最大` 因未配 context_window。三点修正：
+
+- **证据 + 配置值 → 显示配置值**（证据确认了它，显示 `on` 反而是降级）；仅"有证据且任何地方都不知道档位"才显示 `on`；无证据回显配置值（intent, unconfirmed）。显示优先级：echo > 被证据确认的配置值 > `on` > 配置回显。
+- **去 sticky**：读数只反映**最近一次成功 turn** 的证据，本轮无证据即清空（后续普通回答不再挂着旧的 `on`）。
+- **context_window 兜底链**：config 显式值 > 缓存 caps 的 `context_length`（网关声明）> 无（单值形态）。qwen3.8-flash 这类未配置场景在 OpenRouter 形态网关上自动获得 `/最大`。
+
+验证（2026-11-07）：agent_test 更新语义断言（seen+config→config 值、裸 seen→on）全过；宽 PTY E2E 三断言 PASS——caps 兜底出 `ctx 123/131.1k`、REASONTEST 后 `reasoning=high`、其后普通 turn 读数清空不残留。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。
