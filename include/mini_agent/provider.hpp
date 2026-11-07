@@ -133,6 +133,15 @@ class Provider {
     // context_length/reasoning metadata. Base implementation throws
     // ProviderError(Protocol) like list_models; OpenAiProvider overrides.
     virtual std::vector<ModelCapabilities> list_model_capabilities();
+    // v4.3 (design 010 §13): cheap context-window probe -- one tiny
+    // request with an absurd max_tokens, reading the window back from the
+    // gateway's rejection message (the validator is the authority; the
+    // text itself is not a contract, hence the narrow pattern set and the
+    // 0 result on "understood nothing"). Returns >0 on a parsed window,
+    // 0 when the gateway clamped silently or the message shape is unknown.
+    // Throws ProviderError only on network/config failure. Base throws
+    // Protocol (unsupported), same convention as list_models.
+    virtual long long probe_context_window();
 };
 
 // Test-visible wrapper around the internal request builder (008 section 7
@@ -167,6 +176,14 @@ std::optional<std::vector<std::string>> parse_models_json(std::string_view body,
 std::optional<std::vector<ModelCapabilities>> parse_models_meta_json(std::string_view body,
                                                                      std::string* error);
 
+// v4.3 (design 010 §13): extract a context-window size from a gateway's
+// probe rejection message. Recognised shapes (first match wins, sanity
+// range 1k..200M): "maximum context length is N tokens" (vLLM/OpenAI),
+// "Range of input length should be [1, N]" (DashScope), "max_tokens: X >
+// N" (OpenAI per-request cap ~= window on a tiny prompt). Anything else
+// -> nullopt: the message text is not an API contract, so we never guess.
+std::optional<long long> parse_context_probe_error(std::string_view body);
+
 // OpenAI-compatible Chat Completions (POST {base_url}/chat/completions,
 // stream=true, SSE). Protocol shape is a MUST-VERIFY fact against the
 // chosen provider's current docs before relying on it (design 007 section 3).
@@ -188,6 +205,8 @@ class OpenAiProvider final : public Provider {
     std::vector<std::string> list_models() override;
     // v4.2: same endpoint, capability-preserving parse (design 010 §11).
     std::vector<ModelCapabilities> list_model_capabilities() override;
+    // v4.3 (design 010 §13): cheap max_tokens-rejection probe.
+    long long probe_context_window() override;
 
   private:
     ProviderConfig config_;

@@ -2174,6 +2174,31 @@ void test_v42_capabilities_and_menu() {
           "config echo replaced, not appended");
 }
 
+void test_v43_probe_parse() {
+    // The three recognised gateway shapes (design 010 §13).
+    const auto vllm = mini_agent::parse_context_probe_error(
+        R"({"error":{"message":"This model's maximum context length is 32768 tokens. However, you requested 1000000000 tokens"}})");
+    check(vllm.has_value() && *vllm == 32768, "vllm maximum-context form");
+    const auto dash = mini_agent::parse_context_probe_error(
+        R"({"error":{"message":"<400> Range of input length should be [1, 983616]"}})");
+    check(dash.has_value() && *dash == 983616, "dashscope range form takes upper bound");
+    const auto dash_max =
+        mini_agent::parse_context_probe_error("Range of max_tokens should be [1, 131072]");
+    check(dash_max.has_value() && *dash_max == 131072, "dashscope max_tokens range form");
+    const auto openai = mini_agent::parse_context_probe_error(
+        R"({"error":{"message":"max_tokens: 1000000000 > 131072, which is the maximum number of tokens that the model can generate"}})");
+    check(openai.has_value() && *openai == 131072, "openai gt form");
+    // Unknown / hostile shapes yield nothing rather than a wrong number.
+    check(!mini_agent::parse_context_probe_error("something went wrong").has_value(),
+          "unknown text rejected");
+    check(!mini_agent::parse_context_probe_error(R"({"max_tokens":1000000000})").has_value(),
+          "echoed request value never parsed");
+    check(!mini_agent::parse_context_probe_error("Range of input length should be [1, 7]")
+               .has_value(),
+          "out-of-range bound rejected");
+    check(!mini_agent::parse_context_probe_error("").has_value(), "empty body rejected");
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -2211,6 +2236,7 @@ int main() {
     test_v4_config_fields();
     test_v4_status_segments();
     test_v42_capabilities_and_menu();
+    test_v43_probe_parse();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

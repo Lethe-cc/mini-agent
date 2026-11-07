@@ -1130,6 +1130,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     std::chrono::steady_clock::time_point models_start;
     bool model_menu_open = false;
     std::vector<std::string> model_choices; // ids backing the open menu
+    // v4.3 (design 010 §13): one-shot context-window probe worker, same
+    // join-then-read discipline as models_worker (screen/logger stay on
+    // the main thread).
+    std::thread probe_worker;
+    std::atomic<bool> probe_done{false};
+    bool probe_running = false;
+    struct ProbeResult {
+        long long window = 0; // 0 = gateway clamped silently or unknown
+        std::string error;    // network/config failure text
+    } probe_result;
     // v4.2 (design 010 §11): capability metadata from the last successful
     // /models fetch (main-thread only; the worker fills models_result.caps).
     std::vector<ModelCapabilities> model_caps;
@@ -1673,7 +1683,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                         ? std::to_string(config.context_window)
                                         : std::string("(not set)");
                 screen.commit("context_window=" + shown +
-                              "; usage /context <tokens> or /context off");
+                              "; usage /context <tokens> | /context probe | /context off");
                 screen.commit("ctx reading: " +
                               (inputs.context_tokens > 0
                                    ? (inputs.context_estimated ? "~" : "") +
@@ -1690,6 +1700,47 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 config.context_window = 0;
                 save_and_report();
                 screen.commit("[ok] context window cleared · status shows tokens, no %");
+            } else if (arg == "probe") {
+                // v4.3 (design 010 §13): explicit, user-triggered cheap
+                // probe -- one oversized-max_tokens request whose rejection
+                // carries the gateway's authoritative numbers. Never
+                // automatic: it costs a request and the message text is
+                // not an API contract, so the maintainer decides when.
+                if (probe_running) {
+                    screen.commit("[info] probe already in flight, wait for the result");
+                    return true;
+                }
+                if (config.base_url.empty() || config.api_key.empty() || config.model.empty()) {
+                    screen.commit("[error] probe needs base_url + api_key + model ·" +
+                                  config_next_hint(config));
+                    return true;
+                }
+                if (probe_worker.joinable())
+                    probe_worker.join();
+                probe_running = true;
+                probe_done = false;
+                probe_result = ProbeResult{};
+                logger->event("ctx_probe", {{"status", "start"},
+                                            {"base_url", Logger::redact_url(config.base_url)},
+                                            {"model", config.model}});
+                const AppConfig snapshot = config; // thread boundary
+                probe_worker = std::thread([&, snapshot] {
+                    ProbeResult r;
+                    try {
+                        ProviderConfig pc = snapshot.to_provider();
+                        pc.total_timeout_seconds =
+                            pc.total_timeout_seconds < 30 ? pc.total_timeout_seconds : 30;
+                        OpenAiProvider provider(pc);
+                        r.window = provider.probe_context_window();
+                    } catch (const ProviderError& e) {
+                        r.error = e.what();
+                    } catch (const std::exception& e) {
+                        r.error = e.what();
+                    }
+                    probe_result = std::move(r);
+                    probe_done = true;
+                });
+                screen.commit("[info] probing context window (one oversized request)...");
             } else {
                 const long long parsed_window = std::strtoll(std::string(arg).c_str(), nullptr, 10);
                 if (parsed_window <= 0) {
@@ -2149,6 +2200,29 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             logger->event("login", login_fields);
         }
 
+        // v4.3: window-probe completion (main-thread rendering).
+        if (probe_done.load()) {
+            probe_done = false;
+            probe_running = false;
+            if (probe_worker.joinable())
+                probe_worker.join();
+            if (!probe_result.error.empty()) {
+                logger->event("ctx_probe", {{"status", "error"}, {"error", probe_result.error}});
+                screen.commit("[error] probe failed: " + probe_result.error);
+            } else if (probe_result.window > 0) {
+                config.context_window = probe_result.window;
+                save_and_report();
+                logger->event("ctx_probe",
+                              {{"status", "ok"}, {"window", std::to_string(probe_result.window)}});
+                screen.commit("[ok] probed context window: " + std::to_string(probe_result.window) +
+                              " tokens · saved to config (override anytime: /context <tokens>)");
+            } else {
+                logger->event("ctx_probe", {{"status", "unknown"}});
+                screen.commit("[info] gateway accepted the oversized request without reporting a "
+                              "limit (silent clamp) · set the window manually: /context <tokens>");
+            }
+        }
+
         if (turn_done.load()) {
             streaming = false;
             if (worker.joinable())
@@ -2369,6 +2443,8 @@ done:
         worker.join();
     if (models_worker.joinable())
         models_worker.join(); // bounded by its own 15 s curl timeout
+    if (probe_worker.joinable())
+        probe_worker.join(); // v4.3: bounded by its own 30 s curl timeout
     logger->event("session_close", {{"mode", "tui"}, {"id", session.meta.id}});
     Logger::shutdown_all();
     screen.clear_live();

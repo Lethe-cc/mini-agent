@@ -126,6 +126,20 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 
 验证（2026-11-07）：agent_test 更新语义断言（seen+config→config 值、裸 seen→on）全过；宽 PTY E2E 三断言 PASS——caps 兜底出 `ctx 123/131.1k`、REASONTEST 后 `reasoning=high`、其后普通 turn 读数清空不残留。
 
+## 13. v4.3 修订（2026-11-08 维护者需求：让 agent 能获取 context 窗口大小）
+
+维护者实测（qwen3.8-flash 真机自述探测）验证了"错误消息即权威边界"的路子后要求接入。取舍与形态：
+
+- **只做廉价探测（方法 2）**：一次非流式小请求带 `max_tokens=1e9`，从网关拒绝消息里读数字。超长 prompt 探测输入上限（方法 3）明确不做——成本随窗口大小线性涨且有逻辑死结（须先超限才看得到边界）。
+- **三种消息形态白名单**（`parse_context_probe_error`，纯函数）：`maximum context length is N tokens`（vLLM/OpenAI，即总窗口）、`Range of <param> should be [1, N]`（DashScope 取括号内最后一个合法数字）、`max_tokens: X > N`（OpenAI 输出上限，小 prompt 下≈实用窗口）。合理域 1k..200M 之外的数字一律拒绝；JSON 错误体先抽 `error.message` 文本再匹配，请求回显值永不误读。
+- **静默 clamp 显式承认拿不到**：网关接受超大 max_tokens（2xx）时返回 0 → TUI 提示手工 `/context <tokens>`。不解析成功体。
+- **仅显式触发**：`/context probe` 一条命令，后台 worker（30s curl 上限、join-then-read、退出 join），不自动跑——探测计费、错误文本非契约，何时花这个钱由用户决定。结果 >0 时写入 config（此后它就是权威值，可再 `/context <tokens>` 覆盖或 `/context off` 清除）并落日志（redact_url，零密钥）。
+- **兜底链最终形态**：`config.context_window` > 缓存 caps `context_length`（v4.2，免费）> `/context probe`（一次请求，缓存进 config）> 单值形态。
+
+验证（2026-11-08）：`test_v43_probe_parse`（三形态 + 括号取上界 + 回显值/越界/空体拒绝）通过；mock 新增探测拒绝路径后宽 PTY E2E 三断言 PASS——`/context probe` 出 `probed context window: 131072`、config 持久化 131072、下一 turn 状态栏变 `ctx N/131.1k`。agent_test 全量、CTest 3/3、strict-project、cpp_format 全过。
+
+已知限制（并入 §9 语义）：D6——真实 DashScope/OpenRouter/vLLM 线上消息形态未逐一实测（mock 按维护者真机自述构造），首次真机探测若得 `[info] ... silent clamp` 或解析失败，按提示手工配置即可，无副作用。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

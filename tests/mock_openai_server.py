@@ -166,6 +166,17 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length))
         messages = body.get("messages", [])
+        # v4.3 probe shape: an oversized max_tokens (non-streaming) gets
+        # the DashScope-style range rejection the client parses.
+        if body.get("max_tokens", 0) > 100000 and not body.get("stream"):
+            payload = {"error": {"message": "<400> Range of max_tokens should be [1, 131072]"}}
+            resp = json.dumps(payload).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+            return
         last_user = next(
             (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
         )

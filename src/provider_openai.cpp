@@ -616,6 +616,79 @@ long long estimate_context_tokens(std::string_view text) {
     return tokens > 0 ? tokens : (text.empty() ? 0 : 1);
 }
 
+std::optional<long long> parse_context_probe_error(std::string_view body) {
+    // Sanity bounds: real windows live between 1k and ~200M tokens; a
+    // parse outside this range means we matched a wrong number (a byte
+    // count, a retry-after, ...), so prefer no answer over a wrong one.
+    auto in_range = [](long long n) {
+        constexpr long long lo = 1000, hi = 200'000'000;
+        return n >= lo && n <= hi;
+    };
+    const std::string text(body);
+    // 1) "maximum context length is 32768 tokens" (vLLM, OpenAI)
+    if (auto pos = text.find("maximum context length is"); pos != std::string::npos) {
+        const auto digits_start = text.find_first_of("0123456789", pos);
+        if (digits_start != std::string::npos) {
+            std::size_t end = digits_start;
+            long long value = 0;
+            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) {
+                value = value * 10 + (text[end] - '0');
+                ++end;
+            }
+            if (in_range(value))
+                return value;
+        }
+    }
+    // 2) "Range of <param> should be [1, N]" (DashScope/qwen: both
+    //    "input length" and "max_tokens" phrasings carry the bound as the
+    //    LAST digit run inside the brackets -- the first is the lower 1).
+    if (auto pos = text.find("Range of"); pos != std::string::npos) {
+        const auto open = text.find('[', pos);
+        const auto close = open == std::string::npos ? std::string::npos : text.find(']', open);
+        if (open != std::string::npos && close != std::string::npos) {
+            std::optional<long long> last;
+            for (std::size_t i = open + 1; i < close;) {
+                if (std::isdigit(static_cast<unsigned char>(text[i]))) {
+                    long long value = 0;
+                    while (i < close && std::isdigit(static_cast<unsigned char>(text[i]))) {
+                        value = value * 10 + (text[i] - '0');
+                        ++i;
+                    }
+                    constexpr long long lo = 1000, hi = 200'000'000;
+                    if (value >= lo && value <= hi)
+                        last = value;
+                } else {
+                    ++i;
+                }
+            }
+            if (last)
+                return last;
+        }
+    }
+    // 3) "max_tokens: 1000000 > 131072" (OpenAI per-request output cap;
+    //    on a tiny prompt this reads as the practical window).
+    if (auto pos = text.find("max_tokens:"); pos != std::string::npos) {
+        const auto gt = text.find('>', pos);
+        const auto digits_start =
+            gt == std::string::npos ? std::string::npos : text.find_first_of("0123456789", gt);
+        if (digits_start != std::string::npos) {
+            std::size_t end = digits_start;
+            long long value = 0;
+            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) {
+                value = value * 10 + (text[end] - '0');
+                ++end;
+            }
+            if (in_range(value))
+                return value;
+        }
+    }
+    return std::nullopt;
+}
+
+long long Provider::probe_context_window() {
+    throw ProviderError(ProviderErrorKind::Protocol, "provider does not support window probing");
+}
+
 std::vector<std::string> Provider::list_models() {
     throw ProviderError(ProviderErrorKind::Protocol, "provider does not support model listing");
 }
@@ -763,6 +836,69 @@ std::vector<ModelCapabilities> OpenAiProvider::list_model_capabilities() {
         throw ProviderError(ProviderErrorKind::Protocol, parse_error);
     }
     return *caps;
+}
+
+long long OpenAiProvider::probe_context_window() {
+    if (config_.base_url.empty() || config_.api_key.empty() || config_.model.empty())
+        throw ProviderError(ProviderErrorKind::Protocol, "provider config incomplete");
+    CURL* curl = ::curl_easy_init();
+    if (!curl)
+        throw ProviderError(ProviderErrorKind::Network, "curl init failed");
+    const std::string url = config_.base_url;
+    const auto trimmed = url.find_last_not_of('/');
+    std::string endpoint = trimmed == std::string::npos ? url : url.substr(0, trimmed + 1);
+    endpoint += "/chat/completions";
+
+    // Tiny prompt + absurd max_tokens: gateways validate before billing,
+    // so this is one cheap non-streaming request whose rejection carries
+    // the authoritative numbers. 1e9 exceeds every current limit.
+    nlohmann::json req;
+    req["model"] = config_.model;
+    req["messages"] = {{{"role", "user"}, {"content", "ping"}}};
+    req["max_tokens"] = 1000000000;
+    req["stream"] = false;
+    const std::string body = req.dump();
+
+    const std::string auth = "Authorization: Bearer " + config_.api_key;
+    const std::string type = "Content-Type: application/json";
+    struct curl_slist* headers = nullptr;
+    headers = ::curl_slist_append(headers, auth.c_str());
+    headers = ::curl_slist_append(headers, type.c_str());
+
+    std::string response_body;
+    char error_buffer[CURL_ERROR_SIZE] = {0};
+    ::curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+    ::curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    ::curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+    ::curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+    ::curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    ::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_accumulate);
+    ::curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+    ::curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
+    ::curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
+                       static_cast<long>(config_.connect_timeout_seconds));
+    ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    ::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+
+    const CURLcode code = ::curl_easy_perform(curl);
+    long status = 0;
+    ::curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    ::curl_slist_free_all(headers);
+    ::curl_easy_cleanup(curl);
+
+    if (code != CURLE_OK) {
+        const std::string detail = error_buffer[0] ? error_buffer : ::curl_easy_strerror(code);
+        throw ProviderError(ProviderErrorKind::Network, "network error: " + detail);
+    }
+    if (status >= 200 && status < 300) {
+        // The gateway ACCEPTED the absurd max_tokens (silent clamp): no
+        // boundary can be learned from it. Never parse a success body.
+        return 0;
+    }
+    auto window = parse_context_probe_error(response_body);
+    return window.has_value() ? *window : 0;
 }
 
 } // namespace mini_agent
