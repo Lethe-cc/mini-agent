@@ -616,7 +616,8 @@ long long estimate_context_tokens(std::string_view text) {
     return tokens > 0 ? tokens : (text.empty() ? 0 : 1);
 }
 
-std::optional<long long> parse_context_probe_error(std::string_view body) {
+ProbeOutcome parse_context_probe_error(std::string_view body) {
+    ProbeOutcome outcome;
     // Sanity bounds: real windows live between 1k and ~200M tokens; a
     // parse outside this range means we matched a wrong number (a byte
     // count, a retry-after, ...), so prefer no answer over a wrong one.
@@ -624,24 +625,51 @@ std::optional<long long> parse_context_probe_error(std::string_view body) {
         constexpr long long lo = 1000, hi = 200'000'000;
         return n >= lo && n <= hi;
     };
-    const std::string text(body);
-    // 1) "maximum context length is 32768 tokens" (vLLM, OpenAI)
-    if (auto pos = text.find("maximum context length is"); pos != std::string::npos) {
-        const auto digits_start = text.find_first_of("0123456789", pos);
-        if (digits_start != std::string::npos) {
-            std::size_t end = digits_start;
-            long long value = 0;
-            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) {
-                value = value * 10 + (text[end] - '0');
-                ++end;
+    // The message may arrive as a JSON error envelope; extract the human
+    // text first so numeric JSON fields (an echoed "max_tokens": 1e9
+    // request value) can never be mistaken for the limit. Fall back to
+    // the raw body for non-JSON error pages.
+    std::string text;
+    {
+        auto parsed = nlohmann::json::parse(body, nullptr, false);
+        if (!parsed.is_discarded()) {
+            if (auto err = parsed.find("error"); err != parsed.end() && err->is_object()) {
+                if (auto m = err->find("message"); m != err->end() && m->is_string())
+                    text = m->get<std::string>();
             }
-            if (in_range(value))
-                return value;
+        }
+        if (text.empty())
+            text.assign(body);
+    }
+    const auto digits_after = [&text, &in_range](std::size_t from) -> std::optional<long long> {
+        const auto s = text.find_first_of("0123456789", from);
+        if (s == std::string::npos)
+            return std::nullopt;
+        std::size_t e = s;
+        long long value = 0;
+        while (e < text.size() && std::isdigit(static_cast<unsigned char>(text[e]))) {
+            value = value * 10 + (text[e] - '0');
+            ++e;
+        }
+        if (!in_range(value))
+            return std::nullopt;
+        return value;
+    };
+    // 1) "maximum context length is 32768 tokens" (vLLM, OpenAI): TOTAL
+    //    window -- the correct denominator for the ctx reading.
+    if (auto pos = text.find("maximum context length is"); pos != std::string::npos) {
+        if (auto value = digits_after(pos)) {
+            outcome.kind = ProbeLimitKind::Window;
+            outcome.value = *value;
+            return outcome;
         }
     }
-    // 2) "Range of <param> should be [1, N]" (DashScope/qwen: both
-    //    "input length" and "max_tokens" phrasings carry the bound as the
-    //    LAST digit run inside the brackets -- the first is the lower 1).
+    // 2) "Range of <param> should be [1, N]" (DashScope family): the LAST
+    //    digit run inside the brackets is the upper bound (the first is
+    //    the lower 1). <param> decides the KIND: an input-length range is
+    //    a usable window proxy; a max_tokens range is the OUTPUT cap and
+    //    must never be stored as the context window (maintainer data:
+    //    qwen3.8-flash input 983616 vs output cap 131072).
     if (auto pos = text.find("Range of"); pos != std::string::npos) {
         const auto open = text.find('[', pos);
         const auto close = open == std::string::npos ? std::string::npos : text.find(']', open);
@@ -654,38 +682,46 @@ std::optional<long long> parse_context_probe_error(std::string_view body) {
                         value = value * 10 + (text[i] - '0');
                         ++i;
                     }
-                    constexpr long long lo = 1000, hi = 200'000'000;
-                    if (value >= lo && value <= hi)
+                    if (in_range(value))
                         last = value;
                 } else {
                     ++i;
                 }
             }
-            if (last)
-                return last;
+            if (last) {
+                const std::string param(text, pos + 8, open - (pos + 8));
+                const bool output = param.find("max_tokens") != std::string::npos ||
+                                    param.find("max_output") != std::string::npos ||
+                                    param.find("output") != std::string::npos;
+                const bool input = param.find("input") != std::string::npos ||
+                                   param.find("prompt") != std::string::npos;
+                if (output) {
+                    outcome.kind = ProbeLimitKind::OutputCap;
+                    outcome.value = *last;
+                } else if (input) {
+                    outcome.kind = ProbeLimitKind::InputCap;
+                    outcome.value = *last;
+                } // else ambiguous param name: stay Unknown (never guess)
+                return outcome;
+            }
         }
     }
-    // 3) "max_tokens: 1000000 > 131072" (OpenAI per-request output cap;
-    //    on a tiny prompt this reads as the practical window).
+    // 3) "max_tokens: 1000000 > 131072" (OpenAI): the per-request OUTPUT
+    //    cap. On a tiny prompt that is NOT the window -- classify honestly.
     if (auto pos = text.find("max_tokens:"); pos != std::string::npos) {
         const auto gt = text.find('>', pos);
-        const auto digits_start =
-            gt == std::string::npos ? std::string::npos : text.find_first_of("0123456789", gt);
-        if (digits_start != std::string::npos) {
-            std::size_t end = digits_start;
-            long long value = 0;
-            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) {
-                value = value * 10 + (text[end] - '0');
-                ++end;
+        if (gt != std::string::npos) {
+            if (auto value = digits_after(gt)) {
+                outcome.kind = ProbeLimitKind::OutputCap;
+                outcome.value = *value;
+                return outcome;
             }
-            if (in_range(value))
-                return value;
         }
     }
-    return std::nullopt;
+    return outcome; // Unknown, value 0
 }
 
-long long Provider::probe_context_window() {
+ProbeOutcome Provider::probe_context_window() {
     throw ProviderError(ProviderErrorKind::Protocol, "provider does not support window probing");
 }
 
@@ -838,7 +874,7 @@ std::vector<ModelCapabilities> OpenAiProvider::list_model_capabilities() {
     return *caps;
 }
 
-long long OpenAiProvider::probe_context_window() {
+ProbeOutcome OpenAiProvider::probe_context_window() {
     if (config_.base_url.empty() || config_.api_key.empty() || config_.model.empty())
         throw ProviderError(ProviderErrorKind::Protocol, "provider config incomplete");
     CURL* curl = ::curl_easy_init();
@@ -895,10 +931,9 @@ long long OpenAiProvider::probe_context_window() {
     if (status >= 200 && status < 300) {
         // The gateway ACCEPTED the absurd max_tokens (silent clamp): no
         // boundary can be learned from it. Never parse a success body.
-        return 0;
+        return {};
     }
-    auto window = parse_context_probe_error(response_body);
-    return window.has_value() ? *window : 0;
+    return parse_context_probe_error(response_body);
 }
 
 } // namespace mini_agent

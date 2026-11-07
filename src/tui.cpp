@@ -651,18 +651,22 @@ std::vector<std::string> tool_registry_rows(const std::vector<std::string>& rend
     return rows;
 }
 
+std::string format_token_count(long long n) {
+    // <1k raw, <1M one-decimal k, <1G one-decimal M, else one-decimal G
+    // (probe sanity caps at 200M, but display stays correct for any size).
+    if (n < 1000)
+        return std::to_string(n);
+    char buf[32];
+    if (n < 1000000)
+        std::snprintf(buf, sizeof(buf), "%.1fk", static_cast<double>(n) / 1000.0);
+    else if (n < 1000000000)
+        std::snprintf(buf, sizeof(buf), "%.1fM", static_cast<double>(n) / 1000000.0);
+    else
+        std::snprintf(buf, sizeof(buf), "%.1fG", static_cast<double>(n) / 1000000000.0);
+    return std::string(buf);
+}
+
 std::string status_usage_segments(bool colors, const StatusInputs& inputs) {
-    // Pi-style compact token counts: <1k raw, <1M one-decimal k, else M.
-    auto format_token_count = [](long long n) {
-        if (n < 1000)
-            return std::to_string(n);
-        char buf[32];
-        if (n < 1000000)
-            std::snprintf(buf, sizeof(buf), "%.1fk", static_cast<double>(n) / 1000.0);
-        else
-            std::snprintf(buf, sizeof(buf), "%.1fM", static_cast<double>(n) / 1000000.0);
-        return std::string(buf);
-    };
     // v4 trailing segments (design 010): ctx reading, out sum, reasoning.
     // Each segment is ` · ` + tinted text; the whole row keeps the
     // pre-v4 shape when every input is unset (returns "").
@@ -1137,7 +1141,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     std::atomic<bool> probe_done{false};
     bool probe_running = false;
     struct ProbeResult {
-        long long window = 0; // 0 = gateway clamped silently or unknown
+        ProbeOutcome outcome; // v4.3.1: kind matters (window vs output cap)
         std::string error;    // network/config failure text
     } probe_result;
     // v4.2 (design 010 §11): capability metadata from the last successful
@@ -1654,9 +1658,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("login=" + std::string(auth_log_token(auth)));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
             // v4 fields (design 010).
-            screen.commit("context_window=" + (config.context_window > 0
-                                                   ? std::to_string(config.context_window)
-                                                   : std::string("(not set)")));
+            screen.commit("context_window=" +
+                          (config.context_window > 0
+                               ? format_token_count(config.context_window) + " (" +
+                                     std::to_string(config.context_window) + ")"
+                               : std::string("(not set)")));
             screen.commit("reasoning_effort=" + (config.reasoning_effort.empty()
                                                      ? std::string("(not set)")
                                                      : config.reasoning_effort));
@@ -1680,14 +1686,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             if (arg.empty()) {
                 const auto inputs = context_reading();
                 std::string shown = config.context_window > 0
-                                        ? std::to_string(config.context_window)
+                                        ? format_token_count(config.context_window) + " (" +
+                                              std::to_string(config.context_window) + ")"
                                         : std::string("(not set)");
                 screen.commit("context_window=" + shown +
                               "; usage /context <tokens> | /context probe | /context off");
                 screen.commit("ctx reading: " +
                               (inputs.context_tokens > 0
                                    ? (inputs.context_estimated ? "~" : "") +
-                                         std::to_string(inputs.context_tokens) + " tokens" +
+                                         format_token_count(inputs.context_tokens) + " tokens (" +
+                                         std::to_string(inputs.context_tokens) + ")" +
                                          (config.context_window > 0
                                               ? " = " +
                                                     std::to_string(inputs.context_tokens * 100 /
@@ -1731,7 +1739,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         pc.total_timeout_seconds =
                             pc.total_timeout_seconds < 30 ? pc.total_timeout_seconds : 30;
                         OpenAiProvider provider(pc);
-                        r.window = provider.probe_context_window();
+                        r.outcome = provider.probe_context_window();
                     } catch (const ProviderError& e) {
                         r.error = e.what();
                     } catch (const std::exception& e) {
@@ -2209,13 +2217,33 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             if (!probe_result.error.empty()) {
                 logger->event("ctx_probe", {{"status", "error"}, {"error", probe_result.error}});
                 screen.commit("[error] probe failed: " + probe_result.error);
-            } else if (probe_result.window > 0) {
-                config.context_window = probe_result.window;
+            } else if (probe_result.outcome.kind == ProbeLimitKind::Window ||
+                       probe_result.outcome.kind == ProbeLimitKind::InputCap) {
+                // v4.3.1: only a total window or an input cap may become
+                // the ctx denominator (the prompt side of the reading).
+                const auto kind = probe_result.outcome.kind;
+                const long long window = probe_result.outcome.value;
+                config.context_window = window;
                 save_and_report();
                 logger->event("ctx_probe",
-                              {{"status", "ok"}, {"window", std::to_string(probe_result.window)}});
-                screen.commit("[ok] probed context window: " + std::to_string(probe_result.window) +
-                              " tokens · saved to config (override anytime: /context <tokens>)");
+                              {{"status", "ok"},
+                               {"window", std::to_string(window)},
+                               {"kind", kind == ProbeLimitKind::Window ? "window" : "input_cap"}});
+                screen.commit("[ok] probed " +
+                              std::string(kind == ProbeLimitKind::Window ? "context window: "
+                                                                         : "input limit: ") +
+                              format_token_count(window) + " (" + std::to_string(window) +
+                              " tokens) · saved to config (override: /context <tokens>)");
+            } else if (probe_result.outcome.kind == ProbeLimitKind::OutputCap) {
+                // The gateway's max_tokens validator fired first: that is
+                // the OUTPUT cap, not the window. Show it, save nothing.
+                logger->event("ctx_probe", {{"status", "output_cap"},
+                                            {"value", std::to_string(probe_result.outcome.value)}});
+                screen.commit("[info] gateway reported its OUTPUT cap: " +
+                              format_token_count(probe_result.outcome.value) + " (" +
+                              std::to_string(probe_result.outcome.value) +
+                              " tokens) · not the context window · set the window: "
+                              "/context <tokens>");
             } else {
                 logger->event("ctx_probe", {{"status", "unknown"}});
                 screen.commit("[info] gateway accepted the oversized request without reporting a "

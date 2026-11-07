@@ -140,6 +140,19 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 
 已知限制（并入 §9 语义）：D6——真实 DashScope/OpenRouter/vLLM 线上消息形态未逐一实测（mock 按维护者真机自述构造），首次真机探测若得 `[info] ... silent clamp` 或解析失败，按提示手工配置即可，无副作用。
 
+## 14. v4.3.1 修订（2026-11-08 维护者追问：probe 拿到的到底是输入还是输出？）
+
+追问戳中真 bug：网关的**第一个校验器先开火**，同一个超大 max_tokens 请求在不同网关报出的边界不是同一个东西——vLLM/OpenAI 报 `maximum context length`（总窗口），DashScope 却先报 `Range of max_tokens`（**输出上限**）。v4.3 不加区分地存进 `context_window`，qwen3.8-flash 会把输出上限 131072 当成窗口存下来（分母小 7.5 倍，ctx% 虚高）。
+
+修正：`parse_context_probe_error` 返回 `ProbeOutcome{kind, value}`，kind ∈ Window / InputCap / OutputCap / Unknown：
+
+- **Window / InputCap**：可作 ctx 分母，写入 config（提示语区分 "context window" / "input limit"）。
+- **OutputCap**：只展示（`gateway reported its OUTPUT cap: 131.1k · not the context window`），**绝不写入** context_window。
+- **Unknown**（含 `Range of <含糊参数名>`）：不猜，维持静默 clamp 提示。
+- 顺带：所有用户可见的大 token 数统一 `format_token_count` 阶梯（<1k 原值、k、M、G），`/context` 与 `/config` 读数用"简写 (精确值)"双显（`983.6k (983616)`），config 语义要求可核对精确数。
+
+验证（2026-11-08）：`test_v43_probe_parse` 重写为 kind 断言（三形态分类 + 含糊参数拒绝 + 回显值/越界/空体拒绝）；mock 的 DashScope max_tokens 拒绝路径 E2E 三断言 PASS——OutputCap 正确分类显示 `131.1k`、未持久化为窗口、`/context 983616` 后读数 `983.6k (983616)`。全量 agent_test/CTest/strict-project/cpp_format 通过。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

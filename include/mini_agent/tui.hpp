@@ -189,6 +189,11 @@ std::vector<std::string> reasoning_menu_rows(const std::vector<std::string>& eff
                                              std::string_view current,
                                              std::string_view default_effort, bool mandatory);
 
+// Compact, human-readable token counts for every user-facing display
+// (status bar, /context readouts, probe results): <1k raw, <1M one-
+// decimal k, <1G one-decimal M, else one-decimal G. Pi-style ladder.
+std::string format_token_count(long long n);
+
 // Interactive TUI over one session. Owns the raw-mode/termios lifecycle and
 // the request worker; exits with an exit code. Persists per-turn saves via
 // store (atomic + lock already provided). Returns process exit code.

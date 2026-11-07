@@ -2175,28 +2175,37 @@ void test_v42_capabilities_and_menu() {
 }
 
 void test_v43_probe_parse() {
-    // The three recognised gateway shapes (design 010 §13).
+    using K = mini_agent::ProbeLimitKind;
+    // vLLM/OpenAI total window: the only shape that IS the denominator.
     const auto vllm = mini_agent::parse_context_probe_error(
         R"({"error":{"message":"This model's maximum context length is 32768 tokens. However, you requested 1000000000 tokens"}})");
-    check(vllm.has_value() && *vllm == 32768, "vllm maximum-context form");
-    const auto dash = mini_agent::parse_context_probe_error(
+    check(vllm.kind == K::Window && vllm.value == 32768, "vllm form -> Window");
+    // DashScope input cap: usable proxy for the prompt-side reading.
+    const auto dash_in = mini_agent::parse_context_probe_error(
         R"({"error":{"message":"<400> Range of input length should be [1, 983616]"}})");
-    check(dash.has_value() && *dash == 983616, "dashscope range form takes upper bound");
-    const auto dash_max =
+    check(dash_in.kind == K::InputCap && dash_in.value == 983616, "input range -> InputCap");
+    // DashScope max_tokens range: the OUTPUT cap -- must never be stored
+    // as the context window (maintainer data: qwen 131072 out vs 983616 in).
+    const auto dash_out =
         mini_agent::parse_context_probe_error("Range of max_tokens should be [1, 131072]");
-    check(dash_max.has_value() && *dash_max == 131072, "dashscope max_tokens range form");
-    const auto openai = mini_agent::parse_context_probe_error(
+    check(dash_out.kind == K::OutputCap && dash_out.value == 131072,
+          "max_tokens range -> OutputCap, not window");
+    const auto openai_gt = mini_agent::parse_context_probe_error(
         R"({"error":{"message":"max_tokens: 1000000000 > 131072, which is the maximum number of tokens that the model can generate"}})");
-    check(openai.has_value() && *openai == 131072, "openai gt form");
+    check(openai_gt.kind == K::OutputCap && openai_gt.value == 131072, "openai gt -> OutputCap");
     // Unknown / hostile shapes yield nothing rather than a wrong number.
-    check(!mini_agent::parse_context_probe_error("something went wrong").has_value(),
-          "unknown text rejected");
-    check(!mini_agent::parse_context_probe_error(R"({"max_tokens":1000000000})").has_value(),
+    check(mini_agent::parse_context_probe_error("something went wrong").kind == K::Unknown,
+          "unknown text -> Unknown");
+    check(mini_agent::parse_context_probe_error(R"({"max_tokens":1000000000})").kind == K::Unknown,
           "echoed request value never parsed");
-    check(!mini_agent::parse_context_probe_error("Range of input length should be [1, 7]")
-               .has_value(),
-          "out-of-range bound rejected");
-    check(!mini_agent::parse_context_probe_error("").has_value(), "empty body rejected");
+    check(mini_agent::parse_context_probe_error("Range of input length should be [1, 7]").kind ==
+              K::Unknown,
+          "out-of-range bound -> Unknown");
+    check(mini_agent::parse_context_probe_error("").kind == K::Unknown, "empty -> Unknown");
+    // Ambiguous "Range of" param name: refuse to classify (never guess).
+    const auto ambig =
+        mini_agent::parse_context_probe_error("Range of tokens should be [1, 65536]");
+    check(ambig.kind == K::Unknown && ambig.value == 0, "ambiguous param -> Unknown");
 }
 
 int main() {
