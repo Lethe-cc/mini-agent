@@ -146,15 +146,53 @@ std::vector<std::string_view> slash_matches(std::string_view prefix) {
     return out;
 }
 
-std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor_state) {
+// v4.10: second-tier completion -- the argument choices a command accepts.
+// Shown under the composer once the command is fully typed (or selected via
+// Tab), and cycled by Tab exactly like the command list. Placeholders in
+// angle brackets are hints, not values: Tab inserts them so the user fills
+// the real value (ids/paths/keys are runtime data we cannot enumerate).
+std::vector<std::string_view> slash_arg_choices(std::string_view command) {
+    if (command == "/context")
+        return {"<tokens>", "probe", "off"};
+    if (command == "/log")
+        return {"info", "debug", "trace", "<path>", "off", "default"};
+    if (command == "/debug")
+        return {"on", "all", "off"};
+    if (command == "/session")
+        return {"<id>", "new"};
+    if (command == "/approve")
+        return {"ask", "allowlist", "off"};
+    if (command == "/reasoning")
+        return {"low", "medium", "high", "off"};
+    if (command == "/provider")
+        return {"<url>"};
+    if (command == "/model")
+        return {"<name>"};
+    if (command == "/login")
+        return {"<key>"};
+    if (command == "/cwd")
+        return {"<path>"};
+    return {};
+}
+
+// Split a composer "/cmd rest" into (cmd, rest). rest is "" when the line
+// is exactly "/cmd" or "/cmd " (the space variant keeps the cursor state
+// meaningful for arg cycling).
+static bool split_composer(std::string_view line, std::string_view* cmd, std::string_view* rest) {
     if (line.empty() || line.front() != '/')
-        return std::nullopt;
-    const auto matches = slash_matches(line);
-    if (matches.empty())
-        return std::nullopt;
-    const std::string_view pick = matches[static_cast<std::size_t>(cursor_state) % matches.size()];
-    cursor_state = (cursor_state + 1) % static_cast<int>(matches.size());
-    return std::string(pick);
+        return false;
+    const auto space = line.find(' ');
+    if (space == std::string_view::npos) {
+        *cmd = line;
+        *rest = std::string_view{};
+        return true;
+    }
+    *cmd = line.substr(0, space);
+    *rest = line.substr(space + 1);
+    // Single-word argument state participates in completion (empty rest
+    // covers "/cmd "); a second space means the user is typing a real
+    // value (path, url) -- the line is final, no cycling.
+    return rest->find(' ') == std::string_view::npos;
 }
 
 std::size_t utf8_append(std::string& line, std::string_view bytes) {
@@ -465,13 +503,101 @@ std::string prompt_marker(const ConnState state) noexcept {
     return "\x1b[33m?\x1b[0m"; // yellow: configured but unprobed
 }
 
+std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor_state) {
+    if (line.empty() || line.front() != '/')
+        return std::nullopt;
+    const auto matches = slash_matches(line);
+    // v4.10 second tier: a fully-typed command (optionally with a partial
+    // single-word argument) cycles its choice list instead.
+    {
+        std::string_view cmd;
+        std::string_view rest;
+        if (split_composer(line, &cmd, &rest)) {
+            const auto choices = slash_arg_choices(cmd);
+            std::vector<std::string_view> hits;
+            for (const auto& c : choices)
+                if (c.substr(0, rest.size()) == rest)
+                    hits.push_back(c);
+            const bool arg_mode = line.find(' ') != std::string_view::npos;
+            // A fully-typed command enters the arg tier even when longer
+            // sibling commands share its prefix ("/session" vs "/sessions",
+            // "/model" vs "/models"): the exact word IS a command, so its
+            // options outrank the sibling completion.
+            const bool exact_cmd =
+                !arg_mode && std::find(matches.begin(), matches.end(), line) != matches.end();
+            // Args only after the command is unambiguous: a space (partial
+            // arg typed) or an exact full command. "/con" Tab still walks
+            // the command list.
+            if (!hits.empty() && (arg_mode || exact_cmd)) {
+                // Rest IS one of the choices (typed or inserted by a
+                // previous Tab): advance to the NEXT choice in the full
+                // list -- deterministic rotation, cursor not consulted.
+                for (std::size_t i = 0; i < choices.size(); ++i) {
+                    if (choices[i] == rest) {
+                        const std::size_t next = (i + 1) % choices.size();
+                        return std::string(cmd) + " " + std::string(choices[next]);
+                    }
+                }
+                // Partial prefix: cycle the filtered hits.
+                const std::string_view pick =
+                    hits[static_cast<std::size_t>(cursor_state) % hits.size()];
+                cursor_state = (cursor_state + 1) % static_cast<int>(hits.size());
+                return std::string(cmd) + " " + std::string(pick);
+            }
+        }
+    }
+    if (matches.empty())
+        return std::nullopt;
+    const std::string_view pick = matches[static_cast<std::size_t>(cursor_state) % matches.size()];
+    cursor_state = (cursor_state + 1) % static_cast<int>(matches.size());
+    return std::string(pick);
+}
+
 std::vector<std::string> slash_completion_hint(std::string_view composer) {
     const bool colors = colors_enabled();
     if (composer.empty() || composer.front() != '/')
         return {};
     const auto matches = slash_matches(composer);
     std::vector<std::string> rows;
+    // v4.10 second tier: once the composer is an exact command (with or
+    // without a partial single-word argument), list that command's
+    // argument choices instead of the command list.
+    {
+        std::string_view cmd;
+        std::string_view rest;
+        if (split_composer(composer, &cmd, &rest)) {
+            const auto choices = slash_arg_choices(cmd);
+            std::vector<std::string_view> hits;
+            for (const auto& c : choices)
+                if (c.substr(0, rest.size()) == rest)
+                    hits.push_back(c);
+            const bool exact_cmd = rest.empty() && composer.find(' ') == std::string_view::npos &&
+                                   std::find(matches.begin(), matches.end(), cmd) != matches.end();
+            const bool arg_prefix =
+                composer.find(' ') != std::string_view::npos && !choices.empty();
+            if (!choices.empty() && (exact_cmd || arg_prefix) && !hits.empty()) {
+                rows.emplace_back(
+                    tint(colors, "2", "options for " + std::string(cmd) + " (cycle with Tab):"));
+                for (const auto& c : hits)
+                    rows.push_back(
+                        tint(colors, "2", "  " + std::string(cmd) + " " + std::string(c)));
+                return rows;
+            }
+            // No hit under a typed command: free-form values (a token
+            // count for /context, a path for /cwd, a key for /login) are
+            // legal input, not completion misses -- stay silent instead of
+            // nagging. Only a partial that looks like a mistyped option
+            // (alphanumeric, command has a fixed choice set, and none of
+            // the choices could ever follow) would warrant a notice; the
+            // placeholder rows already teach the shape, so we omit it.
+        }
+    }
     if (matches.empty()) {
+        // Past the command word (a space is present) the user is typing a
+        // value, not a command: stay silent instead of the no-command
+        // notice (pre-v4.10 nag, now visible whenever an arg is typed).
+        if (composer.find(' ') != std::string_view::npos)
+            return rows;
         rows.emplace_back(tint(colors, "33", "Tab completion: no matching command (see /help)"));
         return rows;
     }

@@ -2207,6 +2207,52 @@ void test_v47_models_dev_catalog() {
           "token-plan-cn qwen3.8-flash row matches live catalog");
 }
 
+void test_v410_arg_completion() {
+    namespace T = mini_agent::tui;
+    // Second-tier hint: exact command lists its argument choices.
+    const auto ctx = T::slash_completion_hint("/context");
+    check(ctx.size() == 4 && ctx[0].find("options for /context") != std::string::npos,
+          "/context shows option header + 3 rows");
+    check(ctx[1].find("<tokens>") != std::string::npos &&
+              ctx[2].find("probe") != std::string::npos && ctx[3].find("off") != std::string::npos,
+          "choices listed after the header in registry order");
+    // Partial argument filters the list.
+    const auto p = T::slash_completion_hint("/context p");
+    check(p.size() == 2 && p[1].find("probe") != std::string::npos, "/context p filters to probe");
+    // Free-form values are not misses: typing a number stays silent.
+    check(T::slash_completion_hint("/context 123").empty(), "typed value never nags");
+    // Command tier unchanged while the command is still ambiguous.
+    const auto amb = T::slash_completion_hint("/con");
+    check(amb.size() == 3 && amb[1].find("/config") != std::string::npos &&
+              amb[2].find("/context") != std::string::npos,
+          "/con still completes commands, not args");
+    // Tab cycles args once the command is exact.
+    int cycle = 0;
+    auto a = T::slash_tab_complete("/context", cycle);
+    check(a && *a == "/context <tokens>", "Tab first arg choice");
+    auto b = T::slash_tab_complete("/context", cycle);
+    check(b && *b == "/context probe", "Tab cycles to second choice");
+    auto filtered = T::slash_tab_complete("/context p", cycle);
+    check(filtered && *filtered == "/context probe", "partial arg pins filtered choice");
+    // Rest IS a full choice: Tab rotates to the NEXT one deterministically
+    // (the inserted-value case), wrapping around the list end.
+    int c3 = 0;
+    auto rot1 = T::slash_tab_complete("/context <tokens>", c3);
+    check(rot1 && *rot1 == "/context probe", "exact choice rotates to next");
+    auto rot2 = T::slash_tab_complete("/context off", c3);
+    check(rot2 && *rot2 == "/context <tokens>", "last choice wraps to first");
+    // Exact command with a prefix-sharing sibling still enters the arg tier.
+    auto sess = T::slash_tab_complete("/session", c3);
+    check(sess && *sess == "/session <id>", "/session enters args despite /sessions sibling");
+    // Commands without a choice set keep cycling the command itself.
+    int c2 = 0;
+    auto h = T::slash_tab_complete("/help", c2);
+    check(h && *h == "/help", "/help Tab stays on the command");
+    // /log level tier.
+    const auto log = T::slash_completion_hint("/log ");
+    check(log.size() == 7 && log[1].find("info") != std::string::npos, "/log lists 6 choices");
+}
+
 void test_v43_probe_parse() {
     using K = mini_agent::ProbeLimitKind;
     // vLLM/OpenAI total window: the only shape that IS the denominator.
@@ -2335,6 +2381,7 @@ int main() {
     test_v42_capabilities_and_menu();
     test_v43_probe_parse();
     test_v47_models_dev_catalog();
+    test_v410_arg_completion();
     test_v44_debug_log();
     test_git_tools();
     if (failures) {
