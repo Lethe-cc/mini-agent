@@ -25,6 +25,10 @@ struct TurnOptions {
     // UI hook: fires after each tool call is decided. `executed` false =
     // denied by the approver (result carries the refusal note).
     std::function<void(const ToolCall&, const ToolResult&, bool executed)> on_tool;
+    // v4.11 (design 010 §21): fires once per call AFTER approval and
+    // BEFORE execution -- lets the TUI panel show a running tool. Not
+    // fired for denied calls (they go straight to on_tool).
+    std::function<void(const ToolCall&)> on_tool_start;
     // Abort hook applied to tool execution as well (kills bash group,
     // stops MCP calls between rounds). Null treated as never-abort.
     ShouldAbort should_abort;

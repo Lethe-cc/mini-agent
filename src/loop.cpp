@@ -130,10 +130,14 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
                     tool_result = ToolResult{"user denied this tool invocation", true};
                 } else {
                     executed = true;
+                    if (options.on_tool_start)
+                        options.on_tool_start(call); // v4.11 panel: running
                     tool_result = execute_one(*options.tools, call, abort);
                 }
             } else {
                 executed = true;
+                if (options.on_tool_start)
+                    options.on_tool_start(call); // v4.11 panel: running
                 tool_result = execute_one(*options.tools, call, abort);
             }
             if (abort()) {

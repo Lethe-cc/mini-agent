@@ -2207,6 +2207,31 @@ void test_v47_models_dev_catalog() {
           "token-plan-cn qwen3.8-flash row matches live catalog");
 }
 
+void test_v411_turn_panel() {
+    namespace T = mini_agent::tui;
+    // Idle-ish: header only (caller decides visibility; rows always lead
+    // with the turn timer).
+    const auto base = T::turn_panel_rows(false, false, 3, {}, 5);
+    check(base.size() == 1 && base[0].find("this turn 3s") != std::string::npos,
+          "header row carries the elapsed timer");
+    // Thinking marker appears between header and tools.
+    std::vector<std::string> tools = {"[tool] a [ok]", "[tool] b [running]"};
+    const auto with_think = T::turn_panel_rows(false, true, 12, tools, 5);
+    check(with_think.size() == 4 && with_think[1].find("thinking") != std::string::npos,
+          "thinking row follows header");
+    check(with_think.back().find("[running]") != std::string::npos, "running tool kept");
+    // Over budget: OLDEST dropped, newest kept (the running call matters).
+    std::vector<std::string> many;
+    for (int i = 0; i < 9; ++i)
+        many.push_back("row" + std::to_string(i));
+    const auto capped = T::turn_panel_rows(false, false, 1, many, 5);
+    check(capped.size() == 5, "rows capped to budget");
+    check(capped.back().find("row8") != std::string::npos &&
+              capped[1].find("row5") != std::string::npos &&
+              capped[1].find("row0") == std::string::npos,
+          "cap drops from the front (newest survive)");
+}
+
 void test_v410_arg_completion() {
     namespace T = mini_agent::tui;
     // Second-tier hint: exact command lists its argument choices.
@@ -2382,6 +2407,7 @@ int main() {
     test_v43_probe_parse();
     test_v47_models_dev_catalog();
     test_v410_arg_completion();
+    test_v411_turn_panel();
     test_v44_debug_log();
     test_git_tools();
     if (failures) {

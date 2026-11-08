@@ -609,9 +609,7 @@ std::vector<std::string> slash_completion_hint(std::string_view composer) {
 
 // ------------------------------------------------------------ v2 tool UI
 
-std::string tool_activity_line(const std::string& tool_name, const std::string& arguments_json,
-                               bool executed, bool is_error, long long elapsed_ms,
-                               std::size_t result_bytes) {
+std::string tool_arg_summary(const std::string& arguments_json) {
     std::string summary;
     // First meaningful fragment of the arguments, sanitized + clipped:
     // never raw control characters reach the frame (008 5.4).
@@ -636,6 +634,30 @@ std::string tool_activity_line(const std::string& tool_name, const std::string& 
     summary = sanitize_display(summary);
     if (summary.size() > 72)
         summary = summary.substr(0, 72) + "...";
+    return summary;
+}
+
+std::vector<std::string> turn_panel_rows(bool colors, bool thinking, long long elapsed_secs,
+                                         const std::vector<std::string>& tool_rows,
+                                         std::size_t max_rows) {
+    std::vector<std::string> rows;
+    rows.push_back(tint(colors, "2", "this turn " + std::to_string(elapsed_secs) + "s"));
+    if (thinking)
+        rows.push_back(tint(colors, "36", "... thinking"));
+    // Newest-last order assumed; drop from the FRONT when over budget so
+    // the running/last tool stays visible.
+    std::size_t shown = max_rows > 1 ? max_rows - 1 : 0; // header owns one row
+    if (tool_rows.size() > shown)
+        rows.insert(rows.end(), tool_rows.end() - static_cast<long>(shown), tool_rows.end());
+    else
+        rows.insert(rows.end(), tool_rows.begin(), tool_rows.end());
+    return rows;
+}
+
+std::string tool_activity_line(const std::string& tool_name, const std::string& arguments_json,
+                               bool executed, bool is_error, long long elapsed_ms,
+                               std::size_t result_bytes) {
+    const std::string summary = tool_arg_summary(arguments_json);
     // Plain text: `LiveScreen::commit` colours `[tool]` rows by outcome via
     // `style_history_line` (the summary is sanitized, so no ESC bytes reach
     // the classifier's passthrough check).
@@ -1374,6 +1396,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     auto tool_registry = build_tool_registry(config, &tool_note);
     std::mutex tool_mutex;
     std::vector<ToolRound> tool_events;
+    // v4.11 turn panel (design 010 §21): live process rows during a turn.
+    // `running_tool` is set by on_tool_start (worker thread, under
+    // tool_mutex) and cleared by on_tool; `reasoning_live` is set by the
+    // SSE parser the first time a reasoning delta arrives this turn.
+    std::string running_tool;
+    std::atomic<bool> reasoning_live{false};
+    // Completed tool rows for THIS turn, kept for the panel even after
+    // drain_tool_events commits them to history (the panel is the turn's
+    // process view; history scrolls away).
+    std::vector<std::string> panel_tool_rows;
     ApprovalSlot approval_slot;
     std::atomic<bool> approval_abort{false};
     bool approval_expanded = false;
@@ -1406,6 +1438,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         for (const auto& round : batch) {
             screen.commit(tool_activity_line(round.tool_name, round.arguments_json, round.executed,
                                              round.is_error, round.elapsed_ms, round.result_bytes));
+            // v4.11: the panel keeps the whole turn's rows (history scrolls).
+            panel_tool_rows.push_back(tool_activity_line(round.tool_name, round.arguments_json,
+                                                         round.executed, round.is_error,
+                                                         round.elapsed_ms, round.result_bytes));
             tools_active = true;
         }
     };
@@ -1462,7 +1498,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         {
             std::lock_guard<std::mutex> lock(tool_mutex);
             tool_events.clear();
+            running_tool.clear();
         }
+        reasoning_live = false; // v4.11 panel evidence belongs to the new turn
+        panel_tool_rows.clear();
         approval_abort = false;
         approval_expanded = false;
         tools_active = false;
@@ -1478,7 +1517,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         // worker runs (/login, /model); the copy is the thread boundary.
         const AppConfig turn_config = config; // NOLINT(performance-unnecessary-copy-initialization)
         worker = std::thread([&, turn_config, user_msg = std::move(user)]() mutable {
-            OpenAiProvider provider(turn_config.to_provider());
+            auto provider_config = turn_config.to_provider();
+            provider_config.reasoning_live = &reasoning_live; // v4.11 panel
+            OpenAiProvider provider(std::move(provider_config));
             Chat outgoing;
             for (const auto& m : session.chat.messages())
                 outgoing.add(Message{m});
@@ -1555,6 +1596,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     return Approval::Deny;
                 }
             };
+            turn_options.on_tool_start = [&](const ToolCall& call) {
+                // v4.11: panel shows the call as running until on_tool
+                // lands (approval-gated calls fire this only after the
+                // approve decision, denied calls never fire it).
+                std::lock_guard<std::mutex> lock(tool_mutex);
+                running_tool = "[tool] " + sanitize_display(call.name) +
+                               (tool_arg_summary(call.arguments_json).empty()
+                                    ? std::string()
+                                    : " · " + tool_arg_summary(call.arguments_json)) +
+                               " [running]";
+            };
             turn_options.on_tool = [&](const ToolCall& call, const ToolResult& tool_result,
                                        bool executed) {
                 ToolRound round;
@@ -1565,6 +1617,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 round.elapsed_ms = tool_result.elapsed_ms;
                 round.result_bytes = tool_result.text.size();
                 std::lock_guard<std::mutex> lock(tool_mutex);
+                running_tool.clear(); // v4.11: the row lands in tool_events
                 tool_events.push_back(std::move(round));
             };
             // v4: run_turn writes here only on a successful turn; the
@@ -2676,6 +2729,23 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             drain_tool_events();                 // [tool] rows land in history as they arrive
             std::vector<std::string> extra_rows; // approval block when pending
             const std::string tail = streaming ? deltas.snapshot() : std::string{};
+            // v4.11 turn panel: while streaming, the extra-rows slot shows
+            // the process (thinking marker + tool rows incl. the running
+            // call). Approval rows keep priority when a decision is pending
+            // (the pending call IS the process at that moment).
+            if (streaming && !approval_pending()) {
+                std::vector<std::string> panel_tools = panel_tool_rows;
+                {
+                    std::lock_guard<std::mutex> lock(tool_mutex);
+                    if (!running_tool.empty())
+                        panel_tools.push_back(running_tool);
+                }
+                const bool thinking = reasoning_live.load(std::memory_order_relaxed);
+                const auto secs =
+                    std::chrono::duration_cast<std::chrono::seconds>(steady_now() - turn_start)
+                        .count();
+                extra_rows = turn_panel_rows(colors_enabled(), thinking, secs, panel_tools, 5);
+            }
             std::string composer_display;
             if (secret_input) {
                 composer_display.assign(composer.size(), '*');

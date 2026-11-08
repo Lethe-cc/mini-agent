@@ -438,6 +438,10 @@ def main():
     expect(bool(counts) and max(counts) >= 30,
            f"streaming window scales with terminal height (max backup={max(counts) if counts else 0})")
     expect(all(c <= 49 for c in counts), "live block never exceeds rows-1")
+    # v4.11 turn panel (design 010 §21): while a turn streams, the live
+    # region carries the process view -- at minimum the "this turn Ns"
+    # header row (tools/thinking rows appear only when a turn uses them).
+    expect("this turn" in strip_csi(long_raw), "turn panel header shown while streaming")
     over = [s for part in long_raw.split("\n")[:-1]
             for s in [strip_csi(part.rstrip("\r"))]  # pty ONLCR adds the CR
             if display_width(s) > 80]

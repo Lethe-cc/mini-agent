@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -52,6 +53,13 @@ struct ProviderConfig {
     // passed through verbatim as `reasoning_effort` -- the server is the
     // arbiter of accepted values (config is the authoritative source).
     std::string reasoning_effort;
+    // v4.11 (design 010 §21): optional live-activity flag for the TUI turn
+    // panel. When non-null, the streaming parser sets it true the first
+    // time a reasoning-content delta arrives this turn (same evidence as
+    // ActualReasoning::seen, but visible DURING the stream, not only in
+    // the post-turn status). The owner (main thread) resets it per turn;
+    // lifetime must cover the completion call.
+    std::atomic<bool>* reasoning_live = nullptr;
 };
 
 // Abort hook: called from the streaming callback; return true to stop the

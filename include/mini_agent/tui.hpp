@@ -137,6 +137,24 @@ std::string tool_activity_line(const std::string& tool_name, const std::string& 
                                bool executed, bool is_error, long long elapsed_ms,
                                std::size_t result_bytes);
 
+// v4.11 (design 010 §21): rows for the in-turn activity panel -- the
+// process view between "question sent" and "answer complete" (route A of
+// the right-column discussion: the inline frame cannot split columns, so
+// the panel lives in the live region's extra-rows slot while streaming).
+// Pure: the caller snapshots the turn state; rows are pre-tinted or plain
+// depending on `colors`. Layout: header ("this turn Ns"), a thinking
+// marker when the gateway has streamed reasoning deltas this turn, then
+// the newest tool rows (name · summary [state]) capped at max_rows with
+// the OLDEST dropped (the running call is the interesting one).
+std::vector<std::string> turn_panel_rows(bool colors, bool thinking, long long elapsed_secs,
+                                         const std::vector<std::string>& tool_rows,
+                                         std::size_t max_rows);
+
+// Compact one-row summary of a tool call's primary argument (command/
+// path/text/url/query), sanitized + clipped. Shared by the history line
+// and the panel.
+std::string tool_arg_summary(const std::string& arguments_json);
+
 // Approval key state machine (pure; main thread drives it). `expanded`
 // toggles the full-arguments view with `?`. Returns the action for the
 // key or nullopt when the key belongs to the normal composer.

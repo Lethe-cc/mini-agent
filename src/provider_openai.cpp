@@ -537,6 +537,8 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
                 if (auto rc = delta->find(key); rc != delta->end() && rc->is_string() &&
                                                 !rc->get_ref<const std::string&>().empty()) {
                     reasoning.seen = true;
+                    if (config_.reasoning_live) // v4.11: turn panel (mid-stream)
+                        config_.reasoning_live->store(true, std::memory_order_relaxed);
                     break;
                 }
             }
