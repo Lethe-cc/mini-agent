@@ -198,6 +198,17 @@ ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1
 
 验证（2026-11-08）：`test_v47_models_dev_catalog`（命中/尾斜杠/未知 url/未知 model/空参/前缀邻居不误命中/维护者真网关行 qwen3.8-flash=1000000+131072 与当日线上目录一致）通过；agent_test 全量、CTest 3/3 通过。
 
+## 19. v4.8 修订（2026-11-08 维护者需求：把 debug 选项改成 log，分级 info/debug/trace，默认 info）
+
+把 v4.4 的一级/二级 debug 布尔统一成**单一级别阶梯**，挂在 `/log` 命令族上：
+
+- **语义**：`info`（默认）= 只有结构化元数据日志（零正文保证不变）；`debug` = 追加对话原始报文 dump（`<log>.debug`，0600，REQUEST/SSE 逐条）；`trace` = 再追加辅助流量（PROBE/MODELS，4KB 截断）。三级与旧词汇一一对应：off=info、on=debug、all=trace。
+- **数据层**：`AppConfig.log_level`（string，默认 "info"）取代 `debug_log`/`debug_log_aux` 两个 bool；`capture_chat()/capture_aux()` 派生门（单一事实源）。JSON 仅高于 info 时写 `log_level`；**旧字段保留读**：`debug_log:true`→debug、`debug_log_aux:true`→trace（aux 优先）、同文件显式 `log_level` 压过旧 bool；保存时只写新字段（旧 bool 自然退役）。非 info|debug|trace 的值整份失败关闭。
+- **入口**：env `MINI_AGENT_LOG_LEVEL=info|debug|trace`（新，压过 `MINI_AGENT_DEBUG`）；`MINI_AGENT_DEBUG` 旧拼写保留（非空=debug、"2"=trace）；CLI `--log-level [v]`/`--log-level=v`（新）+ `--debug`/`--debug=all`（别名）；TUI `/log info|debug|trace`（新，`/log` 无参同时显示当前级别）+ `/debug on|all|off|info|debug|trace`（保留为别名，无参行自述别名身份）；`/config` 行改显 `log_level=<v>`。非法 `--log-level` 值 CLI 失败关闭（exit 2）。
+- **兼容钩子**：v4.4 的"一级开、二级不开时行为与 v4.4 完全一致"回归钩子平移为"debug 级行为 == 旧 on、trace 级 == 旧 all、info 级 == 旧 off"，由 capture_chat/capture_aux 门保证。
+
+验证（2026-11-08）：`test_v44_debug_log` 重写为级别往返/旧 bool 迁移/优先级/失败关闭/门与路径推导断言；agent_test 全量、CTest 3/3、strict-project、cpp_format 通过；PTY 实测 `/log debug`→trace→info 三条 `[ok] log level ...` 与 `/config` 的 `log_level=info`、info 级配置文件不落 log_level 字段均正确。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

@@ -42,7 +42,10 @@ void print_usage(std::ostream& out) {
            "  mini-agent ask [--tools M] --cwd PATH -   read question from stdin\n"
            "      --tools off|ask|allowlist|auto  (default off: non-interactive contract)\n"
            "          allowlist: only tool_allowlist names execute (script-safe, v3)\n"
-           "      --debug  dump raw chat request/response to <log path>.debug (v4.4)\n"
+           "      --debug  alias of --log-level=debug (dump raw chat traffic)\n"
+           "      --log-level info|debug|trace  traffic capture ladder (v4.8):\n"
+           "          debug: raw chat request/response -> <log path>.debug\n"
+           "          trace: + auxiliary traffic (models/probe, truncated)\n"
            "  mini-agent run [--session ID] [--cwd PATH] [--debug]  session (TUI; v1 line-mode)\n"
            "  mini-agent session list|rm ID  manage sessions\n"
            "  mini-agent mcp list            show configured MCP servers\n"
@@ -217,12 +220,19 @@ int cmd_ask(int argc, char** argv) {
             continue;
         }
         if (std::strcmp(argv[i], "--debug") == 0) {
-            config.debug_log = true; // v4.4: raw chat traffic dump (010 §15)
+            config.log_level = "debug"; // v4.4 alias (010 §19)
             continue;
         }
         if (std::strcmp(argv[i], "--debug=all") == 0) {
-            config.debug_log = true; // v4.6: level 2, aux traffic too
-            config.debug_log_aux = true;
+            config.log_level = "trace"; // v4.6 alias (010 §19)
+            continue;
+        }
+        if (std::strncmp(argv[i], "--log-level=", 12) == 0) {
+            config.log_level = argv[i] + 12; // v4.8 (010 §19)
+            continue;
+        }
+        if (std::strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
+            config.log_level = argv[++i]; // v4.8 (010 §19)
             continue;
         }
         positional.emplace_back(argv[i]);
@@ -230,6 +240,10 @@ int cmd_ask(int argc, char** argv) {
     if (tools_mode != "off" && tools_mode != "ask" && tools_mode != "auto" &&
         tools_mode != "allowlist") {
         std::cerr << "error: --tools must be off|ask|allowlist|auto\n";
+        return kConfigError;
+    }
+    if (config.log_level != "info" && config.log_level != "debug" && config.log_level != "trace") {
+        std::cerr << "error: --log-level must be info|debug|trace\n";
         return kConfigError;
     }
     if (positional.size() == 1) {
@@ -388,8 +402,8 @@ int cmd_run(int argc, char** argv) {
     std::string session_id;
     bool fresh = false;
     std::string workspace_flag;
-    bool debug_flag = false;     // v4.4
-    bool debug_aux_flag = false; // v4.6
+    bool debug_flag = false; // v4.4: any capture-raising flag was given
+    std::string debug_level; // v4.8: its level (info|debug|trace)
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--session") == 0 && i + 1 < argc) {
             session_id = argv[++i];
@@ -404,13 +418,21 @@ int cmd_run(int argc, char** argv) {
         } else if (std::strncmp(argv[i], "--cwd=", 6) == 0) {
             workspace_flag = argv[i] + 6;
         } else if (std::strcmp(argv[i], "--debug") == 0) {
-            debug_flag = true; // v4.4: raw chat traffic dump (design 010 §15)
+            debug_flag = true; // v4.4 alias: raises capture to debug
+            debug_level = "debug";
         } else if (std::strcmp(argv[i], "--debug=all") == 0) {
-            debug_flag = true; // v4.6: level 2 -- also aux traffic (truncated)
-            debug_aux_flag = true;
+            debug_flag = true; // v4.6 alias: raises capture to trace
+            debug_level = "trace";
+        } else if (std::strncmp(argv[i], "--log-level=", 12) == 0) {
+            debug_flag = true; // v4.8 (design 010 §19)
+            debug_level = argv[i] + 12;
+        } else if (std::strcmp(argv[i], "--log-level") == 0 && i + 1 < argc) {
+            debug_flag = true; // v4.8 (design 010 §19)
+            debug_level = argv[++i];
         } else {
             std::cerr << "usage: mini-agent run [--session ID] [--new] "
-                         "[--cwd PATH] [--mcp NAME=SPEC] [--debug|=all]\n";
+                         "[--cwd PATH] [--mcp NAME=SPEC] [--debug|=all] "
+                         "[--log-level info|debug|trace]\n";
             return kConfigError;
         }
     }
@@ -420,8 +442,12 @@ int cmd_run(int argc, char** argv) {
     if (!workspace_flag.empty())
         config.workspace = workspace_flag; // CLI flag beats file/env (v3 009 5.4)
     if (debug_flag) {
-        config.debug_log = true; // v4.4: CLI flag beats file/env
-        config.debug_log_aux = debug_aux_flag;
+        // v4.8: CLI flag beats file/env; unknown levels fail closed.
+        if (debug_level != "info" && debug_level != "debug" && debug_level != "trace") {
+            std::cerr << "error: --log-level must be info|debug|trace\n";
+            return kConfigError;
+        }
+        config.log_level = debug_level;
     }
     std::string mcp_error;
     if (!apply_mcp_flags(argc, argv, &config, &mcp_error)) {

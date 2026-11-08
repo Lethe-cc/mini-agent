@@ -183,16 +183,17 @@ ProviderConfig AppConfig::to_provider() const {
     p.api_key = api_key;
     p.model = model;
     p.reasoning_effort = reasoning_effort; // v4: empty == field omitted
-    if (debug_log) {
-        // v4.4: raw chat traffic goes next to the diagnostics log path.
-        // config.log_file already carries the env override (merged in
-        // load_config_merged); the "off" sentinel disables the metadata
-        // log but debug stays on, so fall back to the default base.
+    if (capture_chat()) {
+        // v4.4/v4.8: raw chat traffic goes next to the diagnostics log
+        // path. config.log_file already carries the env override (merged
+        // in load_config_merged); the "off" sentinel disables the
+        // metadata log but capture stays on, so fall back to the default
+        // base. v4.8: "trace" additionally enables the aux gate.
         std::string base = log_file;
         if (base.empty() || base == "off")
             base = "/tmp/mini-agent-" + std::to_string(static_cast<long>(::getuid())) + ".log";
         p.debug_log_path = base + ".debug";
-        p.debug_aux = debug_log_aux; // v4.6: level 2 also dumps aux traffic
+        p.debug_aux = capture_aux();
     }
     if (const char* timeout = env_nonempty("MINI_AGENT_TIMEOUT_SECONDS")) {
         const long parsed = std::strtol(timeout, nullptr, 10);
@@ -224,10 +225,8 @@ std::string config_to_json(const AppConfig& config) {
     if (!config.log_file.empty()) {
         root["log_file"] = config.log_file;
     }
-    if (config.debug_log) // v4.4: written only when on (design 010 §15)
-        root["debug_log"] = true;
-    if (config.debug_log_aux) // v4.6: level-2 (aux traffic)
-        root["debug_log_aux"] = true;
+    if (config.log_level != "info") // v4.8: written only when raised (010 §19)
+        root["log_level"] = config.log_level;
     // v3 fields (design 009 section 5.4): optional, written only when set.
     if (!config.workspace.empty())
         root["workspace"] = config.workspace;
@@ -302,24 +301,48 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
     config.api_key = get_str("api_key");
     config.model = get_str("model");
     config.log_file = get_str("log_file");
-    // v4.4: debug_log must be a bool when present; anything else fails
-    // closed like the other typed fields.
-    if (auto it = parsed.find("debug_log"); it != parsed.end()) {
-        if (it->is_boolean())
-            config.debug_log = it->get<bool>();
-        else {
-            if (error)
-                *error = "config debug_log must be a boolean";
-            return std::nullopt;
+    // v4.8 (010 §19): log_level is a string ladder "info"|"debug"|"trace".
+    // Unknown values fail closed like other typed fields. The legacy v4.4
+    // bools stay readable and map onto the ladder (aux wins: true,true ->
+    // trace). A new-style log_level in the same file takes precedence.
+    {
+        bool legacy_chat = false;
+        bool legacy_aux = false;
+        if (auto it = parsed.find("debug_log"); it != parsed.end()) {
+            if (it->is_boolean())
+                legacy_chat = it->get<bool>();
+            else {
+                if (error)
+                    *error = "config debug_log must be a boolean";
+                return std::nullopt;
+            }
         }
-    }
-    if (auto it = parsed.find("debug_log_aux"); it != parsed.end()) {
-        if (it->is_boolean())
-            config.debug_log_aux = it->get<bool>();
-        else {
-            if (error)
-                *error = "config debug_log_aux must be a boolean";
-            return std::nullopt;
+        if (auto it = parsed.find("debug_log_aux"); it != parsed.end()) {
+            if (it->is_boolean())
+                legacy_aux = it->get<bool>();
+            else {
+                if (error)
+                    *error = "config debug_log_aux must be a boolean";
+                return std::nullopt;
+            }
+        }
+        if (legacy_aux)
+            config.log_level = "trace";
+        else if (legacy_chat)
+            config.log_level = "debug";
+        if (auto it = parsed.find("log_level"); it != parsed.end()) {
+            if (!it->is_string()) {
+                if (error)
+                    *error = "config log_level must be a string";
+                return std::nullopt;
+            }
+            const auto level = it->get<std::string>();
+            if (level != "info" && level != "debug" && level != "trace") {
+                if (error)
+                    *error = "config log_level must be info|debug|trace";
+                return std::nullopt;
+            }
+            config.log_level = level;
         }
     }
 
@@ -477,9 +500,15 @@ AppConfig load_config_merged(std::string* file_error) {
     if (const char* v = env_nonempty("MINI_AGENT_LOG"))
         config.log_file = v;
     if (const char* v = env_nonempty("MINI_AGENT_DEBUG")) {
-        config.debug_log = true; // v4.4: tri-state opt-in (unset keeps file)
-        if (std::strcmp(v, "2") == 0)
-            config.debug_log_aux = true; // v4.6: level 2 = also aux traffic
+        // v4.4/v4.6 legacy env spellings, kept working (010 §19): any
+        // non-empty value raises capture to debug, "2" raises it to
+        // trace. MINI_AGENT_LOG_LEVEL (v4.8) wins when both are set.
+        config.log_level = std::strcmp(v, "2") == 0 ? "trace" : "debug";
+    }
+    if (const char* v = env_nonempty("MINI_AGENT_LOG_LEVEL")) {
+        const std::string level = v;
+        if (level == "info" || level == "debug" || level == "trace")
+            config.log_level = level; // invalid values keep prior config
     }
     if (const char* v = env_nonempty("MINI_AGENT_WORKSPACE"))
         config.workspace = v; // v3: scripts pin the boundary per invocation

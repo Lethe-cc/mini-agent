@@ -1565,7 +1565,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("          /tools (tool registry) · /mcp (servers) · /cwd [path]");
             screen.commit("          /approve ask|allowlist|off (tool gate)");
             screen.commit("          /models (list & pick) · /log <path>|off|default");
-            screen.commit("          /debug on|off (raw chat traffic dump)");
+            screen.commit(
+                "          /log info|debug|trace (capture level; /debug on|all|off alias)");
             screen.commit("          /config · /sessions · /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
             screen.commit("configure them in any order, any number of sittings.");
@@ -1632,10 +1633,28 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             return true;
         }
         if (line.rfind("/log", 0) == 0) {
+            // v4.8 (design 010 §19): /log owns both the metadata-log path
+            // (pre-v4.8 behavior, unchanged) and the traffic-capture
+            // level ladder: info (default, metadata only) < debug (raw
+            // chat dumps) < trace (+ truncated auxiliary traffic).
             const auto arg = arg_of(line);
             if (arg.empty()) {
                 screen.commit(logger->enabled() ? "logging on: " + config.log_file
                                                 : "logging off; usage /log <path> or /log off");
+                screen.commit("level=" + config.log_level +
+                              "; usage /log info|debug|trace (see /debug)");
+            } else if (arg == "info" || arg == "debug" || arg == "trace") {
+                config.log_level = std::string(arg);
+                save_and_report();
+                if (config.log_level == "info") {
+                    screen.commit("[ok] log level info · metadata log only, no raw dumps");
+                } else {
+                    screen.commit("[ok] log level " + config.log_level +
+                                  (config.log_level == "debug"
+                                       ? " (raw chat traffic)"
+                                       : " (chat + truncated aux traffic)") +
+                                  " -> " + config.to_provider().debug_log_path);
+                }
             } else if (arg == "off") {
                 config.log_file = "off"; // sentinel: explicit disable
                 logger = make_logger();
@@ -1667,9 +1686,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                           std::string(config.api_key.empty() ? "(not set)" : "***set***"));
             screen.commit("login=" + std::string(auth_log_token(auth)));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
-            screen.commit(std::string("debug_log=") + (config.debug_log_aux ? "all"
-                                                       : config.debug_log   ? "chat"
-                                                                            : "off"));
+            screen.commit(std::string("log_level=") + config.log_level);
             // v4 fields (design 010).
             screen.commit("context_window=" +
                           (config.context_window > 0
@@ -1818,42 +1835,43 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             return true;
         }
         if (line.rfind("/debug", 0) == 0) {
-            // v4.4 (design 010 §15): raw chat-traffic dump toggle. ON
-            // appends every chat REQUEST body and SSE payload to
-            // "<log path>.debug" (0600). Model listing and the context
-            // probe are never dumped. Bodies contain conversation content
-            // -- the point of the flag -- while the api_key stays in the
-            // Authorization header only.
+            // v4.8 (design 010 §19): /debug is now an alias of the /log
+            // level ladder -- on == /log debug, all == /log trace, off ==
+            // /log info. Bodies contain conversation content (the point
+            // of the level) while the api_key stays in the Authorization
+            // header only.
             const auto arg = arg_of(line);
+            auto set_level = [&](std::string_view level, std::string_view ok_text) {
+                config.log_level = level;
+                save_and_report();
+                if (config.log_level == "info") {
+                    screen.commit(std::string(ok_text) + " · metadata log only");
+                } else {
+                    screen.commit(std::string(ok_text) + " -> " +
+                                  config.to_provider().debug_log_path);
+                }
+            };
             if (arg.empty()) {
                 const auto pc = config.to_provider();
-                screen.commit(std::string("debug=") +
-                              (config.debug_log_aux ? "all"
-                               : config.debug_log   ? "chat"
-                                                    : "off") +
-                              (config.debug_log ? " · file: " + pc.debug_log_path : std::string()) +
-                              "; usage /debug on|all|off");
+                screen.commit(
+                    std::string("debug=") + config.log_level +
+                    (config.capture_chat() ? " · file: " + pc.debug_log_path : std::string()) +
+                    "; usage /debug on|all|off (alias of /log debug|trace|info)");
             } else if (arg == "on") {
-                config.debug_log = true;
-                config.debug_log_aux = false;
-                save_and_report();
-                screen.commit("[ok] debug on (chat traffic) · raw chat traffic -> " +
-                              config.to_provider().debug_log_path);
+                set_level("debug", "[ok] log level debug (chat traffic) · raw chat traffic");
             } else if (arg == "all") {
-                // v4.6: level 2 -- ALSO dump auxiliary traffic (models
-                // listing, context probe request/response), truncated.
-                config.debug_log = true;
-                config.debug_log_aux = true;
-                save_and_report();
-                screen.commit("[ok] debug all (chat + truncated aux traffic) -> " +
-                              config.to_provider().debug_log_path);
+                // trace: ALSO dump auxiliary traffic (models listing,
+                // context probe request/response), truncated.
+                set_level("trace", "[ok] log level trace (chat + truncated aux traffic)");
             } else if (arg == "off") {
-                config.debug_log = false;
-                config.debug_log_aux = false;
-                save_and_report();
-                screen.commit("[ok] debug off · no further dumps");
+                set_level("info", "[ok] log level info · no further dumps");
+            } else if (arg == "debug" || arg == "trace" || arg == "info") {
+                set_level(arg, arg == "info"
+                                   ? "[ok] log level info"
+                                   : (arg == "debug" ? "[ok] log level debug (chat traffic)"
+                                                     : "[ok] log level trace (chat + aux)"));
             } else {
-                screen.commit("[error] /debug expects on|all|off");
+                screen.commit("[error] /debug expects on|all|off|info|debug|trace");
             }
             return true;
         }

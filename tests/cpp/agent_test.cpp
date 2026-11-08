@@ -2241,48 +2241,65 @@ void test_v43_probe_parse() {
 
 void test_v44_debug_log() {
     std::string error;
-    // config round-trip: written only when on; non-bool fails closed.
-    const auto on = mini_agent::config_from_json(R"({"model":"m","debug_log":true})", &error);
-    check(on.has_value() && on->debug_log, "debug_log parses");
-    check(mini_agent::config_to_json(*on).find("debug_log") != std::string::npos,
-          "debug_log written when on");
+    // v4.8 (010 §19): log_level ladder round-trip; written only when
+    // raised above info; bad values fail closed.
+    const auto dbg = mini_agent::config_from_json(R"({"model":"m","log_level":"debug"})", &error);
+    check(dbg.has_value() && dbg->log_level == "debug", "log_level parses");
+    check(mini_agent::config_to_json(*dbg).find("debug") != std::string::npos,
+          "log_level written when raised");
+    check(mini_agent::config_to_json(*dbg).find("log_level") != std::string::npos,
+          "log_level key written");
     const auto off = mini_agent::config_from_json(R"({"model":"m"})", &error);
-    check(off.has_value() && !off->debug_log, "default off");
-    check(mini_agent::config_to_json(*off).find("debug_log") == std::string::npos,
-          "off omitted from output");
-    check(!mini_agent::config_from_json(R"({"debug_log":"yes"})", &error).has_value(),
-          "non-bool debug_log rejected");
+    check(off.has_value() && off->log_level == "info", "default level info");
+    check(mini_agent::config_to_json(*off).find("log_level") == std::string::npos,
+          "info omitted from output");
+    check(!mini_agent::config_from_json(R"({"log_level":"verbose"})", &error).has_value(),
+          "unknown level rejected");
+    check(!mini_agent::config_from_json(R"({"log_level":true})", &error).has_value(),
+          "non-string level rejected");
 
-    // path derivation: <log_file>.debug; "off"/empty fall back to default.
+    // legacy bool migration: debug_log=true -> debug; aux=true -> trace
+    // (aux wins); explicit log_level beats the legacy pair.
+    const auto legacy = mini_agent::config_from_json(R"({"debug_log":true})", &error);
+    check(legacy.has_value() && legacy->log_level == "debug", "legacy debug_log -> debug");
+    const auto legacy_aux =
+        mini_agent::config_from_json(R"({"debug_log":true,"debug_log_aux":true})", &error);
+    check(legacy_aux.has_value() && legacy_aux->log_level == "trace", "legacy aux -> trace");
+    const auto mixed =
+        mini_agent::config_from_json(R"({"debug_log":true,"log_level":"info"})", &error);
+    check(mixed.has_value() && mixed->log_level == "info", "log_level beats legacy bools");
+    // saving a migrated config writes only the new field (bools retired).
+    const auto saved = mini_agent::config_to_json(*legacy_aux);
+    check(saved.find("log_level") != std::string::npos &&
+              saved.find("debug_log") == std::string::npos,
+          "migrated config saves as log_level only");
+    check(!mini_agent::config_from_json(R"({"debug_log":"yes"})", &error).has_value(),
+          "non-bool legacy debug_log still rejected");
+
+    // gates + path derivation: <log_file>.debug; "off"/empty fall back to
+    // default base; info -> no path at all.
     mini_agent::AppConfig cfg;
     cfg.base_url = "https://x.test/v1";
     cfg.api_key = "k";
     cfg.model = "m";
-    cfg.debug_log = true;
+    cfg.log_level = "debug";
     cfg.log_file = "/var/tmp/my.log";
     check(cfg.to_provider().debug_log_path == "/var/tmp/my.log.debug", "debug path from log_file");
+    check(cfg.to_provider().debug_log_path.find(".debug") != std::string::npos, "path suffix");
     cfg.log_file = "off";
     check(cfg.to_provider().debug_log_path.find(".debug") != std::string::npos &&
               cfg.to_provider().debug_log_path.find("off") == std::string::npos,
           "off sentinel falls back to default base");
-    cfg.debug_log = false;
-    check(cfg.to_provider().debug_log_path.empty(), "off -> no path");
-
-    // v4.6: level-2 aux flag round-trips and reaches ProviderConfig only
-    // while debug is on (aux without a dump path is meaningless).
-    const auto aux = mini_agent::config_from_json(
-        R"({"model":"m","debug_log":true,"debug_log_aux":true})", &error);
-    check(aux.has_value() && aux->debug_log_aux, "debug_log_aux parses");
-    check(mini_agent::config_to_json(*aux).find("debug_log_aux") != std::string::npos,
-          "debug_log_aux written when on");
-    check(aux->to_provider().debug_aux, "provider carries aux level");
-    mini_agent::AppConfig chatonly = cfg;
-    chatonly.debug_log = true;
-    chatonly.debug_log_aux = true;
-    chatonly.debug_log = false; // off dominates: no path, aux irrelevant
-    check(!chatonly.to_provider().debug_aux, "debug off -> provider aux off");
-    check(!mini_agent::config_from_json(R"({"debug_log_aux":"x"})", &error).has_value(),
-          "non-bool debug_log_aux rejected");
+    cfg.log_level = "info";
+    check(cfg.to_provider().debug_log_path.empty(), "info -> no path");
+    check(!cfg.capture_chat() && !cfg.capture_aux(), "info gates off");
+    cfg.log_level = "debug";
+    check(cfg.capture_chat() && !cfg.capture_aux(), "debug gates chat only");
+    cfg.log_level = "trace";
+    check(cfg.capture_chat() && cfg.capture_aux(), "trace gates both");
+    check(cfg.to_provider().debug_aux, "provider carries aux at trace");
+    cfg.log_level = "info";
+    check(!cfg.to_provider().debug_aux, "info -> provider aux off");
 }
 
 int main() {
