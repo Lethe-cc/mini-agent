@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -88,12 +90,20 @@ void debug_dump(const std::string& path, std::string_view tag, std::string_view 
     std::ofstream file(path, std::ios::app);
     if (!file)
         return; // debug is best-effort; never breaks the request path
-    file << "=== " << tag << " "
-         << std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count()
-         << "ms ===\n"
-         << payload << '\n';
+    // Human-readable local timestamp (v4.10.1: the raw epoch-ms value was
+    // a time, but unreadable in practice): "2026-11-08 21:53:45.123".
+    // Same wall clock as before, formatted instead of dumped.
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    const auto secs = static_cast<std::time_t>(now_ms / 1000);
+    std::tm tm{};
+    ::localtime_r(&secs, &tm);
+    char stamp[32];
+    std::snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02d.%03d", tm.tm_year + 1900,
+                  tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec,
+                  static_cast<int>(now_ms % 1000));
+    file << "=== " << tag << " " << stamp << " ===\n" << payload << '\n';
     file.close();
     if (fresh)
         ::chmod(path.c_str(), 0600);

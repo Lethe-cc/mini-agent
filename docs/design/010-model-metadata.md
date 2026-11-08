@@ -210,6 +210,10 @@ ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1
 
 验证（2026-11-08）：`test_v44_debug_log` 重写为会话态断言（文件 log_level/旧 bool 被忽略、保存清除旧字段且从不写 log_level、未知文件值容忍）+ 门与路径推导；PTY 实测旧 bool 文件加载为 info、`/log trace` 仅会话生效、任意保存清除 debug_log/debug_log_aux；agent_test 全量、CTest 3/3、strict-project、cpp_format 通过；PTY 实测 `/log debug`→trace→info 三条 `[ok] log level ...` 与 `/config` 的 `log_level=info`、info 级配置文件不落 log_level 字段均正确。
 
+## 20. v4.10.1 修订（2026-11-08 维护者反馈：debug 日志里看不到时间戳）
+
+dump 行头其实一直带时间，但形态是裸 epoch 毫秒（`=== REQUEST 1794123708734ms ===`），肉眼不可读、等于没有。`debug_dump` 行头改为本地时区可读格式 `2026-11-08 22:02:33.106`（同一 wall clock，仅格式化；aux 截断路径共用）。验证：真实 ask 请求 dump 头为 `=== REQUEST 2026-11-08 22:02:33.106 ===`；agent_test/CTest/strict-project/cpp_format 通过（无测试断言旧 `ms ===` 形态）。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。
