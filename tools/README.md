@@ -13,6 +13,7 @@ CI/质量门禁调用的脚本仍在 `scripts/`，被自动化测试引用的 mo
 | [diff_fuzz.cpp](diff_fuzz.cpp) | `src/diff.cpp` 的属性级 fuzz（2026-11-05 复查产物）：随机小文件对 20 万轮，断言未截断 diff 可逐 hunk 重放 OLD→NEW、@@ 起点单调、计数与行种类一致。非 CTest 目标，改动 diff.cpp 后手动编译运行（文件头有命令）。 |
 | [diff_demo.py](diff_demo.py) | v3 审批 diff 预览的**可复现验证工具**：内置 mock（CODEFIX 剧本）+ 一次性 git 工作区 + 真 pty，`auto` 模式自动跑 deny/allow 两遍并断言（拒绝→文件不动、允许→落盘与 diff 一致、commit 落库、日志无正文），`interactive` 模式把 y/N 交给你本人敲。非质量门禁。 |
 | [mcp_probe.py](mcp_probe.py) | Streamable HTTP MCP 客户端探针：对任意 MCP server 手动做握手、列工具、调工具、发原始 JSON-RPC。与 `src/mcp_http.cpp` 使用同样的头规则（`Mcp-Session-Id`、`MCP-Protocol-Version`、`Accept`）和 JSON/SSE 双响应解析，可用来排查 mini-agent 连不上某个 HTTP MCP server 的问题。 |
+| [refresh_models_dev.py](refresh_models_dev.py) | 重新生成内嵌 models.dev 窗口目录 `include/mini_agent/models_dev_data.hpp`（v4.7，设计 010 §18）：抓 https://models.dev/api.json（MIT）裁剪为 TSV；`--input file.json` 离线重解析；行数 <1000 拒写（上游 schema 漂移护栏）。非质量门禁。 |
 
 ## mcp_probe.py 快速上手
 

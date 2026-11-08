@@ -11,6 +11,7 @@
 #include "mini_agent/loop.hpp"
 #include "mini_agent/mcp.hpp"
 #include "mini_agent/md.hpp"
+#include "mini_agent/models_dev.hpp"
 #include "mini_agent/provider.hpp"
 #include "mini_agent/tools.hpp"
 
@@ -1182,6 +1183,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         // config work on OpenRouter-style gateways.
         if (inputs.context_window <= 0)
             inputs.context_window = caps_for_model().context_length;
+        // v4.7 (design 010 §18): pi-style static catalog last -- gateways
+        // without context_length metadata (DashScope token-plan) still get
+        // a denominator when base_url+model match a models.dev row. The
+        // catalog never overwrites config: it only fills the display gap.
+        if (inputs.context_window <= 0) {
+            if (const auto limits = lookup_models_dev(config.base_url, config.model))
+                inputs.context_window = limits->context;
+        }
         inputs.reasoning_effort = config.reasoning_effort;
         inputs.completion_tokens = status_completion_tokens;
         inputs.reasoning_seen = status_reasoning_seen;
@@ -1693,6 +1702,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                         ? format_token_count(config.context_window) + " (" +
                                               std::to_string(config.context_window) + ")"
                                         : std::string("(not set)");
+                // v4.7: when unset, surface the catalog reading (the same
+                // value the status bar silently uses) so the user can see
+                // and confirm it before it becomes config-authoritative.
+                if (config.context_window <= 0 && inputs.context_window > 0)
+                    shown += " · catalog: " + format_token_count(inputs.context_window) + " (" +
+                             std::to_string(inputs.context_window) + ") · set it: /context " +
+                             std::to_string(inputs.context_window);
                 screen.commit("context_window=" + shown +
                               "; usage /context <tokens> | /context probe | /context off");
                 screen.commit("ctx reading: " +
@@ -1700,10 +1716,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                    ? (inputs.context_estimated ? "~" : "") +
                                          format_token_count(inputs.context_tokens) + " tokens (" +
                                          std::to_string(inputs.context_tokens) + ")" +
-                                         (config.context_window > 0
+                                         (inputs.context_window > 0
                                               ? " = " +
                                                     std::to_string(inputs.context_tokens * 100 /
-                                                                   config.context_window) +
+                                                                   inputs.context_window) +
                                                     "% of window"
                                               : std::string())
                                    : std::string("(no data yet)")) +

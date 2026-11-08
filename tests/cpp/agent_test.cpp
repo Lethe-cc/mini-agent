@@ -18,6 +18,7 @@
 #include "mini_agent/loop.hpp"
 #include "mini_agent/mcp.hpp"
 #include "mini_agent/md.hpp"
+#include "mini_agent/models_dev.hpp"
 #include "mini_agent/provider.hpp"
 #include "mini_agent/session.hpp"
 #include "mini_agent/tools.hpp"
@@ -2174,6 +2175,36 @@ void test_v42_capabilities_and_menu() {
           "config echo replaced, not appended");
 }
 
+void test_v47_models_dev_catalog() {
+    // Hit: a (base_url, model) pair present in the generated snapshot.
+    const auto hit =
+        mini_agent::lookup_models_dev("http://127.0.0.1:1234/v1", "qwen/qwen3-coder-30b");
+    check(hit.has_value() && hit->context == 262144, "catalog row -> context window");
+    check(hit->output == 65536, "catalog row -> output limit");
+    // Trailing slashes on the configured base_url must not miss the row.
+    const auto slashed =
+        mini_agent::lookup_models_dev("http://127.0.0.1:1234/v1/", "qwen/qwen3-coder-30b");
+    check(slashed.has_value() && slashed->context == 262144, "base_url trailing slash trimmed");
+    // Misses stay misses: unknown model, unknown url, empty inputs.
+    check(!mini_agent::lookup_models_dev("http://127.0.0.1:1234/v1", "no-such-model").has_value(),
+          "unknown model -> miss");
+    check(!mini_agent::lookup_models_dev("http://gateway.invalid/v1", "qwen/qwen3-coder-30b")
+               .has_value(),
+          "unknown base_url -> miss");
+    check(!mini_agent::lookup_models_dev("", "m").has_value(), "empty url -> miss");
+    check(!mini_agent::lookup_models_dev("https://x.test/v1", "").has_value(),
+          "empty model -> miss");
+    // Prefix-adjacent ids must not false-hit (binary search verifies exact key).
+    check(!mini_agent::lookup_models_dev("http://127.0.0.1:1234/v1", "qwen/qwen3-coder-30b-extra")
+               .has_value(),
+          "id prefix never false-hits");
+    // The maintainer's real gateway row (models.dev alibaba-token-plan-cn).
+    const auto qwen = mini_agent::lookup_models_dev(
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "qwen3.8-flash");
+    check(qwen.has_value() && qwen->context == 1000000 && qwen->output == 131072,
+          "token-plan-cn qwen3.8-flash row matches live catalog");
+}
+
 void test_v43_probe_parse() {
     using K = mini_agent::ProbeLimitKind;
     // vLLM/OpenAI total window: the only shape that IS the denominator.
@@ -2292,6 +2323,7 @@ int main() {
     test_v4_status_segments();
     test_v42_capabilities_and_menu();
     test_v43_probe_parse();
+    test_v47_models_dev_catalog();
     test_v44_debug_log();
     test_git_tools();
     if (failures) {

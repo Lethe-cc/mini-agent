@@ -134,7 +134,7 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 - **三种消息形态白名单**（`parse_context_probe_error`，纯函数）：`maximum context length is N tokens`（vLLM/OpenAI，即总窗口）、`Range of <param> should be [1, N]`（DashScope 取括号内最后一个合法数字）、`max_tokens: X > N`（OpenAI 输出上限，小 prompt 下≈实用窗口）。合理域 1k..200M 之外的数字一律拒绝；JSON 错误体先抽 `error.message` 文本再匹配，请求回显值永不误读。
 - **静默 clamp 显式承认拿不到**：网关接受超大 max_tokens（2xx）时返回 0 → TUI 提示手工 `/context <tokens>`。不解析成功体。
 - **仅显式触发**：`/context probe` 一条命令，后台 worker（30s curl 上限、join-then-read、退出 join），不自动跑——探测计费、错误文本非契约，何时花这个钱由用户决定。结果 >0 时写入 config（此后它就是权威值，可再 `/context <tokens>` 覆盖或 `/context off` 清除）并落日志（redact_url，零密钥）。
-- **兜底链最终形态**：`config.context_window` > 缓存 caps `context_length`（v4.2，免费）> `/context probe`（一次请求，缓存进 config）> 单值形态。
+- **兜底链最终形态**：`config.context_window` > 缓存 caps `context_length`（v4.2，免费）> `/context probe`（一次请求，缓存进 config）> 单值形态。（v4.7 §18 再扩展：显示链尾部加 models.dev 目录兜底，仅补 ctx 分母、不写 config。）
 
 验证（2026-11-08）：`test_v43_probe_parse`（三形态 + 括号取上界 + 回显值/越界/空体拒绝）通过；mock 新增探测拒绝路径后宽 PTY E2E 三断言 PASS——`/context probe` 出 `probed context window: 131072`、config 持久化 131072、下一 turn 状态栏变 `ctx N/131.1k`。agent_test 全量、CTest 3/3、strict-project、cpp_format 全过。
 
@@ -186,6 +186,17 @@ ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1
 - 挂点：`probe_post_chat`（PROBE REQUEST + PROBE RESPONSE <status>）与 `fetch_models_body`（MODELS RESPONSE <status>）。一级开、二级不开时行为与 v4.4 完全一致（回归钩子）。
 
 验证（2026-11-08）：`test_v44_debug_log` 扩展 aux 往返/失败关闭/off 压制断言；PTY E2E：`/debug all` → `/context probe` → 对话，dump 含 2×PROBE REQUEST/RESPONSE（两段都记）+ 1×REQUEST/5×SSE（对话级不受影响）、`truncated 2395992 bytes` 标记、stage-2 响应里 `Range of input length should be` 原文可见。全量 agent_test/CTest/strict-project/cpp_format 通过。
+
+## 18. v4.7 修订（2026-11-08 维护者需求："像 pi 一样从 models.dev 拿窗口"）
+
+调研（[011 参考](../references/context-reasoning-survey.md) §1.5）确认 pi 的 1.0M 显示来自构建期固化的 models.dev v2 目录、运行时零验证。mini-agent 采纳同一数据源，但按本项目"实测源优先"排进兜底链、只做显示兜底：
+
+- **数据层**：`tools/refresh_models_dev.py`（开发工具、非门禁）抓 **v1 稳定目录** `https://models.dev/api.json`（5.9MB，MIT=anomalyco/models.dev，GitHub API 当日核实），裁剪为 TSV（`base_url\tmodel\tcontext\toutput`，base 去尾斜杠、(base,model) 去重、无 limit.context 的行丢弃），生成 `include/mini_agent/models_dev_data.hpp`（raw string 内嵌，7158 行 ≈466KB，二进制 +~0.5MB）。行数 <1000 拒写（上游 schema 漂移护栏）。v2 是 experimental 且需 provider→api→base_url 两层解引用，v1 的 provider.api 直接就是可匹配的 base_url，语义等价、体积小。
+- **查询层**：`src/models_dev.cpp::lookup_models_dev(base_url, model)`——启动后首次调用解析 TSV 进静态表，`base\tmodel\t` 前缀二分 + 精确 key 校验（id 前缀邻居不误命中），命中返回 `{context, output}`，任何缺参/未命中返回 nullopt。无网络、无新依赖。
+- **接入点（两处，均不改 config）**：① `context_reading()` 兜底链尾部——`config > caps > models.dev`，只给状态栏 ctx /max 分母补数，**永不覆盖权威 config**（目录是宣传口径：models.dev 报 1.0M、DashScope 实测输入校验 983616，config/probe 必须压过它）；② `/context` 无参行——config 未设且目录命中时追加 `catalog: 1.0M (1000000) · set it: /context 1000000`，把静默兜底变成可见可确认的建议。probe 语义不变（实测值仍可覆盖一切）。
+- reasoning 档位元数据本轮**不**接（v1 无 effort 表，需 v2 且属独立特性，见 §2.4 调研结论）。
+
+验证（2026-11-08）：`test_v47_models_dev_catalog`（命中/尾斜杠/未知 url/未知 model/空参/前缀邻居不误命中/维护者真网关行 qwen3.8-flash=1000000+131072 与当日线上目录一致）通过；agent_test 全量、CTest 3/3 通过。
 
 ## 最终核对
 

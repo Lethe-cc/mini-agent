@@ -54,6 +54,7 @@ add_library(agent_core STATIC
     src/mcp_rpc.cpp
     src/mcp_stdio.cpp
     src/mcp_http.cpp
+    src/models_dev.cpp
     src/tools.cpp
     src/tui.cpp
     third_party/md4c/md4c.c
