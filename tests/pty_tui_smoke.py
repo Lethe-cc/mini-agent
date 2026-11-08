@@ -460,6 +460,24 @@ def main():
     expect(len(side_rows) >= 2, "sidebar composes tree rows with the gutter")
     expect(all(display_width(l.rstrip("\r")) <= 80 for l in side_rows),
            "sidebar composed rows respect the 80-col width invariant")
+    # v4.14: Ctrl-F focuses the sidebar (reverse-video selection), arrows
+    # walk selectable rows, Enter inserts the workspace-relative path.
+    # Wait for the scan to land first: the panel shows "(scanning...)"
+    # until the first result arrives (git status on a real repo takes a
+    # moment).
+    for _ in range(12):
+        probe = strip_csi(read_all(fd, 0.5))
+        if "workspace" in probe and "(scanning" not in probe:
+            break
+    os.write(fd, b"\x06")
+    focus_raw = read_all(fd, 1.0)
+    expect("\x1b[7m" in focus_raw, "sidebar focus highlights a row")
+    os.write(fd, b"\x1b[B\r")
+    picked = read_all(fd, 1.0)
+    expect("[sidebar] inserted:" in strip_csi(picked),
+           "Enter on a focused sidebar row inserts the path")
+    os.write(fd, b"\x08" * 40)  # clear the inserted path from the composer
+    read_all(fd, 0.3)
     os.write(fd, b"/sidebar off\r")
     read_all(fd, 0.5)
     over = [s for part in long_raw.split("\n")[:-1]

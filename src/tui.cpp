@@ -1003,8 +1003,9 @@ class LiveScreen {
                 const std::string& prompt, const std::string& status, bool streaming,
                 std::size_t cols, const std::vector<std::string>& extra_rows = {},
                 const std::string& sysinfo = {}, const std::vector<std::string>& session_ids = {},
-                const std::vector<std::string>& sidebar =
-                    {}) { // NOLINT(bugprone-easily-swappable-parameters)
+                const std::vector<std::string>& sidebar = {},
+                std::size_t sidebar_sel =
+                    static_cast<std::size_t>(-1)) { // NOLINT(bugprone-easily-swappable-parameters)
         const std::size_t rows = current_rows();
         // Slash hint (2026-11-01 maintainer request; vertical list per
         // follow-up): while the composer is a slash line, enumerate Tab
@@ -1021,7 +1022,8 @@ class LiveScreen {
             pinned_question == last_pin_ && composer == last_composer_ &&
             composer_display == last_comp_disp_ && prompt == last_prompt_ &&
             status == last_status_ && extra_rows == last_extra_ && sysinfo == last_sysinfo_ &&
-            session_ids == last_session_ids_ && sidebar == last_sidebar_) {
+            session_ids == last_session_ids_ && sidebar == last_sidebar_ &&
+            sidebar_sel == last_sidebar_sel_) {
             return;
         }
         inputs_cached_ = true;
@@ -1038,6 +1040,7 @@ class LiveScreen {
         last_sysinfo_ = sysinfo;
         last_session_ids_ = session_ids;
         last_sidebar_ = sidebar;
+        last_sidebar_sel_ = sidebar_sel;
         // v4.12: two fixed rows at the bottom (status + optional system
         // info) on top of the cursor row; block budget shrinks to match.
         const std::size_t fixed_rows = sysinfo.empty() ? 2 : 3;
@@ -1093,8 +1096,12 @@ class LiveScreen {
         content.insert(content.end(), tail_rows.begin(), tail_rows.end());
         content.insert(content.end(), comp_rows.begin(), comp_rows.end());
         content.insert(content.end(), hint_rows.begin(), hint_rows.end());
-        if (side_w > 0)
-            content = compose_columns(content, sidebar, cols, side_w);
+        if (side_w > 0) {
+            std::vector<std::string> sb = sidebar;
+            if (sidebar_sel < sb.size()) // reverse video survives clip (zero-width)
+                sb[sidebar_sel] = "\x1b[7m" + sb[sidebar_sel] + "\x1b[27m";
+            content = compose_columns(content, sb, cols, side_w);
+        }
         // Status is always one row; the trailing reset matters now that the
         // row carries SGR segments: md::clip can cut mid-span, and this is
         // the block's last row, so an unclosed span would leak into the next
@@ -1240,6 +1247,7 @@ class LiveScreen {
     std::string last_sysinfo_;
     std::vector<std::string> last_session_ids_;
     std::vector<std::string> last_sidebar_;
+    std::size_t last_sidebar_sel_ = static_cast<std::size_t>(-1);
 
     static std::string join(const std::vector<std::string>& rows) {
         std::string out;
@@ -1508,10 +1516,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     std::thread sidebar_worker;
     std::atomic<bool> sidebar_done{false};
     bool sidebar_running = false;
+    bool sidebar_stale = false; // refresh requested while a scan ran
     struct SidebarResult {
         std::vector<std::string> rows; // pre-tinted? no: plain, render tints
-        std::string error;             // workspace unreadable etc.
+        // Parallel to rows: selectable entries carry the ABSOLUTE path;
+        // headers/blanks are empty (skipped by the focus navigation).
+        std::vector<std::string> paths;
+        std::string error; // workspace unreadable etc.
     } sidebar_result;
+    // v4.14: sidebar focus mode (Ctrl-F): arrow keys walk selectable rows,
+    // Enter inserts the file path into the composer, Esc leaves. Index is
+    // into rows/paths; navigation skips non-selectable entries.
+    bool sidebar_focus = false;
+    std::size_t sidebar_sel = 0;
     std::string running_tool;
     std::atomic<bool> reasoning_live{false};
     // Completed tool rows for THIS turn, kept for the panel even after
@@ -1790,8 +1807,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     auto start_sidebar = [&] {
         if (!show_sidebar)
             return;
+        if (sidebar_running) {
+            // A scan is in flight (git status on a big repo can take
+            // seconds): NEVER join on the main thread -- that would stall
+            // the frame loop (v4.14 regression: cascading smoke failures
+            // from a blocked poll tick). Mark stale; the completion
+            // handler re-fires once the in-flight scan lands.
+            sidebar_stale = true;
+            return;
+        }
         if (sidebar_worker.joinable())
-            sidebar_worker.join();
+            sidebar_worker.join(); // previous scan is done: cheap join
         sidebar_result = SidebarResult{};
         sidebar_done = false;
         sidebar_running = true;
@@ -1806,6 +1832,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     r.error = "not a directory: " + root;
                 } else {
                     auto run_git_status = [&]() -> std::vector<std::string> {
+                        // Alternating [display, path, display, path, ...].
                         std::vector<const char*> argv = {"git",
                                                          "-C",
                                                          root.c_str(),
@@ -1830,15 +1857,24 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             std::string code = line.substr(0, 2);
                             std::string file = line.substr(3);
                             const auto glyph = sidebar_status_glyph(code);
-                            if (!glyph.empty())
+                            if (!glyph.empty()) {
                                 lines.push_back(glyph + " " + file);
+                                lines.push_back(file);
+                            }
                         }
                         return lines;
                     };
-                    std::function<void(const std::filesystem::path&, int, std::vector<std::string>&,
-                                       std::size_t&)>
-                        walk = [&](const std::filesystem::path& dir, int depth,
-                                   std::vector<std::string>& rows, std::size_t& count) {
+                    // rows and paths grow in lockstep (v4.14 selection):
+                    // paths[i] is workspace-relative for selectable entries,
+                    // empty for headers/captions (navigation skips those).
+                    std::vector<std::string> rows;
+                    std::vector<std::string> paths;
+                    auto add = [&](std::string text, std::string path) {
+                        rows.push_back(std::move(text));
+                        paths.push_back(std::move(path));
+                    };
+                    std::function<void(const std::filesystem::path&, int, std::size_t&)> walk =
+                        [&](const std::filesystem::path& dir, int depth, std::size_t& count) {
                             if (depth > 2 || rows.size() >= 18 || count > 400)
                                 return;
                             std::vector<std::string> names;
@@ -1859,33 +1895,39 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                     break;
                                 const auto child = dir / name;
                                 const bool is_dir = std::filesystem::is_directory(child, ec);
-                                rows.push_back(
-                                    std::string(static_cast<std::size_t>(depth) * 2, ' ') +
-                                    (is_dir ? name + "/" : name));
+                                const auto rel = std::filesystem::relative(child, base, ec);
+                                const std::string rel_str = ec ? std::string() : rel.string();
+                                add(std::string(static_cast<std::size_t>(depth) * 2, ' ') +
+                                        (is_dir ? name + "/" : name),
+                                    rel_str);
                                 if (is_dir)
-                                    walk(child, depth + 1, rows, count);
+                                    walk(child, depth + 1, count);
                             }
                         };
-                    std::vector<std::string> rows;
                     std::size_t count = 0;
-                    rows.push_back(
-                        sanitize_display(std::filesystem::path(root).filename().empty()
+                    add(sanitize_display(std::filesystem::path(root).filename().empty()
                                              ? root
-                                             : std::filesystem::path(root).filename().string()));
-                    walk(base, 1, rows, count);
+                                             : std::filesystem::path(root).filename().string()),
+                        std::string()); // header row: not selectable
+                    walk(base, 1, count);
                     if (count > 400)
-                        rows.push_back("... (large tree, listing capped)");
+                        add("... (large tree, listing capped)", std::string());
                     r.rows = rows;
-                    auto changed = run_git_status();
-                    if (!changed.empty()) {
+                    r.paths = paths;
+                    auto changed_pairs = run_git_status(); // pairs: display, path
+                    if (!changed_pairs.empty()) {
                         r.rows.push_back("");
+                        r.paths.push_back("");
                         r.rows.push_back("changed:");
-                        for (auto& c : changed) {
+                        r.paths.push_back("");
+                        for (std::size_t i = 0; i + 1 < changed_pairs.size(); i += 2) {
                             if (r.rows.size() >= 26) {
                                 r.rows.push_back("  ...");
+                                r.paths.push_back("");
                                 break;
                             }
-                            r.rows.push_back("  " + c);
+                            r.rows.push_back("  " + changed_pairs[i]);
+                            r.paths.push_back(changed_pairs[i + 1]);
                         }
                     }
                 }
@@ -2127,6 +2169,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit("[ok] sidebar on (this session) · tree + git changes");
             } else if (arg == "off") {
                 show_sidebar = false;
+                sidebar_focus = false; // v4.14: no focus survives the panel
                 screen.commit("[ok] sidebar off (this session)");
             } else {
                 screen.commit("[error] /sidebar expects on|off");
@@ -2626,6 +2669,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     goto done;
                 } else if (c == 0x0C) { // Ctrl-L
                     screen.clear_live();
+                } else if (c == 0x06 && show_sidebar) { // Ctrl-F: sidebar focus (v4.14)
+                    sidebar_focus = !sidebar_focus;
+                    if (sidebar_focus) {
+                        sidebar_sel = 0;
+                        // land on the first selectable row
+                        for (std::size_t i = 0; i < sidebar_result.paths.size(); ++i) {
+                            if (!sidebar_result.paths[i].empty()) {
+                                sidebar_sel = i;
+                                break;
+                            }
+                        }
+                    }
+
                 } else if (c == 0x1B) { // ESC: edit sequences or interrupt
                     const ssize_t esc = i;
                     ssize_t j = i + 1;
@@ -2643,12 +2699,37 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         const unsigned char fin = static_cast<unsigned char>(buf[j]);
                         i = j;
                         if (!secret_input) { // masked key entry: no cursor UI
+                            // v4.14: while the sidebar owns focus, Up/Down
+                            // are MODAL: consumed here even when the scan
+                            // has no rows yet (falling through to history
+                            // recall could auto-send a stale message).
+                            const bool nav = sidebar_focus;
+                            auto move_sel = [&](int delta) {
+                                const auto& paths = sidebar_result.paths;
+                                if (paths.empty())
+                                    return;
+                                std::size_t cur = sidebar_sel;
+                                for (std::size_t step = 0; step < paths.size(); ++step) {
+                                    cur = (cur + paths.size() + static_cast<std::size_t>(delta)) %
+                                          paths.size();
+                                    if (!paths[cur].empty()) {
+                                        sidebar_sel = cur;
+                                        return;
+                                    }
+                                }
+                            };
                             switch (fin) {
                             case 'A':
-                                hist_up();
+                                if (nav)
+                                    move_sel(-1);
+                                else
+                                    hist_up();
                                 break;
                             case 'B':
-                                hist_down();
+                                if (nav)
+                                    move_sel(+1);
+                                else
+                                    hist_down();
                                 break;
                             case 'C':
                                 cursor = utf8_next(composer, cursor);
@@ -2679,6 +2760,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                 break; // swallow other CSI (paste marks, F-keys)
                             }
                         }
+                    } else if (sidebar_focus) {
+                        // v4.14: lone ESC leaves the sidebar focus first
+                        // (before the interrupt chain -- focus is modal UI,
+                        // same precedence as the menus below).
+                        sidebar_focus = false;
                     } else if (streaming) {
                         // Lone ESC interrupts the in-flight request (design 5.6
                         // rule 5 "esc-to-interrupt", 2026-11-02 maintainer
@@ -2697,7 +2783,24 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         screen.commit("[cancel] model menu dismissed; /models re-lists");
                     }
                 } else if (c == '\r' || c == '\n') {
-                    if (secret_input) {
+                    if (sidebar_focus) {
+                        // Modal Enter: insert the highlighted path, or just
+                        // leave focus when the scan has nothing selectable
+                        // yet -- either way the composer never sees this
+                        // Enter (no accidental send of a half-built line).
+                        if (sidebar_sel < sidebar_result.paths.size() &&
+                            !sidebar_result.paths[sidebar_sel].empty()) {
+                            // v4.14: pick the highlighted file/dir -- insert the
+                            // workspace-relative path at the caret, leave focus
+                            // so the composer keys behave normally again.
+                            const std::string& rel = sidebar_result.paths[sidebar_sel];
+                            utf8_insert(composer, cursor, rel); // advances cursor
+                            mark_edited();
+                            screen.commit("[sidebar] inserted: " + sanitize_display(rel) +
+                                          " · edit freely, Enter sends as usual");
+                        }
+                        sidebar_focus = false;
+                    } else if (secret_input) {
                         secret_input = false;
                         if (!composer.empty()) {
                             if (secret_field == "api_key")
@@ -2891,6 +2994,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             sidebar_running = false;
             if (sidebar_worker.joinable())
                 sidebar_worker.join();
+            if (sidebar_stale) {
+                sidebar_stale = false;
+                start_sidebar(); // the turn/cwd changed mid-scan: rescan
+            }
         }
 
         if (turn_done.load()) {
@@ -3171,8 +3278,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 for (const auto& row : raw)
                     sidebar_rows.push_back(tint(sc, "2", sanitize_display(row)));
             }
+            const std::size_t sel = sidebar_focus && sidebar_sel < sidebar_result.rows.size()
+                                        ? sidebar_sel + 1 // +1: header row shifts every entry
+                                        : static_cast<std::size_t>(-1);
             screen.render(tail, last_user, raw_for_hint, composer_display, prompt, status,
-                          streaming, cols, extra_rows, sysinfo, session_ids, sidebar_rows);
+                          streaming, cols, extra_rows, sysinfo, session_ids, sidebar_rows, sel);
         }
     }
 
