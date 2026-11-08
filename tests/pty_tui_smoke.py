@@ -447,6 +447,21 @@ def main():
     expect(re.search(r"@\S+ \u00b7 \S+ \u00b7 \d\d:\d\d:\d\d", strip_csi(splash + turn))
                is not None,
            "system info row shows user@host · cwd · clock")
+    # v4.13 sidebar: /sidebar on composes a right column (tree rows joined
+    # by the " | " gutter) inside the inline frame; width invariant holds.
+    os.write(fd, b"/sidebar on\r")
+    side_raw = ""
+    for _ in range(20):
+        side_raw += read_all(fd, 0.3)
+        if "workspace" in strip_csi(side_raw) and "|" in strip_csi(side_raw):
+            break
+    side_clean = strip_csi(side_raw)
+    side_rows = [l for l in side_clean.split("\r\n") if " | " in l]
+    expect(len(side_rows) >= 2, "sidebar composes tree rows with the gutter")
+    expect(all(display_width(l.rstrip("\r")) <= 80 for l in side_rows),
+           "sidebar composed rows respect the 80-col width invariant")
+    os.write(fd, b"/sidebar off\r")
+    read_all(fd, 0.5)
     over = [s for part in long_raw.split("\n")[:-1]
             for s in [strip_csi(part.rstrip("\r"))]  # pty ONLCR adds the CR
             if display_width(s) > 80]

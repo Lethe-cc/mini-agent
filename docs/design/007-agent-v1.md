@@ -383,6 +383,18 @@ TUI 规划（自绘最小集，已实现）：主屏内联渲染（见 5.6 规�
 
 实现偏差记录：(1) 5.4 早期设想的"交替屏幕"改为 5.6 规则 2 的主屏内联渲染 + 终端原生 scrollback——与自绘最小目标和"提交行不闪变"一致，属有意设计更新。(2) Ctrl-C 需要 termios 关闭 ISIG 才能拿到 0x03 字节（实现期发现，PTY 测试曾因此挂起，已修复并回归）。(3) 流式中被再次 Ctrl-C 直接退出（中断挂起中的 worker 等待期间二次按下＝放弃退出），符合 5.6 双层语义的极值约定。(4) PTY smoke 未接入 quality_commands（时序敏感、需 pty），作为人工/CI 外的 dev 工具。(5) `src/project.cpp` starter 示例暂保留在 agent_core 中，随业务扩展移除。(6) streaming 期间现行实现禁用输入（仅提示先 Ctrl-C），是相对 Pi 排队式 steering（5.6 v1.x 候选第 1 项）的有意保守选择：v1 先保证中断与回滚语义正确，排队属交互增强，未冒充设计已承诺行为。(7) 2026-11-01 免环境变量配置流：设计原"配置全部来自环境变量"经维护者要求改为 env 优先 + TUI /login 持久化（0600），密钥落盘属有意取舍，见第 6 节。(8) 2026-11-01 独立日志文件：维护者指定 spdlog；依赖策略从"仅 curl+nlohmann"扩展为三项 vendored（新增 spdlog v1.17.0 header-only，MIT 许可记录同 ADR 002 模式），事件面限定元数据是有意边界——日志不成为第二个会话文件。已知限制与后续候选：wcwidth 表为区块级近似（已含常用 emoji 0x1F000-0x1F9FF/0x1FA70-0x1FAFF、dingbats/arrows、 combining/ZWJ/变体选择符零宽处理；2026-11-01 因用户实测 emoji 回复触发 auto-wrap 重复行而补全——此前 emoji 计 1 列而终端渲染 2 列，正是重复行复现的直接原因；US 国旗/家族组合序列等边缘情形仍可能差 1 列）、无 tool calling、无上下文压缩、无流式重连、无跨会话操作、无多 Agent 编排、TUI 无多行编辑/高亮、单 Provider 形态。这些均为 v1 有意排除；消息模型、session schema 与函数式循环入口按第 5.5 节预留扩展点，但工具注册表、压缩策略、Agent 间通信等实现细节仍须届时重新设计并更新本索引，预留不等于承诺。(9) 2026-11-01 修复重复行缺陷：根因是相对行数记账依赖终端 auto-wrap 且宽度按码点计，CJK/多行内容下 desync；改为硬换行单行不变量模型（见 5.6 规则 2）。(10) 2026-11-01 Markdown 渲染：新增自研 `md` 模块（宽度/wrap/clip 从 tui.cpp 迁入并 ANSI 感知；渲染器为行级子集，零依赖）。实现期发现并修复 wrap 的 mid-line SGR 丢弃缺陷（样式仅在行首发射，TUI "助手: " 前缀致全部样式丢失）、md::render 的悬垂 string_view 缺陷（tidy bugprone-dangling-handle 捕获）、/help 单行超宽被 wrap 拦腰截断致冒烟断言不稳（改多短行）。(11) 2026-11-01 维护者决定改用开源库：`md::render` 解析层切换为 vendored md4c v0.6.0（MIT，ADR 004），补齐 GFM 表格/任务清单/删除线/嵌套列表并正确对齐与剥离 HTML；期间修复三处实现错误（TD 对齐按列记录、右对齐左填充、双重编码测试字面量）。几何层不变。(12) 2026-11-02 模型发现与选择（规则 7）：`Provider::list_models()` 定为**非纯虚**（基类抛 `ProviderError(Protocol)`），以免拆坏现有 `FakeProvider` 等实现者；`/models` 与 `/model` 共享前缀，`handle_slash` **必须按此顺序匹配**（`/models` 在前）。列举与聊天共用 `ProviderConfig` 形态但收紧超时，失败时仅渲染 `[error]` 行进历史区、不改已存 model 配置（与聊天失败轮回滚一致）。预存偏差不受影响：`src/project.cpp` starter 残留仍保留；仓库基线已有 8 处 clang-format 告警（不属 `quality_commands` 门禁），本次只对新写行跑 `clang-format-diff`，未顺手重排旧代码。
 
+## v4.13 修订（2026-11-08 维护者需求：侧边栏显示目录结构与修改文件；同批：/session id 前缀补全）
+
+**A. 右侧栏（workspace tree + changed files）**。与 v4.11 同理不动 alt-screen：`compose_columns(content, sidebar, cols, side_w)` 纯函数把 live 块每行与侧栏行以 " | " 槽合成整宽行——左列按 display width 补空格、右列 `md::clip`，**每条合成行仍是恰好一个终端行**（5.6 规则 2 不变量由构造保持，smoke 断言 80 列零越界）。
+
+- 侧栏宽 30（终端 ≤60 列时缩到 cols/3，<60+3 时整栏退出、内容直通——回归钩子）。内容列所有 wrap（pin/tail/composer/hint）改用 `content_cols`；status/sysinfo 固定行不受影响。
+- 数据来自短命 worker（join-then-read，models/probe 同款纪律）：目录树 = `directory_iterator` 递归 depth≤2、隐藏/`node_modules|build|__pycache__|target|venv` 过滤、18 行/400 条目双上限；changed 区 = `git status --porcelain=v1`（run_subprocess，5s 超时）经 `sidebar_status_glyph` 折叠为 ??/M/A/D/R/C 单 glyph。非 git 目录 git 报错行自然过滤。刷新触发：`/sidebar on`、回合提交后、`/cwd`、`/session` 切换。
+- `/sidebar on|off` 会话态（默认 off，不落盘，同 /sysinfo 规则）。渲染行 `sanitize_display` 二重保险（worker 数据 + 渲染层）。
+
+**B. /session 前缀解析（并行改动，同批记录）**：`session_prefix_matches`/`match_session_ref` 纯函数（session.hpp/cpp）——用户输入 id 前缀唯一命中即恢复、歧义列候选、全 id 精确优先；`/session` 的 Tab 补全与二级选项由 store.list 实时喂 `session_ids`（`session_ids_stale` 于 /session 执行后与回合边界重取，readdir 不逐帧跑）。`/context` 等其余命令的占位符行为不变（空 `session_ids` 即旧形态）。
+
+验证（2026-11-08）：`compose_columns`/`sidebar_status_glyph` 断言（行对位、补位、clip 直通、glyph 折叠、宽度不变量）+ `session_prefix_matches` 组（唯一/歧义/精确/空）通过；PTY 实测真工作区 100 列侧栏出 `workspace` 头 + 树 + `changed:` 段（M/?? 行）、80 列 smoke 两断言 PASS；agent_test 全量/CTest/strict-project/cpp_format 通过。
+
 ## v4.12 修订（2026-11-08 维护者需求：底部显示系统信息）
 
 live 块底部新增固定**系统信息行**（状态行之下）：`user@host · cwd · HH:MM:SS`（dim 色，超宽 clip）。

@@ -46,6 +46,26 @@ std::string generate_session_id();
 // traversal guard, design 007 section 6).
 bool session_id_is_safe(std::string_view id) noexcept;
 
+// v4.13 (maintainer request): resolve a user-typed session reference
+// against known ids (SessionStore::list). Returns every id that `input`
+// is a prefix of; an exact match, when present, is the only returned id
+// (a full id never fans out to its prefix siblings). Empty input yields
+// no hits. Pure so the CLI and the TUI share one rule and it stays
+// unit-testable without a filesystem.
+std::vector<std::string> session_prefix_matches(std::string_view input,
+                                                const std::vector<std::string>& ids);
+
+// v4.13: convenience view over session_prefix_matches for callers that must
+// distinguish the three outcomes: `exact` when a single id resolved (`id`
+// holds it), `candidates` when a prefix is ambiguous, neither set when the
+// ref matches nothing. The caller formats its own messages.
+struct SessionRefMatch {
+    bool exact = false;
+    std::string id;
+    std::vector<std::string> candidates;
+};
+SessionRefMatch match_session_ref(std::string_view ref, const std::vector<std::string>& ids);
+
 class SessionStore {
   public:
     static const std::size_t kMaxFileBytes = 10u * 1024u * 1024u;

@@ -43,9 +43,9 @@ namespace mini_agent::tui {
 namespace {
 
 constexpr std::string_view kCommands[] = {
-    "/approve",   "/config",  "/context",  "/cwd",     "/debug",  "/exit",
-    "/help",      "/login",   "/mcp",      "/model",   "/models", "/provider",
-    "/reasoning", "/session", "/sessions", "/sysinfo", "/tools"};
+    "/approve",   "/config",  "/context",  "/cwd",     "/debug",   "/exit",
+    "/help",      "/login",   "/mcp",      "/model",   "/models",  "/provider",
+    "/reasoning", "/session", "/sessions", "/sidebar", "/sysinfo", "/tools"};
 
 class RawMode {
   public:
@@ -152,15 +152,26 @@ std::vector<std::string_view> slash_matches(std::string_view prefix) {
 // Tab), and cycled by Tab exactly like the command list. Placeholders in
 // angle brackets are hints, not values: Tab inserts them so the user fills
 // the real value (ids/paths/keys are runtime data we cannot enumerate).
-std::vector<std::string_view> slash_arg_choices(std::string_view command) {
+// v4.13 exception: /session CAN enumerate -- `session_ids` (the caller's
+// SessionStore::list snapshot) replaces the `<id>` placeholder with real
+// ids, filtered against the typed prefix by the usual prefix rule below.
+// Empty `session_ids` keeps the placeholder behaviour (no store, no
+// sessions yet).
+std::vector<std::string> slash_arg_choices(std::string_view command,
+                                           const std::vector<std::string>& session_ids = {}) {
     if (command == "/context")
         return {"<tokens>", "probe", "off"};
     if (command == "/log")
         return {"info", "debug", "trace", "<path>", "off", "default"};
     if (command == "/debug")
         return {"on", "all", "off"};
-    if (command == "/session")
-        return {"<id>", "new"};
+    if (command == "/session") {
+        if (session_ids.empty())
+            return {"<id>", "new"};
+        std::vector<std::string> out = session_ids;
+        out.push_back("new");
+        return out;
+    }
     if (command == "/approve")
         return {"ask", "allowlist", "off"};
     if (command == "/reasoning")
@@ -504,7 +515,8 @@ std::string prompt_marker(const ConnState state) noexcept {
     return "\x1b[33m?\x1b[0m"; // yellow: configured but unprobed
 }
 
-std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor_state) {
+std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor_state,
+                                              const std::vector<std::string>& session_ids) {
     if (line.empty() || line.front() != '/')
         return std::nullopt;
     const auto matches = slash_matches(line);
@@ -514,7 +526,7 @@ std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor
         std::string_view cmd;
         std::string_view rest;
         if (split_composer(line, &cmd, &rest)) {
-            const auto choices = slash_arg_choices(cmd);
+            const auto choices = slash_arg_choices(cmd, session_ids);
             std::vector<std::string_view> hits;
             for (const auto& c : choices)
                 if (c.substr(0, rest.size()) == rest)
@@ -554,7 +566,8 @@ std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor
     return std::string(pick);
 }
 
-std::vector<std::string> slash_completion_hint(std::string_view composer) {
+std::vector<std::string> slash_completion_hint(std::string_view composer,
+                                               const std::vector<std::string>& session_ids) {
     const bool colors = colors_enabled();
     if (composer.empty() || composer.front() != '/')
         return {};
@@ -567,7 +580,7 @@ std::vector<std::string> slash_completion_hint(std::string_view composer) {
         std::string_view cmd;
         std::string_view rest;
         if (split_composer(composer, &cmd, &rest)) {
-            const auto choices = slash_arg_choices(cmd);
+            const auto choices = slash_arg_choices(cmd, session_ids);
             std::vector<std::string_view> hits;
             for (const auto& c : choices)
                 if (c.substr(0, rest.size()) == rest)
@@ -817,6 +830,44 @@ std::string format_token_count(long long n) {
     return std::string(buf);
 }
 
+std::string sidebar_status_glyph(std::string_view xy) {
+    // Porcelain "XY" -> one compact glyph. Untracked ??, modified M,
+    // added A, deleted D, renamed R, conflicted C; staged+worktree pairs
+    // collapse to the strongest signal (the sidebar is a hint list, the
+    // git_status tool stays the authoritative view).
+    if (xy.size() != 2)
+        return {};
+    const auto x = xy[0];
+    const auto y = xy[1];
+    if (x == '?' && y == '?')
+        return "??";
+    for (const char c : {char('C'), char('D'), char('R'), char('A'), char('M')}) {
+        if (x == c || y == c)
+            return std::string(1, c);
+    }
+    return {};
+}
+
+std::vector<std::string> compose_columns(const std::vector<std::string>& content,
+                                         const std::vector<std::string>& sidebar, std::size_t cols,
+                                         std::size_t side_w) {
+    std::vector<std::string> out;
+    if (side_w == 0 || sidebar.empty() || cols <= side_w + 3)
+        return content;                          // no room / disabled: pass through
+    const std::size_t split = cols - side_w - 3; // content width + " | "
+    const std::size_t n = std::max(content.size(), sidebar.size());
+    out.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        std::string left = i < content.size() ? content[i] : std::string();
+        std::string right = i < sidebar.size() ? md::clip(sidebar[i], side_w) : std::string();
+        const std::size_t used = md::display_width(left);
+        if (used < split)
+            left.append(split - used, ' ');
+        out.push_back(std::move(left) + " | " + right);
+    }
+    return out;
+}
+
 std::string sysinfo_line(bool colors, const std::string& user, const std::string& host,
                          const std::string& cwd, const std::string& clock) {
     // v4.12 (design 007 §v4.12): bottom system-info row. Pure so the
@@ -951,7 +1002,9 @@ class LiveScreen {
                 const std::string& composer, const std::string& composer_display,
                 const std::string& prompt, const std::string& status, bool streaming,
                 std::size_t cols, const std::vector<std::string>& extra_rows = {},
-                const std::string& sysinfo = {}) { // NOLINT(bugprone-easily-swappable-parameters)
+                const std::string& sysinfo = {}, const std::vector<std::string>& session_ids = {},
+                const std::vector<std::string>& sidebar =
+                    {}) { // NOLINT(bugprone-easily-swappable-parameters)
         const std::size_t rows = current_rows();
         // Slash hint (2026-11-01 maintainer request; vertical list per
         // follow-up): while the composer is a slash line, enumerate Tab
@@ -967,7 +1020,8 @@ class LiveScreen {
             streaming == last_streaming_ && response_tail == last_tail_ &&
             pinned_question == last_pin_ && composer == last_composer_ &&
             composer_display == last_comp_disp_ && prompt == last_prompt_ &&
-            status == last_status_ && extra_rows == last_extra_ && sysinfo == last_sysinfo_) {
+            status == last_status_ && extra_rows == last_extra_ && sysinfo == last_sysinfo_ &&
+            session_ids == last_session_ids_ && sidebar == last_sidebar_) {
             return;
         }
         inputs_cached_ = true;
@@ -982,18 +1036,29 @@ class LiveScreen {
         last_status_ = status;
         last_extra_ = extra_rows;
         last_sysinfo_ = sysinfo;
+        last_session_ids_ = session_ids;
+        last_sidebar_ = sidebar;
         // v4.12: two fixed rows at the bottom (status + optional system
         // info) on top of the cursor row; block budget shrinks to match.
         const std::size_t fixed_rows = sysinfo.empty() ? 2 : 3;
+        // v4.13: with the sidebar active the content column shrinks to
+        // cols - side_w - 3 (" | " gutter); every content row wraps to
+        // that width, then composes 1:1 with a sidebar row. Composed rows
+        // are exactly one terminal row each (left padded by display
+        // width, right clipped), preserving the hard-wrap invariant
+        // (5.6 rule 2). Narrow terminals (< 60 cols) shrink the sidebar.
+        const std::size_t side_w = sidebar.empty() ? 0 : (cols > 60 ? 30 : cols / 3);
+        const std::size_t content_cols = side_w > 0 && cols > side_w + 3 ? cols - side_w - 3 : cols;
         const std::size_t cap = rows > fixed_rows ? rows - fixed_rows : 1;
         auto pin_rows =
-            streaming
-                ? md::wrap(style_history_line("You: " + pinned_question, colors_enabled()), cols)
-                : std::vector<std::string>{};
-        auto tail_rows = streaming ? md::wrap(response_tail, cols) : std::vector<std::string>{};
+            streaming ? md::wrap(style_history_line("You: " + pinned_question, colors_enabled()),
+                                 content_cols)
+                      : std::vector<std::string>{};
+        auto tail_rows =
+            streaming ? md::wrap(response_tail, content_cols) : std::vector<std::string>{};
         // The prompt marker carries the provider connection state (2026-11-02
         // request): same row as the composer, one display column wide.
-        auto comp_rows = md::wrap(prompt + " " + composer_display, cols);
+        auto comp_rows = md::wrap(prompt + " " + composer_display, content_cols);
         // Row budget, priority low->high trimmed: status (fixed, appended
         // below), then tail, then the hint list, then the pinned question,
         // keeping the composer whole (2026-11-01: the question stays
@@ -1010,12 +1075,12 @@ class LiveScreen {
         if (!extra_rows.empty()) {
             hint_source = extra_rows; // approval block outranks slash hints
         } else {
-            hint_source = slash_completion_hint(composer);
+            hint_source = slash_completion_hint(composer, session_ids);
         }
         for (const auto& line : hint_source) {
             if (hint_rows.size() >= budget)
                 break;
-            for (auto& wrapped : md::wrap(line, cols)) {
+            for (auto& wrapped : md::wrap(line, content_cols)) {
                 if (hint_rows.size() >= budget)
                     break;
                 hint_rows.push_back(std::move(wrapped));
@@ -1028,6 +1093,8 @@ class LiveScreen {
         content.insert(content.end(), tail_rows.begin(), tail_rows.end());
         content.insert(content.end(), comp_rows.begin(), comp_rows.end());
         content.insert(content.end(), hint_rows.begin(), hint_rows.end());
+        if (side_w > 0)
+            content = compose_columns(content, sidebar, cols, side_w);
         // Status is always one row; the trailing reset matters now that the
         // row carries SGR segments: md::clip can cut mid-span, and this is
         // the block's last row, so an unclosed span would leak into the next
@@ -1171,6 +1238,8 @@ class LiveScreen {
     std::string last_status_;
     std::vector<std::string> last_extra_;
     std::string last_sysinfo_;
+    std::vector<std::string> last_session_ids_;
+    std::vector<std::string> last_sidebar_;
 
     static std::string join(const std::vector<std::string>& rows) {
         std::string out;
@@ -1320,6 +1389,18 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     bool reasoning_menu_open = false;
     std::vector<std::string> reasoning_choices; // efforts backing the open menu
     int tab_state = 0;
+    // v4.13 (maintainer request): session-id snapshot for /session Tab
+    // completion + prefix resolution. Readdir is cheap but not free, so it
+    // refreshes on edges only: entering/leaving the /session arg tier, and a
+    // completed turn (the save that creates the file). Also part of render()'s
+    // input cache, so a refresh legitimately yields a new frame.
+    std::vector<std::string> session_ids;
+    bool session_ids_stale = true;
+    auto refresh_session_ids = [&store, &session_ids, &session_ids_stale] {
+        std::string err;
+        session_ids = store.list(&err); // empty on error: hints just get shorter
+        session_ids_stale = false;
+    };
     bool streaming = false;
     std::size_t last_prompt_chars = 0;
     // v4 status-bar state: usage readings folded from successful turns
@@ -1418,6 +1499,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // tool_mutex) and cleared by on_tool; `reasoning_live` is set by the
     // SSE parser the first time a reasoning delta arrives this turn.
     bool show_sysinfo = true; // v4.12: /sysinfo on|off toggle
+    // v4.13: right sidebar (workspace tree + changed files). Data comes
+    // from a short-lived worker (fs walk + `git status --porcelain`): the
+    // frame loop must not block, same join-then-read discipline as the
+    // models fetch. Refresh triggers: /sidebar on, turn completion, /cwd,
+    // /session switch.
+    bool show_sidebar = false;
+    std::thread sidebar_worker;
+    std::atomic<bool> sidebar_done{false};
+    bool sidebar_running = false;
+    struct SidebarResult {
+        std::vector<std::string> rows; // pre-tinted? no: plain, render tints
+        std::string error;             // workspace unreadable etc.
+    } sidebar_result;
     std::string running_tool;
     std::atomic<bool> reasoning_live{false};
     // Completed tool rows for THIS turn, kept for the panel even after
@@ -1693,6 +1787,118 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // No-op unless base_url+api_key are both set and differ from the last
     // attempt. Logs only metadata (status/count/elapsed): the api_key never
     // reaches the log line, the menu, or any ProviderError text.
+    auto start_sidebar = [&] {
+        if (!show_sidebar)
+            return;
+        if (sidebar_worker.joinable())
+            sidebar_worker.join();
+        sidebar_result = SidebarResult{};
+        sidebar_done = false;
+        sidebar_running = true;
+        const std::string root =
+            config.workspace.empty() ? std::filesystem::current_path().string() : config.workspace;
+        sidebar_worker = std::thread([&, root] {
+            SidebarResult r;
+            try {
+                std::error_code ec;
+                const std::filesystem::path base(root);
+                if (!std::filesystem::is_directory(base, ec)) {
+                    r.error = "not a directory: " + root;
+                } else {
+                    auto run_git_status = [&]() -> std::vector<std::string> {
+                        std::vector<const char*> argv = {"git",
+                                                         "-C",
+                                                         root.c_str(),
+                                                         "--no-pager",
+                                                         "--no-optional-locks",
+                                                         "status",
+                                                         "--porcelain=v1",
+                                                         nullptr};
+                        SubprocessSpec spec;
+                        spec.exec_path = "git";
+                        spec.argv = &argv;
+                        spec.workspace = root;
+                        spec.timeout_seconds = 5;
+                        auto out = run_subprocess(spec, [] { return false; });
+                        std::vector<std::string> lines;
+                        std::istringstream in(out.text);
+                        std::string line;
+                        while (std::getline(in, line)) {
+                            std::string xy, path;
+                            if (line.size() < 4)
+                                continue;
+                            std::string code = line.substr(0, 2);
+                            std::string file = line.substr(3);
+                            const auto glyph = sidebar_status_glyph(code);
+                            if (!glyph.empty())
+                                lines.push_back(glyph + " " + file);
+                        }
+                        return lines;
+                    };
+                    std::function<void(const std::filesystem::path&, int, std::vector<std::string>&,
+                                       std::size_t&)>
+                        walk = [&](const std::filesystem::path& dir, int depth,
+                                   std::vector<std::string>& rows, std::size_t& count) {
+                            if (depth > 2 || rows.size() >= 18 || count > 400)
+                                return;
+                            std::vector<std::string> names;
+                            for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+                                if (ec)
+                                    break;
+                                const std::string name = e.path().filename().string();
+                                if (name.front() == '.' || name == "node_modules" ||
+                                    name == "build" || name == "__pycache__" || name == "target" ||
+                                    name == "venv")
+                                    continue;
+                                names.push_back(name);
+                                ++count;
+                            }
+                            std::sort(names.begin(), names.end());
+                            for (const auto& name : names) {
+                                if (rows.size() >= 18)
+                                    break;
+                                const auto child = dir / name;
+                                const bool is_dir = std::filesystem::is_directory(child, ec);
+                                rows.push_back(
+                                    std::string(static_cast<std::size_t>(depth) * 2, ' ') +
+                                    (is_dir ? name + "/" : name));
+                                if (is_dir)
+                                    walk(child, depth + 1, rows, count);
+                            }
+                        };
+                    std::vector<std::string> rows;
+                    std::size_t count = 0;
+                    rows.push_back(
+                        sanitize_display(std::filesystem::path(root).filename().empty()
+                                             ? root
+                                             : std::filesystem::path(root).filename().string()));
+                    walk(base, 1, rows, count);
+                    if (count > 400)
+                        rows.push_back("... (large tree, listing capped)");
+                    r.rows = rows;
+                    auto changed = run_git_status();
+                    if (!changed.empty()) {
+                        r.rows.push_back("");
+                        r.rows.push_back("changed:");
+                        for (auto& c : changed) {
+                            if (r.rows.size() >= 26) {
+                                r.rows.push_back("  ...");
+                                break;
+                            }
+                            r.rows.push_back("  " + c);
+                        }
+                    }
+                }
+            } catch (const std::exception& e) {
+                r.error = e.what();
+            } catch (...) {
+                r.error = "sidebar scan failed";
+            }
+            sidebar_result = std::move(r);
+            sidebar_done = true;
+        });
+    };
+
     auto start_models_fetch = [&](bool force) {
         if (models_running || config.base_url.empty() || config.api_key.empty())
             return;
@@ -1768,7 +1974,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("          /models (list & pick) · /log <path>|off|default");
             screen.commit(
                 "          /log info|debug|trace (capture level; /debug on|all|off alias)");
-            screen.commit("          /config · /sessions · /session <id>|new · /sysinfo on|off");
+            screen.commit(
+                "          /config · /sessions · /session <id|prefix>|new · /sysinfo on|off");
+            screen.commit("          /sidebar on|off (tree + changed files)");
             screen.commit("          /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
             screen.commit("configure them in any order, any number of sittings.");
@@ -1906,6 +2114,25 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                           " (env overrides file)");
             return true;
         }
+        if (line.rfind("/sidebar", 0) == 0) {
+            // v4.13: right sidebar with the workspace tree + changed
+            // files. Session-only display state (same rule as /sysinfo).
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                screen.commit(std::string("sidebar=") + (show_sidebar ? "on" : "off") +
+                              " · usage /sidebar on|off");
+            } else if (arg == "on") {
+                show_sidebar = true;
+                start_sidebar();
+                screen.commit("[ok] sidebar on (this session) · tree + git changes");
+            } else if (arg == "off") {
+                show_sidebar = false;
+                screen.commit("[ok] sidebar off (this session)");
+            } else {
+                screen.commit("[error] /sidebar expects on|off");
+            }
+            return true;
+        }
         if (line.rfind("/sysinfo", 0) == 0) {
             // v4.12: bottom system-info row toggle (user@host · cwd ·
             // clock). Session-only like the log level -- display state,
@@ -1931,7 +2158,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit(ids.empty() ? "sessions: (empty)" : "sessions:");
             for (const auto& id : ids)
                 screen.commit("  " + id + (id == session.meta.id ? "  <- current" : ""));
-            screen.commit("switch in place: /session <id> · /session new");
+            screen.commit("switch in place: /session <id or prefix> · /session new");
             return true;
         }
         if (line.rfind("/session", 0) == 0 && line != "/sessions") {
@@ -1942,7 +2169,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto arg = arg_of(line);
             if (arg.empty()) {
                 screen.commit("session=" + session.meta.id +
-                              " · usage /session <id> | /session new");
+                              " · usage /session <id or prefix> | /session new");
                 return true;
             }
             if (streaming || turn_done.load()) {
@@ -1959,6 +2186,23 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             } else if (!mini_agent::session_id_is_safe(target_id)) {
                 screen.commit("[error] unsafe session id");
                 return true;
+            } else {
+                // v4.13: prefix match (maintainer request). The typed word
+                // resolves against stored ids; one hit replaces it, several
+                // list candidates, none falls through so `load` reports the
+                // usual "no such session" error.
+                session_ids_stale = true;
+                refresh_session_ids();
+                const auto m = mini_agent::match_session_ref(target_id, session_ids);
+                if (m.exact) {
+                    target_id = m.id;
+                } else if (!m.candidates.empty()) {
+                    screen.commit("session " + target_id + " is ambiguous:");
+                    for (const auto& id : m.candidates)
+                        screen.commit("  " + id + (id == session.meta.id ? "  <- current" : ""));
+                    screen.commit("type more characters, or Tab to cycle /session <id>");
+                    return true;
+                }
             }
             if (target_id == session.meta.id) {
                 screen.commit("[info] already on session " + target_id);
@@ -2256,6 +2500,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             std::string note;
             tool_registry = build_tool_registry(config, &note);
             config_snapshot = config;
+            start_sidebar(); // v4.13: tree belongs to the new boundary
             screen.commit("[ok] workspace=" + sanitize_display(config.workspace) +
                           " · tools rebound · " +
                           (config.workspace == std::filesystem::current_path().string()
@@ -2526,7 +2771,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         }
                     }
                 } else if (c == '\t') {
-                    if (const auto completed = slash_tab_complete(composer, tab_state)) {
+                    if (const auto completed =
+                            slash_tab_complete(composer, tab_state, session_ids)) {
                         composer = *completed;
                         cursor = composer.size();
                         mark_edited();
@@ -2639,6 +2885,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             }
         }
 
+        // v4.13: sidebar scan completion (main-thread rendering).
+        if (sidebar_done.load()) {
+            sidebar_done = false;
+            sidebar_running = false;
+            if (sidebar_worker.joinable())
+                sidebar_worker.join();
+        }
+
         if (turn_done.load()) {
             streaming = false;
             if (worker.joinable())
@@ -2685,6 +2939,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     screen.commit("[warn] save failed: " + err);
                     logger->event("session_save", {{"status", "error"}, {"error", err}});
                 }
+                start_sidebar(); // v4.13: the turn may have changed files
             } else if (result.aborted) {
                 logger->event("turn",
                               {{"status", "aborted"}, {"elapsed_ms", std::to_string(elapsed_ms)}});
@@ -2813,6 +3068,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             }
             // Masked input passes an empty raw composer: no slash hint.
             const std::string raw_for_hint = secret_input ? std::string() : composer;
+            // v4.13: while the composer sits in the /session arg tier
+            // ("/session …"), keep the id snapshot current so Tab and the
+            // hint list see sessions saved by this or another process.
+            if (!session_ids_stale && starts_with(raw_for_hint, "/session "))
+                session_ids_stale = true;
+            if (session_ids_stale)
+                refresh_session_ids();
             // Prompt marker = provider connection state, derived purely from
             // (config, last probe, listing-in-flight): an idle tick yields the
             // same text, so render() keeps its zero-work input cache.
@@ -2898,8 +3160,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                               tm.tm_sec);
                 sysinfo = sysinfo_line(sc, user, hostbuf, cwd, clockbuf);
             }
+            std::vector<std::string> sidebar_rows;
+            if (show_sidebar) {
+                std::vector<std::string> raw = sidebar_result.rows;
+                if (!sidebar_result.error.empty())
+                    raw = {"sidebar: " + sidebar_result.error};
+                else if (sidebar_running)
+                    raw.push_back("(scanning...)");
+                sidebar_rows.push_back(tint(sc, "1", "workspace"));
+                for (const auto& row : raw)
+                    sidebar_rows.push_back(tint(sc, "2", sanitize_display(row)));
+            }
             screen.render(tail, last_user, raw_for_hint, composer_display, prompt, status,
-                          streaming, cols, extra_rows, sysinfo);
+                          streaming, cols, extra_rows, sysinfo, session_ids, sidebar_rows);
         }
     }
 
@@ -2912,6 +3185,8 @@ done:
         models_worker.join(); // bounded by its own 15 s curl timeout
     if (probe_worker.joinable())
         probe_worker.join(); // v4.3: bounded by its own 30 s curl timeout
+    if (sidebar_worker.joinable())
+        sidebar_worker.join(); // v4.13: git scan capped at 5 s
     logger->event("session_close", {{"mode", "tui"}, {"id", session.meta.id}});
     Logger::shutdown_all();
     screen.clear_live();

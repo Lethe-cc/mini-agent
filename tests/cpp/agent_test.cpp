@@ -696,9 +696,9 @@ void test_md4c_gfm_extensions() {
 void test_tui_helpers() {
     // slash registry & prefix matching
     auto matches = mini_agent::tui::slash_matches("/s");
-    check(matches.size() == 3 && matches[0] == "/session" && matches[1] == "/sessions" &&
-              matches[2] == "/sysinfo",
-          "prefix /s matches /session + /sessions + /sysinfo (v4.12)");
+    check(matches.size() == 4 && matches[0] == "/session" && matches[1] == "/sessions" &&
+              matches[2] == "/sidebar" && matches[3] == "/sysinfo",
+          "prefix /s matches session/sessions/sidebar/sysinfo (v4.13)");
     check(mini_agent::tui::slash_matches("/").size() == mini_agent::tui::slash_commands().size(),
           "bare / matches all commands");
     check(mini_agent::tui::slash_matches("hello").empty(), "non-slash ignored");
@@ -2236,6 +2236,68 @@ void test_v411_turn_panel() {
     check(info == "marvin@box · ~/w/mini · 23:50:01", "sysinfo format");
     check(T::sysinfo_line(false, "a\x1b[31mb", "h", "c", "t").find("\x1b") == std::string::npos,
           "sysinfo never carries escape bytes");
+    // v4.13 sidebar composition: rows merge with the gutter, the shorter
+    // column pads out, and every composed row is exactly one terminal row.
+    const auto merged = T::compose_columns({"abc", "de"}, {"123456", "x", "long"}, 20, 6);
+    check(merged.size() == 3, "row count = max of both columns");
+    check(merged[0] == std::string("abc") + std::string(8, ' ') + " | 123456",
+          "content padded to split (11), sidebar kept");
+    check(merged[2] == std::string(11, ' ') + " | long", "missing content row pads blank");
+    // The right column is clipped, not padded: rows with a short sidebar
+    // are narrower than cols. The invariant is "one terminal row each":
+    // width <= cols always, == cols when both sides are full.
+    check(mini_agent::md::display_width(merged[0]) == 20 &&
+              mini_agent::md::display_width(merged[2]) <= 20,
+          "composed rows never exceed the width; full pair hits it exactly");
+    const auto off = T::compose_columns({"abc"}, {}, 20, 6);
+    check(off.size() == 1 && off[0] == "abc", "empty sidebar passes content through");
+    check(T::sidebar_status_glyph("??") == "??", "untracked glyph");
+    check(T::sidebar_status_glyph(" M") == "M", "worktree modify glyph");
+    check(T::sidebar_status_glyph("A ") == "A", "staged add glyph");
+    check(T::sidebar_status_glyph("##").empty(), "branch header yields nothing");
+}
+
+void test_v413_session_prefix() {
+    namespace T = mini_agent::tui;
+    using mini_agent::match_session_ref;
+    using mini_agent::session_prefix_matches;
+    const std::vector<std::string> ids{"0a1b2c3d4e5f6070", "0a1b999999999999", "ff00112233445566"};
+    // Pure prefix matcher: unique prefix, ambiguous, exact beats siblings,
+    // no match, empty input.
+    check(session_prefix_matches("0a1b2c", ids).size() == 1, "unique prefix hits one");
+    check(session_prefix_matches("0a1b", ids).size() == 2, "shared prefix hits two");
+    check(session_prefix_matches("0a1b2c3d4e5f6070", ids).size() == 1 &&
+              session_prefix_matches("0a1b2c3d4e5f6070", ids).front() == "0a1b2c3d4e5f6070",
+          "exact id outranks prefix siblings");
+    check(session_prefix_matches("zz", ids).empty(), "unknown prefix hits none");
+    check(session_prefix_matches("", ids).empty(), "empty input hits none");
+    // Outcome view.
+    check(match_session_ref("0a1b2c", ids).exact &&
+              match_session_ref("0a1b2c", ids).id == "0a1b2c3d4e5f6070",
+          "match resolves unique prefix");
+    check(!match_session_ref("0a1b", ids).exact &&
+              match_session_ref("0a1b", ids).candidates.size() == 2,
+          "match reports ambiguity candidates");
+    check(!match_session_ref("99", ids).exact && match_session_ref("99", ids).candidates.empty(),
+          "match no-hit carries empty candidates");
+    // /session Tab completion now walks real ids (store snapshot passed in),
+    // prefix-filtered; without ids the <id> placeholder behaviour stands.
+    int cycle = 0;
+    const auto first = T::slash_tab_complete("/session 0a1b", cycle, ids);
+    check(first && (*first == "/session 0a1b2c3d4e5f6070" || *first == "/session 0a1b999999999999"),
+          "/session prefix Tab inserts a matching id");
+    const auto second = T::slash_tab_complete("/session 0a1b", cycle, ids);
+    check(second && *second != *first, "Tab cycles among prefix matches");
+    const auto rot = T::slash_tab_complete("/session " + ids[0], cycle, ids);
+    check(rot && *rot == "/session " + ids[1], "rest is a full choice: rotates to next");
+    const auto placeholder = T::slash_tab_complete("/session", cycle);
+    check(placeholder && *placeholder == "/session <id>", "no store snapshot keeps <id> default");
+    const auto hint = T::slash_completion_hint("/session 0a1b", ids);
+    check(hint.size() == 3 && hint[0].find("options for /session") != std::string::npos &&
+              hint[1].find(ids[0]) != std::string::npos,
+          "hint lists prefix-matching ids");
+    const auto full_hint = T::slash_completion_hint("/session ", ids);
+    check(full_hint.size() == ids.size() + 2, "empty arg lists all ids plus new");
 }
 
 void test_v410_arg_completion() {
@@ -2412,6 +2474,7 @@ int main() {
     test_v42_capabilities_and_menu();
     test_v43_probe_parse();
     test_v47_models_dev_catalog();
+    test_v413_session_prefix();
     test_v410_arg_completion();
     test_v411_turn_panel();
     test_v44_debug_log();

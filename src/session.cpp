@@ -83,6 +83,36 @@ std::string generate_session_id() {
     return buffer;
 }
 
+std::vector<std::string> session_prefix_matches(std::string_view input,
+                                                const std::vector<std::string>& ids) {
+    std::vector<std::string> hits;
+    if (input.empty())
+        return hits;
+    for (const auto& id : ids) {
+        if (id == input) {
+            // Exact match wins outright: no fan-out to prefix siblings.
+            hits.clear();
+            hits.push_back(id);
+            return hits;
+        }
+        if (id.size() >= input.size() && id.compare(0, input.size(), input) == 0)
+            hits.push_back(id);
+    }
+    return hits;
+}
+
+SessionRefMatch match_session_ref(std::string_view ref, const std::vector<std::string>& ids) {
+    SessionRefMatch out;
+    auto hits = session_prefix_matches(ref, ids);
+    if (hits.size() == 1) { // unique prefix (or exact id, which fans to one)
+        out.exact = true;
+        out.id = std::move(hits.front());
+        return out;
+    }
+    out.candidates = std::move(hits); // 0 or >1: caller distinguishes empty
+    return out;
+}
+
 bool session_id_is_safe(std::string_view id) noexcept {
     if (id.empty() || id.size() > 32)
         return false;

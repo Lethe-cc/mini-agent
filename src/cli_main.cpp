@@ -46,10 +46,11 @@ void print_usage(std::ostream& out) {
            "      --log-level info|debug|trace  traffic capture ladder (v4.8):\n"
            "          debug: raw chat request/response -> <log path>.debug\n"
            "          trace: + auxiliary traffic (models/probe, truncated)\n"
-           "  mini-agent run [--session ID] [--cwd PATH] [--debug]  session (TUI; v1 line-mode)\n"
+           "  mini-agent run [--session ID|PREFIX] [--cwd PATH] [--debug]  session (TUI; v1 "
+           "line-mode)\n"
            "  mini-agent                     bare == run: open the TUI directly (v4.9)\n"
-           "      in-TUI session switch: /session <id> | /session new\n"
-           "  mini-agent session list|rm ID  manage sessions\n"
+           "      in-TUI session switch: /session <id|prefix> | /session new\n"
+           "  mini-agent session list|rm ID  manage sessions (rm needs the exact id)\n"
            "  mini-agent mcp list            show configured MCP servers\n"
            "  --mcp NAME=SPEC (ask/run/mcp)  add one server this session:\n"
            "      NAME=https://host/mcp          Streamable HTTP\n"
@@ -432,7 +433,7 @@ int cmd_run(int argc, char** argv) {
             debug_flag = true; // v4.8 (design 010 §19)
             debug_level = argv[++i];
         } else {
-            std::cerr << "usage: mini-agent run [--session ID] [--new] "
+            std::cerr << "usage: mini-agent run [--session ID|PREFIX] [--new] "
                          "[--cwd PATH] [--mcp NAME=SPEC] [--debug|=all] "
                          "[--log-level info|debug|trace]\n";
             return kConfigError;
@@ -493,6 +494,22 @@ int cmd_run(int argc, char** argv) {
         if (!mini_agent::session_id_is_safe(session_id)) {
             std::cerr << "error: unsafe session id\n";
             return kConfigError;
+        }
+        // v4.13: --session accepts a unique prefix too. Ambiguous input
+        // lists the candidates and exits; no match falls through to load
+        // for the usual not-found error.
+        {
+            std::string list_error;
+            const auto ids = store.list(&list_error);
+            const auto m = mini_agent::match_session_ref(session_id, ids);
+            if (m.exact) {
+                session_id = m.id;
+            } else if (!m.candidates.empty()) {
+                std::cerr << "error: session id '" << session_id << "' is ambiguous:\n";
+                for (const auto& id : m.candidates)
+                    std::cerr << "  " << id << '\n';
+                return kConfigError;
+            }
         }
         auto loaded = store.load(session_id, &io_error);
         if (!loaded) {

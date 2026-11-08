@@ -22,12 +22,14 @@ std::vector<std::string_view> slash_matches(std::string_view prefix);
 // Next cyclic Tab completion for an input starting with `/`; returns the
 // replacement line text, or nullopt when nothing matches / input is not a
 // slash line. Cycles per call so repeated Tab walks the list.
-std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor_state);
+std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor_state,
+                                              const std::vector<std::string>& session_ids = {});
 // Hint rows shown under the composer while it is a `/`-line, as a vertical
 // list: header row then one row per prefix match Tab cycles through; the
 // no-match notice instead when nothing matches. Empty for non-slash input
 // (2026-11-01 maintainer requests; vertical form per follow-up).
-std::vector<std::string> slash_completion_hint(std::string_view composer);
+std::vector<std::string> slash_completion_hint(std::string_view composer,
+                                               const std::vector<std::string>& session_ids = {});
 
 // UTF-8 aware composer editing: append validates/rejects lone surrogates
 // only trivially (we accept opaque bytes); returns bytes appended.
@@ -149,6 +151,21 @@ std::string tool_activity_line(const std::string& tool_name, const std::string& 
 std::vector<std::string> turn_panel_rows(bool colors, bool thinking, long long elapsed_secs,
                                          const std::vector<std::string>& tool_rows,
                                          std::size_t max_rows);
+
+// v4.13 (design 007 §v4.13): right-hand sidebar inside the inline frame.
+// compose_columns merges pre-built content rows (width <= cols-side_w-3)
+// with sidebar rows (width <= side_w) into full-width rows joined by a
+// " | " separator; content rows are padded to the split width with
+// spaces (display-width aware). Rows beyond the sidebar's length render
+// blank on the right; shorter content is what the caller guarantees
+// (md::clip). Pure + unit-testable; the caller owns data gathering.
+std::vector<std::string> compose_columns(const std::vector<std::string>& content,
+                                         const std::vector<std::string>& sidebar, std::size_t cols,
+                                         std::size_t side_w);
+
+// One-line git porcelain status glyph for the sidebar ("?? " -> "??",
+// " M " -> "M", "A " -> "A", "R.." -> "R"); empty on unparseable input.
+std::string sidebar_status_glyph(std::string_view xy);
 
 // v4.12: one bottom system-info row: "user@host · cwd · clock" (dim when
 // colors on). Pure: the caller gathers the values (USER/getpwuid,
