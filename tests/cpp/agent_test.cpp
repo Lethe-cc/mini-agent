@@ -696,8 +696,9 @@ void test_md4c_gfm_extensions() {
 void test_tui_helpers() {
     // slash registry & prefix matching
     auto matches = mini_agent::tui::slash_matches("/s");
-    check(matches.size() == 2 && matches[0] == "/session" && matches[1] == "/sessions",
-          "prefix /s matches /session + /sessions (v4.9)");
+    check(matches.size() == 3 && matches[0] == "/session" && matches[1] == "/sessions" &&
+              matches[2] == "/sysinfo",
+          "prefix /s matches /session + /sessions + /sysinfo (v4.12)");
     check(mini_agent::tui::slash_matches("/").size() == mini_agent::tui::slash_commands().size(),
           "bare / matches all commands");
     check(mini_agent::tui::slash_matches("hello").empty(), "non-slash ignored");
@@ -2230,6 +2231,11 @@ void test_v411_turn_panel() {
               capped[1].find("row5") != std::string::npos &&
               capped[1].find("row0") == std::string::npos,
           "cap drops from the front (newest survive)");
+    // v4.12 system-info row: plain joined line, control chars sanitized.
+    const auto info = T::sysinfo_line(false, "marvin", "box", "~/w/mini", "23:50:01");
+    check(info == "marvin@box · ~/w/mini · 23:50:01", "sysinfo format");
+    check(T::sysinfo_line(false, "a\x1b[31mb", "h", "c", "t").find("\x1b") == std::string::npos,
+          "sysinfo never carries escape bytes");
 }
 
 void test_v410_arg_completion() {

@@ -150,6 +150,14 @@ std::vector<std::string> turn_panel_rows(bool colors, bool thinking, long long e
                                          const std::vector<std::string>& tool_rows,
                                          std::size_t max_rows);
 
+// v4.12: one bottom system-info row: "user@host · cwd · clock" (dim when
+// colors on). Pure: the caller gathers the values (USER/getpwuid,
+// gethostname, workspace-or-cwd with $HOME abbreviated to ~, local
+// HH:MM:SS). Inputs are sanitized here so no escape bytes reach the
+// frame (5.6 rule 2).
+std::string sysinfo_line(bool colors, const std::string& user, const std::string& host,
+                         const std::string& cwd, const std::string& clock);
+
 // Compact one-row summary of a tool call's primary argument (command/
 // path/text/url/query), sanitized + clipped. Shared by the history line
 // and the panel.

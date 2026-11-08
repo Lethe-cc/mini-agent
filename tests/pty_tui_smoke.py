@@ -442,6 +442,11 @@ def main():
     # region carries the process view -- at minimum the "this turn Ns"
     # header row (tools/thinking rows appear only when a turn uses them).
     expect("this turn" in strip_csi(long_raw), "turn panel header shown while streaming")
+    # v4.12: bottom system-info row (user@host · cwd · clock) present by
+    # default; OSC-capable strips keep it visible in the cleaned stream.
+    expect(re.search(r"@\S+ \u00b7 \S+ \u00b7 \d\d:\d\d:\d\d", strip_csi(splash + turn))
+               is not None,
+           "system info row shows user@host · cwd · clock")
     over = [s for part in long_raw.split("\n")[:-1]
             for s in [strip_csi(part.rstrip("\r"))]  # pty ONLCR adds the CR
             if display_width(s) > 80]

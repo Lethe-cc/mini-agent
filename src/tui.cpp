@@ -18,6 +18,7 @@
 #include <nlohmann/json.hpp>
 
 #include <poll.h>
+#include <pwd.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -41,10 +42,10 @@
 namespace mini_agent::tui {
 namespace {
 
-constexpr std::string_view kCommands[] = {"/approve",   "/config",  "/context",  "/cwd",
-                                          "/debug",     "/exit",    "/help",     "/login",
-                                          "/mcp",       "/model",   "/models",   "/provider",
-                                          "/reasoning", "/session", "/sessions", "/tools"};
+constexpr std::string_view kCommands[] = {
+    "/approve",   "/config",  "/context",  "/cwd",     "/debug",  "/exit",
+    "/help",      "/login",   "/mcp",      "/model",   "/models", "/provider",
+    "/reasoning", "/session", "/sessions", "/sysinfo", "/tools"};
 
 class RawMode {
   public:
@@ -816,6 +817,16 @@ std::string format_token_count(long long n) {
     return std::string(buf);
 }
 
+std::string sysinfo_line(bool colors, const std::string& user, const std::string& host,
+                         const std::string& cwd, const std::string& clock) {
+    // v4.12 (design 007 §v4.12): bottom system-info row. Pure so the
+    // format is unit-testable; the caller gathers user/host/cwd/clock.
+    std::string out = tint(colors, "2",
+                           sanitize_display(user) + "@" + sanitize_display(host) + " · " +
+                               sanitize_display(cwd) + " · " + sanitize_display(clock));
+    return out;
+}
+
 std::string status_usage_segments(bool colors, const StatusInputs& inputs) {
     // v4 trailing segments (design 010): ctx reading, out sum, reasoning.
     // Each segment is ` · ` + tinted text; the whole row keeps the
@@ -939,9 +950,8 @@ class LiveScreen {
     void render(const std::string& response_tail, const std::string& pinned_question,
                 const std::string& composer, const std::string& composer_display,
                 const std::string& prompt, const std::string& status, bool streaming,
-                std::size_t cols,
-                const std::vector<std::string>& extra_rows =
-                    {}) { // NOLINT(bugprone-easily-swappable-parameters)
+                std::size_t cols, const std::vector<std::string>& extra_rows = {},
+                const std::string& sysinfo = {}) { // NOLINT(bugprone-easily-swappable-parameters)
         const std::size_t rows = current_rows();
         // Slash hint (2026-11-01 maintainer request; vertical list per
         // follow-up): while the composer is a slash line, enumerate Tab
@@ -957,7 +967,7 @@ class LiveScreen {
             streaming == last_streaming_ && response_tail == last_tail_ &&
             pinned_question == last_pin_ && composer == last_composer_ &&
             composer_display == last_comp_disp_ && prompt == last_prompt_ &&
-            status == last_status_ && extra_rows == last_extra_) {
+            status == last_status_ && extra_rows == last_extra_ && sysinfo == last_sysinfo_) {
             return;
         }
         inputs_cached_ = true;
@@ -971,7 +981,11 @@ class LiveScreen {
         last_prompt_ = prompt;
         last_status_ = status;
         last_extra_ = extra_rows;
-        const std::size_t cap = rows > 2 ? rows - 2 : 1; // block budget minus status row
+        last_sysinfo_ = sysinfo;
+        // v4.12: two fixed rows at the bottom (status + optional system
+        // info) on top of the cursor row; block budget shrinks to match.
+        const std::size_t fixed_rows = sysinfo.empty() ? 2 : 3;
+        const std::size_t cap = rows > fixed_rows ? rows - fixed_rows : 1;
         auto pin_rows =
             streaming
                 ? md::wrap(style_history_line("You: " + pinned_question, colors_enabled()), cols)
@@ -1019,6 +1033,8 @@ class LiveScreen {
         // the block's last row, so an unclosed span would leak into the next
         // repaint's rows (5.6 rule 2: no style may survive a row boundary).
         content.push_back(md::clip(status, cols) + "\x1b[0m");
+        if (!sysinfo.empty()) // v4.12: system-info row below the status row
+            content.push_back(md::clip(sysinfo, cols) + "\x1b[0m");
         // Bottom-anchored live block (2026-11-05 maintainer request): pad
         // the TOP with blank rows so the status row rests one line above
         // the screen bottom and the cursor sits on the last line, whether
@@ -1154,6 +1170,7 @@ class LiveScreen {
     std::string last_prompt_;
     std::string last_status_;
     std::vector<std::string> last_extra_;
+    std::string last_sysinfo_;
 
     static std::string join(const std::vector<std::string>& rows) {
         std::string out;
@@ -1400,6 +1417,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // `running_tool` is set by on_tool_start (worker thread, under
     // tool_mutex) and cleared by on_tool; `reasoning_live` is set by the
     // SSE parser the first time a reasoning delta arrives this turn.
+    bool show_sysinfo = true; // v4.12: /sysinfo on|off toggle
     std::string running_tool;
     std::atomic<bool> reasoning_live{false};
     // Completed tool rows for THIS turn, kept for the panel even after
@@ -1750,7 +1768,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("          /models (list & pick) · /log <path>|off|default");
             screen.commit(
                 "          /log info|debug|trace (capture level; /debug on|all|off alias)");
-            screen.commit("          /config · /sessions · /session <id>|new · /exit");
+            screen.commit("          /config · /sessions · /session <id>|new · /sysinfo on|off");
+            screen.commit("          /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
             screen.commit("configure them in any order, any number of sittings.");
             screen.commit("prompt: ?=unconfigured/unverified · ~=checking · >=ok");
@@ -1885,6 +1904,25 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                                      : config.reasoning_effort));
             screen.commit("config file: " + default_config_path().string() +
                           " (env overrides file)");
+            return true;
+        }
+        if (line.rfind("/sysinfo", 0) == 0) {
+            // v4.12: bottom system-info row toggle (user@host · cwd ·
+            // clock). Session-only like the log level -- display state,
+            // not a durable preference.
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                screen.commit(std::string("sysinfo=") + (show_sysinfo ? "on" : "off") +
+                              " · usage /sysinfo on|off");
+            } else if (arg == "on") {
+                show_sysinfo = true;
+                screen.commit("[ok] system info row on (session-only)");
+            } else if (arg == "off") {
+                show_sysinfo = false;
+                screen.commit("[ok] system info row off (session-only)");
+            } else {
+                screen.commit("[error] /sysinfo expects on|off");
+            }
             return true;
         }
         if (line == "/sessions") {
@@ -2826,8 +2864,42 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 extra_rows = approval_rows(snapshot.name, snapshot.arguments_json,
                                            approval_expanded, snapshot_preview);
             }
+            // v4.12: bottom system-info row (user@host · cwd · clock).
+            // Gathered per frame: the clock is the only fast-changing part
+            // and row-level diffing keeps the repaint cost at one row per
+            // second. Home abbreviated to ~ like the Pi footer; workspace
+            // stamp (session boundary) shown when set, else process cwd.
+            std::string sysinfo;
+            if (show_sysinfo) {
+                std::string user;
+                if (const char* u = ::getenv("USER"))
+                    user = u;
+                else if (const auto* pw = ::getpwuid(::getuid()))
+                    user = pw->pw_name;
+                else
+                    user = "?";
+                char hostbuf[256] = {0};
+                if (::gethostname(hostbuf, sizeof(hostbuf) - 1) != 0)
+                    std::snprintf(hostbuf, sizeof(hostbuf), "?");
+                std::string cwd = config.workspace.empty()
+                                      ? std::filesystem::current_path().string()
+                                      : config.workspace;
+                if (const char* home = ::getenv("HOME"); home && *home) {
+                    const std::string h = home;
+                    if (cwd.size() >= h.size() && cwd.compare(0, h.size(), h) == 0)
+                        cwd = "~" + cwd.substr(h.size());
+                }
+                char clockbuf[16];
+                const auto wall = std::chrono::system_clock::now();
+                const auto secs = std::chrono::system_clock::to_time_t(wall);
+                std::tm tm{};
+                ::localtime_r(&secs, &tm);
+                std::snprintf(clockbuf, sizeof(clockbuf), "%02d:%02d:%02d", tm.tm_hour, tm.tm_min,
+                              tm.tm_sec);
+                sysinfo = sysinfo_line(sc, user, hostbuf, cwd, clockbuf);
+            }
             screen.render(tail, last_user, raw_for_hint, composer_display, prompt, status,
-                          streaming, cols, extra_rows);
+                          streaming, cols, extra_rows, sysinfo);
         }
     }
 
