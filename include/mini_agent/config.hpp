@@ -46,9 +46,12 @@ struct AppConfig {
     // "debug": chat completions also dump raw request/SSE bodies to
     // "<log path>.debug" (0600). "trace": ALSO auxiliary traffic (GET
     // /models, context probe) with payloads truncated at 4KB. Legacy
-    // spellings stay accepted on load (debug_log=true -> debug,
-    // debug_log_aux=true -> trace; MINI_AGENT_DEBUG / --debug /
-    // --debug=all / /debug on|all|off all map onto this ladder).
+    // spellings MINI_AGENT_DEBUG / --debug / --debug=all / /debug
+    // on|all|off map onto the same ladder. v4.8.1: the level is
+    // SESSION-SCOPED -- never written to the config file and ignored if
+    // present there (legacy debug_log/debug_log_aux fields are dropped
+    // on the next save); sources are env, CLI flags, and the TUI
+    // switches only.
     std::string log_level = "info"; // "info" | "debug" | "trace"
     // Derived capture gates (single source of truth: log_level).
     bool capture_chat() const {

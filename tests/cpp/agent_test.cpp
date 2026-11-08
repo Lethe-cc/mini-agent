@@ -2241,40 +2241,32 @@ void test_v43_probe_parse() {
 
 void test_v44_debug_log() {
     std::string error;
-    // v4.8 (010 §19): log_level ladder round-trip; written only when
-    // raised above info; bad values fail closed.
-    const auto dbg = mini_agent::config_from_json(R"({"model":"m","log_level":"debug"})", &error);
-    check(dbg.has_value() && dbg->log_level == "debug", "log_level parses");
-    check(mini_agent::config_to_json(*dbg).find("debug") != std::string::npos,
-          "log_level written when raised");
-    check(mini_agent::config_to_json(*dbg).find("log_level") != std::string::npos,
-          "log_level key written");
-    const auto off = mini_agent::config_from_json(R"({"model":"m"})", &error);
-    check(off.has_value() && off->log_level == "info", "default level info");
-    check(mini_agent::config_to_json(*off).find("log_level") == std::string::npos,
+    // v4.8.1 (010 §19): the level is session-scoped -- the file is never
+    // a source and never a sink. log_level/legacy bools in JSON are
+    // ignored (not fail-closed: they are simply not config keys), and
+    // saving drops them.
+    const auto raised =
+        mini_agent::config_from_json(R"({"model":"m","log_level":"debug"})", &error);
+    check(raised.has_value() && raised->log_level == "info",
+          "file log_level ignored (session-only)");
+    const auto legacy = mini_agent::config_from_json(
+        R"({"model":"m","debug_log":true,"debug_log_aux":true})", &error);
+    check(legacy.has_value() && legacy->log_level == "info", "legacy debug bools ignored on load");
+    check(mini_agent::config_to_json(*legacy).find("debug_log") == std::string::npos,
+          "saving drops legacy debug_log fields");
+    mini_agent::AppConfig lvl;
+    lvl.base_url = "https://x.test/v1";
+    lvl.api_key = "k";
+    lvl.model = "m";
+    lvl.log_level = "trace";
+    check(mini_agent::config_to_json(lvl).find("log_level") == std::string::npos,
+          "raised level never written to file");
+    lvl.log_level = "info";
+    check(mini_agent::config_to_json(lvl).find("log_level") == std::string::npos,
           "info omitted from output");
-    check(!mini_agent::config_from_json(R"({"log_level":"verbose"})", &error).has_value(),
-          "unknown level rejected");
-    check(!mini_agent::config_from_json(R"({"log_level":true})", &error).has_value(),
-          "non-string level rejected");
-
-    // legacy bool migration: debug_log=true -> debug; aux=true -> trace
-    // (aux wins); explicit log_level beats the legacy pair.
-    const auto legacy = mini_agent::config_from_json(R"({"debug_log":true})", &error);
-    check(legacy.has_value() && legacy->log_level == "debug", "legacy debug_log -> debug");
-    const auto legacy_aux =
-        mini_agent::config_from_json(R"({"debug_log":true,"debug_log_aux":true})", &error);
-    check(legacy_aux.has_value() && legacy_aux->log_level == "trace", "legacy aux -> trace");
-    const auto mixed =
-        mini_agent::config_from_json(R"({"debug_log":true,"log_level":"info"})", &error);
-    check(mixed.has_value() && mixed->log_level == "info", "log_level beats legacy bools");
-    // saving a migrated config writes only the new field (bools retired).
-    const auto saved = mini_agent::config_to_json(*legacy_aux);
-    check(saved.find("log_level") != std::string::npos &&
-              saved.find("debug_log") == std::string::npos,
-          "migrated config saves as log_level only");
-    check(!mini_agent::config_from_json(R"({"debug_log":"yes"})", &error).has_value(),
-          "non-bool legacy debug_log still rejected");
+    const auto junk = mini_agent::config_from_json(R"({"log_level":"verbose"})", &error);
+    check(junk.has_value() && junk->log_level == "info",
+          "unknown level in file tolerated (ignored, not fail-closed)");
 
     // gates + path derivation: <log_file>.debug; "off"/empty fall back to
     // default base; info -> no path at all.

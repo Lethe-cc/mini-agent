@@ -203,11 +203,12 @@ ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1
 把 v4.4 的一级/二级 debug 布尔统一成**单一级别阶梯**，挂在 `/log` 命令族上：
 
 - **语义**：`info`（默认）= 只有结构化元数据日志（零正文保证不变）；`debug` = 追加对话原始报文 dump（`<log>.debug`，0600，REQUEST/SSE 逐条）；`trace` = 再追加辅助流量（PROBE/MODELS，4KB 截断）。三级与旧词汇一一对应：off=info、on=debug、all=trace。
-- **数据层**：`AppConfig.log_level`（string，默认 "info"）取代 `debug_log`/`debug_log_aux` 两个 bool；`capture_chat()/capture_aux()` 派生门（单一事实源）。JSON 仅高于 info 时写 `log_level`；**旧字段保留读**：`debug_log:true`→debug、`debug_log_aux:true`→trace（aux 优先）、同文件显式 `log_level` 压过旧 bool；保存时只写新字段（旧 bool 自然退役）。非 info|debug|trace 的值整份失败关闭。
+- **数据层**：`AppConfig.log_level`（string，默认 "info"）取代 `debug_log`/`debug_log_aux` 两个 bool；`capture_chat()/capture_aux()` 派生门（单一事实源）。
+- **v4.8.1 修订（同日维护者需求：级别开关不该进配置文件）**：级别改为**纯会话态**——config 文件既不写也不读（`log_level` 与旧 `debug_log`/`debug_log_aux` 出现在文件里一律忽略、不失败关闭；旧字段在下次保存时被自然清除，维护者实机 config 已验证）。来源只剩：env `MINI_AGENT_LOG_LEVEL`/`MINI_AGENT_DEBUG`、CLI `--log-level`/`--debug`、TUI `/log info|debug|trace` 与 `/debug` 别名（切换即时生效、不落盘，回显标注 "this session"；`/config` 行标注 "session-only, not saved"）。理由：抓包级别是调试意图而非持久偏好，落盘会让一次 debug 跨会话复活、且 dump 含对话正文，静默长期开启是隐私风险。
 - **入口**：env `MINI_AGENT_LOG_LEVEL=info|debug|trace`（新，压过 `MINI_AGENT_DEBUG`）；`MINI_AGENT_DEBUG` 旧拼写保留（非空=debug、"2"=trace）；CLI `--log-level [v]`/`--log-level=v`（新）+ `--debug`/`--debug=all`（别名）；TUI `/log info|debug|trace`（新，`/log` 无参同时显示当前级别）+ `/debug on|all|off|info|debug|trace`（保留为别名，无参行自述别名身份）；`/config` 行改显 `log_level=<v>`。非法 `--log-level` 值 CLI 失败关闭（exit 2）。
 - **兼容钩子**：v4.4 的"一级开、二级不开时行为与 v4.4 完全一致"回归钩子平移为"debug 级行为 == 旧 on、trace 级 == 旧 all、info 级 == 旧 off"，由 capture_chat/capture_aux 门保证。
 
-验证（2026-11-08）：`test_v44_debug_log` 重写为级别往返/旧 bool 迁移/优先级/失败关闭/门与路径推导断言；agent_test 全量、CTest 3/3、strict-project、cpp_format 通过；PTY 实测 `/log debug`→trace→info 三条 `[ok] log level ...` 与 `/config` 的 `log_level=info`、info 级配置文件不落 log_level 字段均正确。
+验证（2026-11-08）：`test_v44_debug_log` 重写为会话态断言（文件 log_level/旧 bool 被忽略、保存清除旧字段且从不写 log_level、未知文件值容忍）+ 门与路径推导；PTY 实测旧 bool 文件加载为 info、`/log trace` 仅会话生效、任意保存清除 debug_log/debug_log_aux；agent_test 全量、CTest 3/3、strict-project、cpp_format 通过；PTY 实测 `/log debug`→trace→info 三条 `[ok] log level ...` 与 `/config` 的 `log_level=info`、info 级配置文件不落 log_level 字段均正确。
 
 ## 最终核对
 

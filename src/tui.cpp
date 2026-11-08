@@ -1642,17 +1642,20 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit(logger->enabled() ? "logging on: " + config.log_file
                                                 : "logging off; usage /log <path> or /log off");
                 screen.commit("level=" + config.log_level +
-                              "; usage /log info|debug|trace (see /debug)");
+                              " (session-only) · usage /log info|debug|trace");
             } else if (arg == "info" || arg == "debug" || arg == "trace") {
+                // v4.8.1: the level is session-scoped -- set in memory,
+                // never saved (persistence would resurrect a debug switch
+                // across sessions; the maintainer rule for this knob).
                 config.log_level = std::string(arg);
-                save_and_report();
                 if (config.log_level == "info") {
-                    screen.commit("[ok] log level info · metadata log only, no raw dumps");
+                    screen.commit("[ok] log level info (this session) · metadata log only, "
+                                  "no raw dumps");
                 } else {
-                    screen.commit("[ok] log level " + config.log_level +
+                    screen.commit("[ok] log level " + config.log_level + " (this session)" +
                                   (config.log_level == "debug"
-                                       ? " (raw chat traffic)"
-                                       : " (chat + truncated aux traffic)") +
+                                       ? " · raw chat traffic"
+                                       : " · chat + truncated aux traffic") +
                                   " -> " + config.to_provider().debug_log_path);
                 }
             } else if (arg == "off") {
@@ -1686,7 +1689,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                           std::string(config.api_key.empty() ? "(not set)" : "***set***"));
             screen.commit("login=" + std::string(auth_log_token(auth)));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
-            screen.commit(std::string("log_level=") + config.log_level);
+            screen.commit(std::string("log_level=") + config.log_level +
+                          " (session-only, not saved)");
             // v4 fields (design 010).
             screen.commit("context_window=" +
                           (config.context_window > 0
@@ -1842,8 +1846,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // header only.
             const auto arg = arg_of(line);
             auto set_level = [&](std::string_view level, std::string_view ok_text) {
-                config.log_level = level;
-                save_and_report();
+                config.log_level = level; // session-scoped (v4.8.1): no save
                 if (config.log_level == "info") {
                     screen.commit(std::string(ok_text) + " · metadata log only");
                 } else {

@@ -225,8 +225,6 @@ std::string config_to_json(const AppConfig& config) {
     if (!config.log_file.empty()) {
         root["log_file"] = config.log_file;
     }
-    if (config.log_level != "info") // v4.8: written only when raised (010 §19)
-        root["log_level"] = config.log_level;
     // v3 fields (design 009 section 5.4): optional, written only when set.
     if (!config.workspace.empty())
         root["workspace"] = config.workspace;
@@ -301,50 +299,13 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
     config.api_key = get_str("api_key");
     config.model = get_str("model");
     config.log_file = get_str("log_file");
-    // v4.8 (010 §19): log_level is a string ladder "info"|"debug"|"trace".
-    // Unknown values fail closed like other typed fields. The legacy v4.4
-    // bools stay readable and map onto the ladder (aux wins: true,true ->
-    // trace). A new-style log_level in the same file takes precedence.
-    {
-        bool legacy_chat = false;
-        bool legacy_aux = false;
-        if (auto it = parsed.find("debug_log"); it != parsed.end()) {
-            if (it->is_boolean())
-                legacy_chat = it->get<bool>();
-            else {
-                if (error)
-                    *error = "config debug_log must be a boolean";
-                return std::nullopt;
-            }
-        }
-        if (auto it = parsed.find("debug_log_aux"); it != parsed.end()) {
-            if (it->is_boolean())
-                legacy_aux = it->get<bool>();
-            else {
-                if (error)
-                    *error = "config debug_log_aux must be a boolean";
-                return std::nullopt;
-            }
-        }
-        if (legacy_aux)
-            config.log_level = "trace";
-        else if (legacy_chat)
-            config.log_level = "debug";
-        if (auto it = parsed.find("log_level"); it != parsed.end()) {
-            if (!it->is_string()) {
-                if (error)
-                    *error = "config log_level must be a string";
-                return std::nullopt;
-            }
-            const auto level = it->get<std::string>();
-            if (level != "info" && level != "debug" && level != "trace") {
-                if (error)
-                    *error = "config log_level must be info|debug|trace";
-                return std::nullopt;
-            }
-            config.log_level = level;
-        }
-    }
+    // v4.8.1 (010 §19): the capture level is SESSION-SCOPED and never
+    // persisted. log_level (and the retired v4.4/v4.6 debug_log/
+    // debug_log_aux bools) are ignored when present in the file -- a
+    // leftover debug_log:true from an older build loads as info and is
+    // dropped from the file on the next save. Sources: env
+    // MINI_AGENT_LOG_LEVEL / MINI_AGENT_DEBUG, CLI --log-level / --debug,
+    // TUI /log info|debug|trace (and the /debug aliases).
 
     // v3 optional fields.
     config.workspace = get_str("workspace");
