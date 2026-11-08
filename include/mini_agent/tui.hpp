@@ -128,6 +128,17 @@ struct TuiOptions {
     std::string model; // display only; live value comes from config
     std::string session_id;
     std::size_t frame_ms = 50; // poll tick / max redraw cadence (5.6 rule 1)
+    // v4.15: how the session was chosen, shown as a tag on the banner/
+    // status session id: "temp" (this options flag) > "resumed" (loaded
+    // from the store) > "new" (freshly created by this launch).
+    bool resumed = false;
+    // v4.15 (--temp, maintainer request): the session is ephemeral. Nothing
+    // is ever written to the store (no per-turn save, no save before a
+    // `/session` switch) and the exit line says the chat was discarded
+    // instead of offering a resume hint. Inside a temp session `/session
+    // new` keeps being temp; `/session <id>` resumes a saved session and
+    // leaves temp mode.
+    bool temp = false;
 };
 
 // ---------------------------------------------------------------- v2 tools

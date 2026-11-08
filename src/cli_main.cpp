@@ -46,8 +46,10 @@ void print_usage(std::ostream& out) {
            "      --log-level info|debug|trace  traffic capture ladder (v4.8):\n"
            "          debug: raw chat request/response -> <log path>.debug\n"
            "          trace: + auxiliary traffic (models/probe, truncated)\n"
-           "  mini-agent run [--session ID|PREFIX] [--cwd PATH] [--debug]  session (TUI; v1 "
-           "line-mode)\n"
+           "  mini-agent run [--session ID|PREFIX] [--new] [--temp] [--cwd PATH] [--debug]\n"
+           "      session (TUI; v1 line-mode). Default reuses the most recently\n"
+           "      updated session (v4.15); --new forces a fresh one; --temp opens a\n"
+           "      fresh session that is never saved and is discarded on exit\n"
            "  mini-agent                     bare == run: open the TUI directly (v4.9)\n"
            "      in-TUI session switch: /session <id|prefix> | /session new\n"
            "  mini-agent session list|rm ID  manage sessions (rm needs the exact id)\n"
@@ -404,6 +406,7 @@ int cmd_ask(int argc, char** argv) {
 int cmd_run(int argc, char** argv) {
     std::string session_id;
     bool fresh = false;
+    bool temp = false; // v4.15: ephemeral session (never saved, removed on exit)
     std::string workspace_flag;
     bool debug_flag = false; // v4.4: any capture-raising flag was given
     std::string debug_level; // v4.8: its level (info|debug|trace)
@@ -412,6 +415,8 @@ int cmd_run(int argc, char** argv) {
             session_id = argv[++i];
         } else if (std::strcmp(argv[i], "--new") == 0) {
             fresh = true;
+        } else if (std::strcmp(argv[i], "--temp") == 0) {
+            temp = true; // v4.15: implies --new; the chat dies with the process
         } else if (std::strcmp(argv[i], "--mcp") == 0 && i + 1 < argc) {
             ++i; // consumed by apply_mcp_flags below
         } else if (std::strncmp(argv[i], "--mcp=", 6) == 0) {
@@ -433,11 +438,20 @@ int cmd_run(int argc, char** argv) {
             debug_flag = true; // v4.8 (design 010 §19)
             debug_level = argv[++i];
         } else {
-            std::cerr << "usage: mini-agent run [--session ID|PREFIX] [--new] "
+            std::cerr << "usage: mini-agent run [--session ID|PREFIX] [--new] [--temp] "
                          "[--cwd PATH] [--mcp NAME=SPEC] [--debug|=all] "
                          "[--log-level info|debug|trace]\n";
             return kConfigError;
         }
+    }
+    if (temp) {
+        // v4.15: --temp always opens a new chat; reuse never applies. A
+        // --session ref would contradict "discarded on exit", so reject.
+        if (!session_id.empty()) {
+            std::cerr << "error: --temp cannot be combined with --session\n";
+            return kConfigError;
+        }
+        fresh = true;
     }
     mini_agent::AppConfig config;
     std::string config_error;
@@ -471,7 +485,54 @@ int cmd_run(int argc, char** argv) {
     }
 
     mini_agent::Session session;
-    if (session_id.empty() || fresh) {
+    bool reused = false;
+    // v4.15 (maintainer request): bare `run` reuses the most recently
+    // updated session for this workspace instead of opening a fresh chat on
+    // every launch. Candidates come from list_by_recency (save refreshes
+    // mtime); the first one whose workspace stamp matches and whose lock is
+    // free wins. A legacy unstamped session matched only when this launch
+    // has no workspace either (v3 inherit rule, design 009 5.4). No match,
+    // no session, or all busy -> fresh session like before. --new bypasses
+    // reuse; --temp forces fresh AND never saves.
+    if (session_id.empty() && !fresh) {
+        std::error_code ec;
+        const std::string launch_cwd =
+            std::filesystem::weakly_canonical(std::filesystem::current_path(), ec).string();
+        std::string want = config.workspace.empty() ? launch_cwd : config.workspace;
+        want = std::filesystem::weakly_canonical(want, ec).string();
+        std::string list_error;
+        std::size_t tried = 0;
+        for (const auto& id : store.list_by_recency(&list_error)) {
+            if (++tried > 12)
+                break; // cap the scan: recent sessions are the point here
+            std::string load_error;
+            auto candidate = store.load(id, &load_error);
+            if (!candidate)
+                continue; // unreadable or corrupt: older ones may still match
+            std::string stamped = candidate->meta.workspace.value_or(std::string{});
+            if (stamped.empty()) {
+                if (!config.workspace.empty())
+                    continue; // unstamped inherits the old launch cwd, not ours
+                stamped = launch_cwd;
+            } else {
+                std::error_code wec;
+                stamped = std::filesystem::weakly_canonical(stamped, wec).string();
+            }
+            if (stamped != want)
+                continue;
+            std::string lock_error;
+            if (!store.try_lock(id, &lock_error))
+                continue; // open in another process: try the next candidate
+            session = std::move(*candidate);
+            reused = true;
+            // v3 workspace precedence on resume (same rule as --session):
+            // the session's own stamp rebinds the boundary.
+            if (session.meta.workspace && !session.meta.workspace->empty())
+                config.workspace = *session.meta.workspace;
+            break;
+        }
+    }
+    if (!reused && (session_id.empty() || fresh)) {
         session.meta.id = mini_agent::generate_session_id();
         session.meta.model = config.model;
         // v3 (design 009 5.4/5.5): resolve + validate the workspace now so
@@ -490,7 +551,7 @@ int cmd_run(int argc, char** argv) {
                                      : std::optional<std::string>(config.workspace);
         mini_agent::inject_system_prompt(session.chat, config.workspace, config.model,
                                          config.system_prompt);
-    } else {
+    } else if (!reused) {
         if (!mini_agent::session_id_is_safe(session_id)) {
             std::cerr << "error: unsafe session id\n";
             return kConfigError;
@@ -533,7 +594,8 @@ int cmd_run(int argc, char** argv) {
             config.workspace = *session.meta.workspace;
         }
     }
-    if (!store.try_lock(session.meta.id, &io_error)) {
+    if (!reused && !store.try_lock(session.meta.id, &io_error)) {
+        // `reused` already holds the lock taken during candidate scan.
         std::cerr << "error: " << io_error << '\n';
         return kRuntimeError;
     }
@@ -542,6 +604,8 @@ int cmd_run(int argc, char** argv) {
         mini_agent::tui::TuiOptions tui_options;
         tui_options.model = config.model;
         tui_options.session_id = session.meta.id;
+        tui_options.resumed = reused || !session_id.empty(); // v4.15: banner tag
+        tui_options.temp = temp;
         const int code = mini_agent::tui::run_loop(config, session, store, tui_options);
         store.unlock(session.meta.id);
         return code;
@@ -573,6 +637,8 @@ int cmd_run(int argc, char** argv) {
                                   {"elapsed_ms", std::to_string(ms)},
                                   {"chars_out",
                                    std::to_string(session.chat.messages().back().content.size())}});
+            if (temp)
+                continue; // v4.15: --temp line-mode never touches the store
             if (!store.save(session, &io_error)) {
                 std::cerr << "warn: save failed: " << io_error << '\n';
                 logger.event("session_save", {{"status", "error"}, {"error", io_error}});
@@ -585,8 +651,14 @@ int cmd_run(int argc, char** argv) {
                                   {"error", error.what()}});
         }
     }
-    std::cout << "\nsaved session " << session.meta.id << '\n';
-    logger.event("session_close", {{"mode", "line"}, {"id", session.meta.id}});
+    if (temp) {
+        std::cout << "\ntemp session " << session.meta.id << " discarded (not saved)\n";
+        logger.event("session_close",
+                     {{"mode", "line"}, {"id", session.meta.id}, {"temp", "discarded"}});
+    } else {
+        std::cout << "\nsaved session " << session.meta.id << '\n';
+        logger.event("session_close", {{"mode", "line"}, {"id", session.meta.id}});
+    }
     store.unlock(session.meta.id);
     return kOk;
 }

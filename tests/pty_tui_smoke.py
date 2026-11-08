@@ -627,6 +627,38 @@ def main():
     sess = glob.glob(f"{line_dir}/*.json")
     locks = glob.glob(f"{line_dir}/*.lock")
     expect(len(sess) == 1 and not locks, "line-mode session persisted, lock released")
+
+    # v4.15 (maintainer request): bare `run` reuses the most recently updated
+    # session instead of opening a new one each time; --temp opens an ephemeral
+    # session that is never saved. Line mode keeps this deterministic.
+    # The earlier line-mode run saved one session; `run --new` below adds a
+    # second. Counts after that are asserted against the new baseline.
+    proc = subprocess.run([binary, "run", "--new"], input="first\n/exit\n",
+                          text=True, capture_output=True, env=line_env, timeout=20)
+    m = re.search(r"session ([0-9a-f]{16})", proc.stdout)
+    expect(m is not None, "v4.15 baseline run saved a session id")
+    first_id = m.group(1) if m else ""
+    baseline = len(glob.glob(f"{line_dir}/*.json"))
+    expect(baseline == 2, "v4.15 baseline: two line-mode sessions on disk")
+    proc2 = subprocess.run([binary, "run"], input="/exit\n",
+                           text=True, capture_output=True, env=line_env, timeout=20)
+    m2 = re.search(r"session ([0-9a-f]{16})", proc2.stdout)
+    expect(m2 is not None and m2.group(1) == first_id,
+           "v4.15 bare run reuses the latest session")
+    expect(len(glob.glob(f"{line_dir}/*.json")) == baseline,
+           "v4.15 reuse does not create a second session file")
+    proc3 = subprocess.run([binary, "run", "--temp"], input="temp turn\n/exit\n",
+                           text=True, capture_output=True, env=line_env, timeout=20)
+    expect("discarded" in proc3.stdout and "not saved" in proc3.stdout,
+           "v4.15 --temp exits with a discarded-session note")
+    expect(len(glob.glob(f"{line_dir}/*.json")) == baseline,
+           "v4.15 --temp never writes a session file")
+    proc4 = subprocess.run([binary, "run", "--temp", "--session", "abcd"],
+                           input="/exit\n", text=True, capture_output=True,
+                           env=line_env, timeout=20)
+    expect(proc4.returncode == 2 and "--temp cannot be combined" in proc4.stderr,
+           "v4.15 --temp + --session rejected as config error")
+    expect(not glob.glob(f"{line_dir}/*.lock"), "v4.15 reuse/temp runs release locks")
     subprocess.run(["rm", "-rf", line_dir], check=False)
 
     # Batched configuration entry (2026-11-02 request): the three commands are

@@ -1,11 +1,13 @@
 // Unit tests for chat/session/loop (design 007 section 8: extension-point
 // format commitments are tested from v1). Plain asserts, no framework dep.
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #include <sys/stat.h>
@@ -2300,6 +2302,50 @@ void test_v413_session_prefix() {
     check(full_hint.size() == ids.size() + 2, "empty arg lists all ids plus new");
 }
 
+// v4.15 (maintainer request): bare `run` reuses the most recently updated
+// session. The store side is list_by_recency: mtime order, newest first,
+// locks skipped, deterministic id tie-break.
+void test_v415_session_recency() {
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("mini_agent_test_" + mini_agent::generate_session_id());
+    mini_agent::SessionStore store(root);
+    std::string error;
+    check(store.ensure_root(&error), "recency: root created");
+
+    // No sessions: empty list, no error.
+    check(store.list_by_recency(&error).empty(), "recency: empty store lists none");
+
+    mini_agent::Session session;
+    session.meta.model = "test-model";
+    mini_agent::Message m;
+    m.role = mini_agent::Role::User;
+    m.content = "hello";
+    session.chat.add(m);
+    std::vector<std::string> ids;
+    for (int i = 0; i < 3; ++i) {
+        session.meta.id = mini_agent::generate_session_id();
+        ids.push_back(session.meta.id);
+        check(store.save(session, &error), "recency: save ok");
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+    // A lock file must never be treated as a session candidate.
+    check(store.try_lock(ids[0], &error), "recency: lock taken");
+    const auto order = store.list_by_recency(&error);
+    check(order.size() == 3, "recency: all sessions found");
+    // Saves ran ids[0] -> ids[2], so newest-first is the reverse.
+    check(order.size() == 3 && order[0] == ids[2] && order[1] == ids[1] && order[2] == ids[0],
+          "recency: newest first");
+    store.unlock(ids[0]);
+
+    // Re-saving an id moves it to the front (mtime refresh on save).
+    session.meta.id = ids[0];
+    check(store.save(session, &error), "recency: resave oldest ok");
+    const auto after = store.list_by_recency(&error);
+    check(!after.empty() && after.front() == ids[0] && after.back() == ids[1],
+          "recency: save refreshes recency");
+    std::filesystem::remove_all(root);
+}
+
 void test_v410_arg_completion() {
     namespace T = mini_agent::tui;
     // Second-tier hint: exact command lists its argument choices.
@@ -2475,6 +2521,7 @@ int main() {
     test_v43_probe_parse();
     test_v47_models_dev_catalog();
     test_v413_session_prefix();
+    test_v415_session_recency();
     test_v410_arg_completion();
     test_v411_turn_panel();
     test_v44_debug_log();

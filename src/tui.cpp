@@ -1356,6 +1356,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // v4.9: /session switches the live session in-process, so the banner/
     // status id is a mutable copy of the launch id, not TuiOptions itself.
     std::string active_session_id = options.session_id;
+    // v4.15: temp mode is mutable too. `/session new` from a temp session
+    // keeps it temp; `/session <id>` resumes a saved session and ends it
+    // (the target is a normal, persisted session).
+    bool temp_mode = options.temp;
     logger->event("session_open", {{"mode", "tui"},
                                    {"id", active_session_id},
                                    {"model", config.model},
@@ -1483,7 +1487,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     auto last_ctrl_c = std::chrono::steady_clock::time_point{};
 
     const auto banner_model = config.model.empty() ? std::string("(no model)") : config.model;
-    screen.commit("mini-agent · model=" + banner_model + " · session=" + active_session_id);
+    // v4.15: tag the id with how it was chosen (temp | resumed | new).
+    const char* session_tag = temp_mode ? "temp" : (options.resumed ? "resumed" : "new");
+    screen.commit("mini-agent · model=" + banner_model + " · session=" + active_session_id + " (" +
+                  session_tag + ")");
     if (!config.complete()) {
         // Names only the next missing step: the three commands save
         // independently, so they may be supplied one per sitting.
@@ -2254,7 +2261,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             std::string err;
             // Persist the outgoing session first; a save failure is a warn
             // only (the switch proceeds; the old file keeps last-turn state).
-            if (!store.save(session, &err)) {
+            // v4.15: a temp session has no file and never gets one, so the
+            // pre-switch save is skipped (its chat is dropped on switch-out).
+            if (!temp_mode && !store.save(session, &err)) {
                 screen.commit("[warn] save before switch failed: " + err);
             }
             Session next;
@@ -2283,6 +2292,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             store.unlock(session.meta.id);
             session = std::move(next);
             active_session_id = session.meta.id;
+            // v4.15: `/session new` from a temp session stays temp (the new
+            // chat is equally ephemeral); resuming a saved id ends temp mode
+            // -- from here on the target behaves like a normal session.
+            temp_mode = temp_mode && fresh;
             // v3 workspace precedence on switch (same as resume in cmd_run):
             // the session's own stamp rebinds config; else keep current.
             if (session.meta.workspace && !session.meta.workspace->empty()) {
@@ -2300,11 +2313,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     history.push_back(m.content);
             hist_pos = history.size();
             history_draft.clear();
-            logger->event("session_switch",
-                          {{"id", session.meta.id}, {"fresh", fresh ? "new" : "resume"}});
-            screen.commit(std::string("[ok] ") + (fresh ? "new" : "resumed") + " session " +
-                          session.meta.id + " · " + std::to_string(session.chat.messages().size()) +
-                          " message(s)");
+            logger->event("session_switch", {{"id", session.meta.id},
+                                             {"fresh", fresh ? "new" : "resume"},
+                                             {"temp", temp_mode ? "on" : "off"}});
+            screen.commit(std::string("[ok] ") + (fresh ? "new" : "resumed") +
+                          (temp_mode ? " temp" : "") + " session " + session.meta.id + " · " +
+                          std::to_string(session.chat.messages().size()) + " message(s)");
             return true;
         }
         if (line.rfind("/context", 0) == 0) {
@@ -3042,7 +3056,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     screen.commit("AI: " + result.reply);
                 }
                 std::string err;
-                if (!store.save(session, &err)) {
+                if (temp_mode) {
+                    // v4.15: temp sessions never touch the store.
+                } else if (!store.save(session, &err)) {
                     screen.commit("[warn] save failed: " + err);
                     logger->event("session_save", {{"status", "error"}, {"error", err}});
                 }
@@ -3193,10 +3209,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // bold yellow). SGR is zero-width for md::clip, and the clip
             // keeps any active span (it re-emits escapes while cutting).
             const bool sc = colors_enabled();
-            std::string status =
-                tint(sc, "2",
-                     "model=" + (config.model.empty() ? std::string("(not set)") : config.model) +
-                         " · session=" + options.session_id);
+            // v4.15: the id follows /session switches (like the banner) and
+            // carries the temp tag; was options.session_id (launch snapshot).
+            std::string status = tint(
+                sc, "2",
+                "model=" + (config.model.empty() ? std::string("(not set)") : config.model) +
+                    " · session=" + active_session_id + (temp_mode ? " (temp)" : std::string()));
             if (models_running) {
                 status += tint(sc, "36", " · listing models...");
             } else if (model_menu_open) {
@@ -3297,11 +3315,16 @@ done:
         probe_worker.join(); // v4.3: bounded by its own 30 s curl timeout
     if (sidebar_worker.joinable())
         sidebar_worker.join(); // v4.13: git scan capped at 5 s
-    logger->event("session_close", {{"mode", "tui"}, {"id", session.meta.id}});
+    logger->event("session_close",
+                  {{"mode", "tui"}, {"id", session.meta.id}, {"temp", temp_mode ? "1" : "0"}});
     Logger::shutdown_all();
     screen.clear_live();
-    screen.commit("saved session " + session.meta.id + " (resume: mini-agent run --session " +
-                  session.meta.id + ")");
+    if (temp_mode) {
+        screen.commit("temp session " + session.meta.id + " discarded (nothing was saved)");
+    } else {
+        screen.commit("saved session " + session.meta.id + " (resume: mini-agent run --session " +
+                      session.meta.id + ")");
+    }
     return EXIT_SUCCESS;
 }
 

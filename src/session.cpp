@@ -13,6 +13,7 @@
 #include <random>
 #include <sstream>
 #include <sys/stat.h>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -343,6 +344,44 @@ std::vector<std::string> SessionStore::list(std::string* error) {
         }
     }
     std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+std::vector<std::string> SessionStore::list_by_recency(std::string* error) {
+    // Pair each id with its file mtime, then sort newest-first. `save`
+    // rewrites the file, so mtime tracks the last turn; ids with an
+    // unreadable stamp sort last (deterministic, never dropped).
+    std::vector<std::pair<std::filesystem::file_time_type, std::string>> entries;
+    std::error_code ec;
+    if (!std::filesystem::exists(root_, ec))
+        return {}; // absent dir is simply no sessions
+    for (const auto& entry : std::filesystem::directory_iterator(root_, ec)) {
+        if (ec) {
+            if (error)
+                *error = "cannot list session dir: " + ec.message();
+            return {};
+        }
+        const auto name = entry.path().filename().string();
+        if (!entry.is_regular_file() || name.size() <= 5 || !ends_with(name, ".json") ||
+            ends_with(name, ".json.lock"))
+            continue;
+        std::error_code mec;
+        const auto mtime = entry.last_write_time(mec);
+        if (mec)
+            entries.emplace_back(std::filesystem::file_time_type{},
+                                 name.substr(0, name.size() - 5)); // unreadable stamp: sort last
+        else
+            entries.emplace_back(mtime, name.substr(0, name.size() - 5));
+    }
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        if (a.first != b.first)
+            return a.first > b.first; // newest first
+        return a.second < b.second;   // ties: id order
+    });
+    std::vector<std::string> ids;
+    ids.reserve(entries.size());
+    for (const auto& e : entries)
+        ids.push_back(e.second);
     return ids;
 }
 

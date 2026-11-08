@@ -85,6 +85,13 @@ class SessionStore {
     // Lists session ids (file stems), sorted. No error on empty dir.
     std::vector<std::string> list(std::string* error);
 
+    // v4.15 (maintainer request): ids ordered by file mtime, newest first
+    // (save refreshes mtime, so "most recently updated"). Unlike list() the
+    // order is not lexicographic and ties fall back to the id for
+    // determinism. Empty on an empty dir; *error set only on a readdir
+    // failure. Lock/tmp files are never candidates.
+    std::vector<std::string> list_by_recency(std::string* error);
+
     bool remove(const std::string& id, std::string* error);
 
     // Simple lock: <id>.lock held via O_EXCL create with pid inside.

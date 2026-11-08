@@ -52,7 +52,7 @@
 ```
 mini-agent mcp list [--mcp NAME=SPEC ...]   # 查看生效 server 清单（脱敏）
 mini-agent ask [--tools off|ask|auto] [--mcp NAME=SPEC] "问题"| -
-mini-agent run [--session ID] [--new] [--mcp NAME=SPEC]
+mini-agent run [--session ID] [--new] [--temp] [--mcp NAME=SPEC]
 ```
 
 `--mcp` 三种形式（可重复；同名**覆盖**配置文件条目，不写回文件，进程退出即失）：
