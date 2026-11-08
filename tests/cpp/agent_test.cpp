@@ -696,7 +696,8 @@ void test_md4c_gfm_extensions() {
 void test_tui_helpers() {
     // slash registry & prefix matching
     auto matches = mini_agent::tui::slash_matches("/s");
-    check(matches.size() == 1 && matches[0] == "/sessions", "prefix /s matches");
+    check(matches.size() == 2 && matches[0] == "/session" && matches[1] == "/sessions",
+          "prefix /s matches /session + /sessions (v4.9)");
     check(mini_agent::tui::slash_matches("/").size() == mini_agent::tui::slash_commands().size(),
           "bare / matches all commands");
     check(mini_agent::tui::slash_matches("hello").empty(), "non-slash ignored");
@@ -722,9 +723,10 @@ void test_tui_helpers() {
         lists_sessions = lists_sessions || row.find("/sessions") != std::string::npos;
     check(lists_sessions, "bare / list contains /sessions");
     const auto partial = mini_agent::tui::slash_completion_hint("/se");
-    check(partial.size() == 2 && partial[1].find("/sessions") != std::string::npos &&
+    check(partial.size() == 3 && partial[1].find("/session") != std::string::npos &&
+              partial[2].find("/sessions") != std::string::npos &&
               partial[1].find("/config") == std::string::npos,
-          "prefix list has header + only matching row");
+          "prefix list has header + only matching rows (v4.9)");
     const auto none = mini_agent::tui::slash_completion_hint("/zz");
     check(none.size() == 1 && none[0].find("no matching") != std::string::npos,
           "no-match hint explains on one row");

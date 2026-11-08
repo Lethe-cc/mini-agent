@@ -47,6 +47,8 @@ void print_usage(std::ostream& out) {
            "          debug: raw chat request/response -> <log path>.debug\n"
            "          trace: + auxiliary traffic (models/probe, truncated)\n"
            "  mini-agent run [--session ID] [--cwd PATH] [--debug]  session (TUI; v1 line-mode)\n"
+           "  mini-agent                     bare == run: open the TUI directly (v4.9)\n"
+           "      in-TUI session switch: /session <id> | /session new\n"
            "  mini-agent session list|rm ID  manage sessions\n"
            "  mini-agent mcp list            show configured MCP servers\n"
            "  --mcp NAME=SPEC (ask/run/mcp)  add one server this session:\n"
@@ -621,7 +623,14 @@ int main(int argc, char** argv) {
         code = cmd_session(argc, argv);
     } else if (argc >= 2 && std::strcmp(argv[1], "mcp") == 0) {
         code = cmd_mcp(argc, argv);
+    } else if (argc == 1) {
+        // v4.9: bare `mini-agent` opens the TUI directly (== `run`), so a
+        // session switch is one command away: /session <id> inside.
+        char implicit[] = "run";
+        char* run_argv[] = {argv[0], implicit};
+        code = cmd_run(2, run_argv);
     } else {
+        std::cerr << "error: unknown command: " << argv[1] << "\n\n";
         print_usage(std::cerr);
         code = kConfigError;
     }

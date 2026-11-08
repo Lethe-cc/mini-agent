@@ -618,6 +618,29 @@ def main():
             pass
         return banner, out
 
+    # v4.9: bare `mini-agent` (no `run` subcommand) opens the TUI, and
+    # /session switches sessions in place (save+lock swap, idle-gated).
+    def bare_session(keys, seconds=4.0):
+        pid, pty_fd = pty.fork()
+        if pid == 0:
+            os.execve(binary, [binary], batch_env)
+        out = read_all(pty_fd, 0.8)
+        os.write(pty_fd, keys)
+        out += read_all(pty_fd, seconds)
+        os.write(pty_fd, b"\x03\x03")
+        time.sleep(0.4)
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+        return out
+
+    bare = bare_session(b"/session new\r")
+    expect("mini-agent · model=" in strip_csi(bare),
+           "bare: mini-agent with no subcommand opens the TUI")
+    expect("[ok] new session" in strip_csi(bare),
+           "bare: /session new forks a fresh session in place")
+
     banner1, out1 = batch_session(
         f"/provider http://127.0.0.1:{PORT}/v1\r".encode())
     expect("config 0/3 · next: /provider <url>" in strip_csi(banner1),

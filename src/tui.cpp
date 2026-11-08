@@ -41,9 +41,10 @@
 namespace mini_agent::tui {
 namespace {
 
-constexpr std::string_view kCommands[] = {
-    "/approve", "/config", "/context", "/cwd",      "/debug",     "/exit",     "/help", "/login",
-    "/mcp",     "/model",  "/models",  "/provider", "/reasoning", "/sessions", "/tools"};
+constexpr std::string_view kCommands[] = {"/approve",   "/config",  "/context",  "/cwd",
+                                          "/debug",     "/exit",    "/help",     "/login",
+                                          "/mcp",       "/model",   "/models",   "/provider",
+                                          "/reasoning", "/session", "/sessions", "/tools"};
 
 class RawMode {
   public:
@@ -1110,8 +1111,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             Logger::resolve_path(config).value_or(std::filesystem::path{}));
     };
     auto logger = make_logger();
+    // v4.9: /session switches the live session in-process, so the banner/
+    // status id is a mutable copy of the launch id, not TuiOptions itself.
+    std::string active_session_id = options.session_id;
     logger->event("session_open", {{"mode", "tui"},
-                                   {"id", options.session_id},
+                                   {"id", active_session_id},
                                    {"model", config.model},
                                    {"log", logger->enabled() ? "on" : "off"}});
     bool secret_input = false; // /login: mask composer echo
@@ -1225,7 +1229,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     auto last_ctrl_c = std::chrono::steady_clock::time_point{};
 
     const auto banner_model = config.model.empty() ? std::string("(no model)") : config.model;
-    screen.commit("mini-agent · model=" + banner_model + " · session=" + options.session_id);
+    screen.commit("mini-agent · model=" + banner_model + " · session=" + active_session_id);
     if (!config.complete()) {
         // Names only the next missing step: the three commands save
         // independently, so they may be supplied one per sitting.
@@ -1567,7 +1571,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("          /models (list & pick) · /log <path>|off|default");
             screen.commit(
                 "          /log info|debug|trace (capture level; /debug on|all|off alias)");
-            screen.commit("          /config · /sessions · /exit");
+            screen.commit("          /config · /sessions · /session <id>|new · /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
             screen.commit("configure them in any order, any number of sittings.");
             screen.commit("prompt: ?=unconfigured/unverified · ~=checking · >=ok");
@@ -1709,8 +1713,94 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto ids = store.list(&err);
             screen.commit(ids.empty() ? "sessions: (empty)" : "sessions:");
             for (const auto& id : ids)
-                screen.commit("  " + id);
-            screen.commit("resume after exit: mini-agent run --session <id>");
+                screen.commit("  " + id + (id == session.meta.id ? "  <- current" : ""));
+            screen.commit("switch in place: /session <id> · /session new");
+            return true;
+        }
+        if (line.rfind("/session", 0) == 0 && line != "/sessions") {
+            // v4.9: switch or fork the live session without exiting. Same
+            // idle-gated swap discipline as /cwd (worker join, registry
+            // rebuild); the old session is saved and unlocked, the target
+            // is loaded and locked. A failed lock/load rolls back.
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                screen.commit("session=" + session.meta.id +
+                              " · usage /session <id> | /session new");
+                return true;
+            }
+            if (streaming || turn_done.load()) {
+                // The turn-completion handler writes session.chat after
+                // joining; swapping mid-fold would land the old turn in
+                // the new session. Require idle (Ctrl-C interrupts).
+                screen.commit("[info] session switch needs an idle turn · wait or Ctrl-C");
+                return true;
+            }
+            std::string target_id = std::string(arg);
+            const bool fresh = target_id == "new";
+            if (fresh) {
+                target_id = mini_agent::generate_session_id();
+            } else if (!mini_agent::session_id_is_safe(target_id)) {
+                screen.commit("[error] unsafe session id");
+                return true;
+            }
+            if (target_id == session.meta.id) {
+                screen.commit("[info] already on session " + target_id);
+                return true;
+            }
+            std::string err;
+            // Persist the outgoing session first; a save failure is a warn
+            // only (the switch proceeds; the old file keeps last-turn state).
+            if (!store.save(session, &err)) {
+                screen.commit("[warn] save before switch failed: " + err);
+            }
+            Session next;
+            std::optional<std::string> next_workspace;
+            if (fresh) {
+                next.meta.id = target_id;
+                next.meta.model = config.model;
+                next_workspace = config.workspace.empty()
+                                     ? std::optional<std::string>{}
+                                     : std::optional<std::string>(config.workspace);
+                next.meta.workspace = next_workspace;
+                mini_agent::inject_system_prompt(next.chat, config.workspace, config.model,
+                                                 config.system_prompt);
+            } else {
+                auto loaded = store.load(target_id, &err);
+                if (!loaded) {
+                    screen.commit("[error] load failed: " + sanitize_display(err));
+                    return true;
+                }
+                next = std::move(*loaded);
+            }
+            if (!store.try_lock(target_id, &err)) {
+                screen.commit("[error] session busy: " + sanitize_display(err));
+                return true;
+            }
+            store.unlock(session.meta.id);
+            session = std::move(next);
+            active_session_id = session.meta.id;
+            // v3 workspace precedence on switch (same as resume in cmd_run):
+            // the session's own stamp rebinds config; else keep current.
+            if (session.meta.workspace && !session.meta.workspace->empty()) {
+                config.workspace = *session.meta.workspace;
+                session.chat.update_system_workspace(config.workspace);
+                std::string note;
+                tool_registry = build_tool_registry(config, &note);
+            }
+            config_snapshot = config; // worker turn snapshot refresh (same as /cwd)
+            reset_usage_readings();   // usage belongs to the new session
+            // Re-seed ↑/↓ history from the new chat (same rule as launch).
+            history.clear();
+            for (const auto& m : session.chat.messages())
+                if (m.role == Role::User && !m.content.empty() && m.content.front() != '/')
+                    history.push_back(m.content);
+            hist_pos = history.size();
+            history_draft.clear();
+            logger->event("session_switch",
+                          {{"id", session.meta.id}, {"fresh", fresh ? "new" : "resume"}});
+            screen.commit(std::string("[ok] ") + (fresh ? "new" : "resumed") + " session " +
+                          session.meta.id + " · " + std::to_string(session.chat.messages().size()) +
+                          " message(s)");
             return true;
         }
         if (line.rfind("/context", 0) == 0) {
