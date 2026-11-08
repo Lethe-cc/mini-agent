@@ -220,6 +220,11 @@ int cmd_ask(int argc, char** argv) {
             config.debug_log = true; // v4.4: raw chat traffic dump (010 §15)
             continue;
         }
+        if (std::strcmp(argv[i], "--debug=all") == 0) {
+            config.debug_log = true; // v4.6: level 2, aux traffic too
+            config.debug_log_aux = true;
+            continue;
+        }
         positional.emplace_back(argv[i]);
     }
     if (tools_mode != "off" && tools_mode != "ask" && tools_mode != "auto" &&
@@ -383,7 +388,8 @@ int cmd_run(int argc, char** argv) {
     std::string session_id;
     bool fresh = false;
     std::string workspace_flag;
-    bool debug_flag = false; // v4.4
+    bool debug_flag = false;     // v4.4
+    bool debug_aux_flag = false; // v4.6
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--session") == 0 && i + 1 < argc) {
             session_id = argv[++i];
@@ -399,9 +405,12 @@ int cmd_run(int argc, char** argv) {
             workspace_flag = argv[i] + 6;
         } else if (std::strcmp(argv[i], "--debug") == 0) {
             debug_flag = true; // v4.4: raw chat traffic dump (design 010 §15)
+        } else if (std::strcmp(argv[i], "--debug=all") == 0) {
+            debug_flag = true; // v4.6: level 2 -- also aux traffic (truncated)
+            debug_aux_flag = true;
         } else {
             std::cerr << "usage: mini-agent run [--session ID] [--new] "
-                         "[--cwd PATH] [--mcp NAME=SPEC] [--debug]\n";
+                         "[--cwd PATH] [--mcp NAME=SPEC] [--debug|=all]\n";
             return kConfigError;
         }
     }
@@ -410,8 +419,10 @@ int cmd_run(int argc, char** argv) {
     const bool configured = load_app_config(&config, &config_error);
     if (!workspace_flag.empty())
         config.workspace = workspace_flag; // CLI flag beats file/env (v3 009 5.4)
-    if (debug_flag)
+    if (debug_flag) {
         config.debug_log = true; // v4.4: CLI flag beats file/env
+        config.debug_log_aux = debug_aux_flag;
+    }
     std::string mcp_error;
     if (!apply_mcp_flags(argc, argv, &config, &mcp_error)) {
         std::cerr << "error: " << mcp_error << '\n';

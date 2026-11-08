@@ -177,6 +177,16 @@ ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1
 
 验证（2026-11-08）：mock 增加输入拒绝路径后 PTY E2E 两断言 PASS——`/context probe` 经两段拿到 `input limit: 983.6k (983616 tokens)` 并持久化 `context_window=983616`；agent_test 全量、CTest 3/3、strict-project、cpp_format 通过（解析层单测覆盖不变，二段逻辑属传输编排、由 E2E 覆盖）。
 
+## 17. v4.6 修订（2026-11-08 维护者需求：想看探测的完整交互）
+
+§15 的"辅助请求永不落盘"挡住了调试未知网关形态的路（真实 DashScope 二段探测后仍只报 OutputCap，需要看 stage-2 的原始错误文本才能扩白名单）。新增**二级 debug**：
+
+- `AppConfig.debug_log_aux`（bool，仅开启时写出、非 bool 失败关闭）；env `MINI_AGENT_DEBUG=2`（值 "2" 同时开两级）；CLI `--debug=all`；TUI `/debug all`（`/debug on` 仍只对话级，`/debug off` 全关；`/config` 显示 chat/all/off 三态）。
+- `ProviderConfig::debug_aux` 贯通；`debug_dump_aux` 带 **4KB 截断**（stage-2 请求体 2.4MB 填充，整包落盘不可读；错误消息在响应侧、必然存活于截断窗口内）。
+- 挂点：`probe_post_chat`（PROBE REQUEST + PROBE RESPONSE <status>）与 `fetch_models_body`（MODELS RESPONSE <status>）。一级开、二级不开时行为与 v4.4 完全一致（回归钩子）。
+
+验证（2026-11-08）：`test_v44_debug_log` 扩展 aux 往返/失败关闭/off 压制断言；PTY E2E：`/debug all` → `/context probe` → 对话，dump 含 2×PROBE REQUEST/RESPONSE（两段都记）+ 1×REQUEST/5×SSE（对话级不受影响）、`truncated 2395992 bytes` 标记、stage-2 响应里 `Range of input length should be` 原文可见。全量 agent_test/CTest/strict-project/cpp_format 通过。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

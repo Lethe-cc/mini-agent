@@ -47,6 +47,10 @@ struct AppConfig {
     // Auxiliary requests (GET /models listing, context-window probe) are
     // NEVER captured -- only conversation traffic.
     bool debug_log = false;
+    // v4.6: level-2 debug -- ALSO dump auxiliary traffic (listing, probe)
+    // with long payloads truncated. Off unless MINI_AGENT_DEBUG=2 or
+    // /debug all. Chat traffic dumping is governed by debug_log alone.
+    bool debug_log_aux = false;
 
     // v3 (design 009 section 5.4): workspace root for file/git tools and
     // run_bash cwd. Empty = process cwd at launch. Never logged in full

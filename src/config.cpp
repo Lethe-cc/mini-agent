@@ -192,6 +192,7 @@ ProviderConfig AppConfig::to_provider() const {
         if (base.empty() || base == "off")
             base = "/tmp/mini-agent-" + std::to_string(static_cast<long>(::getuid())) + ".log";
         p.debug_log_path = base + ".debug";
+        p.debug_aux = debug_log_aux; // v4.6: level 2 also dumps aux traffic
     }
     if (const char* timeout = env_nonempty("MINI_AGENT_TIMEOUT_SECONDS")) {
         const long parsed = std::strtol(timeout, nullptr, 10);
@@ -225,6 +226,8 @@ std::string config_to_json(const AppConfig& config) {
     }
     if (config.debug_log) // v4.4: written only when on (design 010 §15)
         root["debug_log"] = true;
+    if (config.debug_log_aux) // v4.6: level-2 (aux traffic)
+        root["debug_log_aux"] = true;
     // v3 fields (design 009 section 5.4): optional, written only when set.
     if (!config.workspace.empty())
         root["workspace"] = config.workspace;
@@ -307,6 +310,15 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
         else {
             if (error)
                 *error = "config debug_log must be a boolean";
+            return std::nullopt;
+        }
+    }
+    if (auto it = parsed.find("debug_log_aux"); it != parsed.end()) {
+        if (it->is_boolean())
+            config.debug_log_aux = it->get<bool>();
+        else {
+            if (error)
+                *error = "config debug_log_aux must be a boolean";
             return std::nullopt;
         }
     }
@@ -464,8 +476,11 @@ AppConfig load_config_merged(std::string* file_error) {
         config.model = v;
     if (const char* v = env_nonempty("MINI_AGENT_LOG"))
         config.log_file = v;
-    if (env_nonempty("MINI_AGENT_DEBUG"))
+    if (const char* v = env_nonempty("MINI_AGENT_DEBUG")) {
         config.debug_log = true; // v4.4: tri-state opt-in (unset keeps file)
+        if (std::strcmp(v, "2") == 0)
+            config.debug_log_aux = true; // v4.6: level 2 = also aux traffic
+    }
     if (const char* v = env_nonempty("MINI_AGENT_WORKSPACE"))
         config.workspace = v; // v3: scripts pin the boundary per invocation
     if (const char* v = env_nonempty("MINI_AGENT_CONTEXT_WINDOW")) {

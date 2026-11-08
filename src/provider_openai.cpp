@@ -98,6 +98,24 @@ void debug_dump(const std::string& path, std::string_view tag, std::string_view 
     if (fresh)
         ::chmod(path.c_str(), 0600);
 }
+
+// v4.6: level-2 dump for auxiliary traffic (GET /models, context probe).
+// Payloads are truncated to a bounded size -- the probe stage-2 request
+// alone is ~2.4 MB of filler -- so the file stays readable while the
+// error-message part (what debugging actually needs) survives. Chat
+// dumps keep going through debug_dump untruncated.
+void debug_dump_aux(const std::string& path, std::string_view tag, std::string_view payload) {
+    constexpr std::size_t kAuxCap = 4096;
+    if (path.empty())
+        return;
+    if (payload.size() <= kAuxCap) {
+        debug_dump(path, tag, payload);
+        return;
+    }
+    std::string trimmed(payload.substr(0, kAuxCap));
+    trimmed += "...[truncated " + std::to_string(payload.size() - kAuxCap) + " bytes]";
+    debug_dump(path, tag, trimmed);
+}
 } // namespace
 
 std::string request_body(const Chat& chat, const std::string& model, const std::string& tools_json,
@@ -826,6 +844,8 @@ std::string fetch_models_body(const ProviderConfig& config) {
         throw ProviderError(ProviderErrorKind::HttpStatus, "HTTP status " + std::to_string(status),
                             static_cast<int>(status));
     }
+    if (config.debug_aux) // v4.6: level-2 only
+        debug_dump_aux(config.debug_log_path, "MODELS RESPONSE " + std::to_string(status), body);
     return body;
 }
 } // namespace
@@ -953,6 +973,14 @@ std::pair<long, std::string> probe_post_chat(const ProviderConfig& config,
     if (code != CURLE_OK) {
         const std::string detail = error_buffer[0] ? error_buffer : ::curl_easy_strerror(code);
         throw ProviderError(ProviderErrorKind::Network, "network error: " + detail);
+    }
+    // v4.6: level-2 only -- probe traffic (request AND response) lands in
+    // the debug file truncated, which is exactly what diagnosing the
+    // unknown-gateway-wording case needs.
+    if (config.debug_aux) {
+        debug_dump_aux(config.debug_log_path, "PROBE REQUEST", body);
+        debug_dump_aux(config.debug_log_path, "PROBE RESPONSE " + std::to_string(status),
+                       response_body);
     }
     return {status, response_body};
 }

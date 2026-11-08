@@ -2236,6 +2236,22 @@ void test_v44_debug_log() {
           "off sentinel falls back to default base");
     cfg.debug_log = false;
     check(cfg.to_provider().debug_log_path.empty(), "off -> no path");
+
+    // v4.6: level-2 aux flag round-trips and reaches ProviderConfig only
+    // while debug is on (aux without a dump path is meaningless).
+    const auto aux = mini_agent::config_from_json(
+        R"({"model":"m","debug_log":true,"debug_log_aux":true})", &error);
+    check(aux.has_value() && aux->debug_log_aux, "debug_log_aux parses");
+    check(mini_agent::config_to_json(*aux).find("debug_log_aux") != std::string::npos,
+          "debug_log_aux written when on");
+    check(aux->to_provider().debug_aux, "provider carries aux level");
+    mini_agent::AppConfig chatonly = cfg;
+    chatonly.debug_log = true;
+    chatonly.debug_log_aux = true;
+    chatonly.debug_log = false; // off dominates: no path, aux irrelevant
+    check(!chatonly.to_provider().debug_aux, "debug off -> provider aux off");
+    check(!mini_agent::config_from_json(R"({"debug_log_aux":"x"})", &error).has_value(),
+          "non-bool debug_log_aux rejected");
 }
 
 int main() {

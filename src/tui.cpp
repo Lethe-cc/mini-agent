@@ -1658,7 +1658,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                           std::string(config.api_key.empty() ? "(not set)" : "***set***"));
             screen.commit("login=" + std::string(auth_log_token(auth)));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
-            screen.commit("debug_log=" + std::string(config.debug_log ? "on" : "off"));
+            screen.commit(std::string("debug_log=") + (config.debug_log_aux ? "all"
+                                                       : config.debug_log   ? "chat"
+                                                                            : "off"));
             // v4 fields (design 010).
             screen.commit("context_window=" +
                           (config.context_window > 0
@@ -1809,20 +1811,33 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto arg = arg_of(line);
             if (arg.empty()) {
                 const auto pc = config.to_provider();
-                screen.commit(std::string("debug=") + (config.debug_log ? "on" : "off") +
+                screen.commit(std::string("debug=") +
+                              (config.debug_log_aux ? "all"
+                               : config.debug_log   ? "chat"
+                                                    : "off") +
                               (config.debug_log ? " · file: " + pc.debug_log_path : std::string()) +
-                              "; usage /debug on|off");
+                              "; usage /debug on|all|off");
             } else if (arg == "on") {
                 config.debug_log = true;
+                config.debug_log_aux = false;
                 save_and_report();
-                screen.commit("[ok] debug on · raw chat traffic -> " +
+                screen.commit("[ok] debug on (chat traffic) · raw chat traffic -> " +
+                              config.to_provider().debug_log_path);
+            } else if (arg == "all") {
+                // v4.6: level 2 -- ALSO dump auxiliary traffic (models
+                // listing, context probe request/response), truncated.
+                config.debug_log = true;
+                config.debug_log_aux = true;
+                save_and_report();
+                screen.commit("[ok] debug all (chat + truncated aux traffic) -> " +
                               config.to_provider().debug_log_path);
             } else if (arg == "off") {
                 config.debug_log = false;
+                config.debug_log_aux = false;
                 save_and_report();
                 screen.commit("[ok] debug off · no further dumps");
             } else {
-                screen.commit("[error] /debug expects on|off");
+                screen.commit("[error] /debug expects on|all|off");
             }
             return true;
         }
