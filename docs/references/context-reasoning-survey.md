@@ -119,3 +119,40 @@ mini-agent：`reasoning_effort` 非空即原样进请求体、400 给提示不�
 ## 4. 使用注意
 
 本报告是设计参考，不是本项目规范；引用行号对应上表修订。任何借鉴落地前按当天源码复核（外部仓库持续演进），且只借鉴思路、不复制代码（opencode 许可未重核）。
+
+## 5. mini-agent 的实际实现（2026-11-08 追加，行号对应当时 main）
+
+本调研的四条路线在 mini-agent 的落地形态。设计权威记录在 [010-model-metadata.md](../design/010-model-metadata.md)（§11-§20）与 [007-agent-v1.md](../design/007-agent-v1.md)（v4.9/v4.10），本节是实现索引。
+
+### 5.1 Context 窗口：四级兜底链 + 显式探测
+
+解析链（`src/tui.cpp` 的 `context_reading()`，tui.cpp:1307-1325）：
+
+```
+config.context_window（权威：手工 /context <tokens> 或 probe 成功写入）
+  > 网关 caps context_length（免费：/models 元数据缓存，v4.2）
+  > models.dev 内嵌目录（免费：v4.7，仅补显示、永不写 config）
+  > 无分母（状态栏退化为 ctx 单值形态）
+```
+
+- **目录层**（v4.7）：`src/models_dev.cpp::lookup_models_dev(base_url, model)`（models_dev.cpp:65）——构建期快照 `include/mini_agent/models_dev_data.hpp`（TSV raw-string，7158 行，`tools/refresh_models_dev.py` 从 models.dev v1 生成），运行时 base_url 去尾斜杠 + 精确 key 二分，零网络。与 Pi 的静态目录同思路，但排位在实测源之后：目录是宣传口径（qwen3.8-flash 目录 1.0M vs 网关输入校验 983616 的实证分歧）。
+- **探测层**（v4.3/v4.3.1/v4.5）：`/context probe` 显式触发（tui.cpp:1968），后台线程两段协议（`OpenAiProvider::probe_context_window`，provider_openai.cpp:999）：Stage 1 小 prompt + `max_tokens=1e9` 读计费前拒绝消息；Stage 1 只得 OutputCap 时 Stage 2 发 2.4MB 填充追输入校验器。`parse_context_probe_error`（provider_openai.cpp:684）三形态白名单（`maximum context length is N`→Window、`Range of <param> [1,N]`→按参数名分 InputCap/OutputCap、`max_tokens: X > N`→OutputCap），1k..200M 合理域外宁缺毋滥。**只有 Window/InputCap 写入 config**（tui.cpp probe 完成分支），OutputCap 显示不入库。与参考组的差异：四家全部目录驱动、无人用拒绝报文做发现——probe 是 mini-agent 面向"目录未覆盖的自建网关"的差异化路线；已知代价：Stage 2 对高重复文本压缩比高的网关可能付费打不中（DashScope 实测 2.4MB 仅 ~30 万 token，200 正常计费）。
+- **分子层**：状态栏 ctx 的 token 读数优先 provider usage（`result.usage.prompt_tokens`，tui.cpp:2567，请求带 `stream_options.include_usage`），无 usage 时字符类粗估 `estimate_context_tokens`（provider_openai.cpp:649）显示带 `~`——与 Pi 的"usage 优先、粗估兜底"同构；未做 Pi 的"compaction 后 usage 作废显示 ?"（mini-agent 无压缩，暂无此失效场景）。
+
+### 5.2 Reasoning：透传 + 三路回显证据（不 clamp）
+
+- **请求侧**：`config.reasoning_effort` 非空即原样进请求体 `reasoning_effort` 字段（provider_openai.cpp:146），空 = 字段省略；无 per-provider 映射表（与 Pi 的 thinkingLevelMap、opencode 的协议分派不同——mini-agent 只支持 OpenAI 兼容形态，透传是无目录场景的唯一诚实做法）。400 拒绝给提示不自动删字段（config authoritative）。
+- **证据侧**（v4.2，参考组都没有的增强）：三路实测回显汇入状态栏——网关 SSE 顶层或 `choices[0]` 的 `reasoning_effort` 回显、`delta.reasoning_content` 存在性、`usage.reasoning_tokens`。显示优先级：网关回显档位 > 配置档位（本轮有思考证据）> `on`（有证据无档位）> 配置回显（未证实）。**Codewhale 的三态（支持/不支持/未知）在这里自然涌现**：网关回显=证实、无回显但有思考 token=生效未知档位、无证据=未证实。
+- **档位菜单**：`/models` 能力元数据缓存（`parse_models_meta_json`，OpenRouter 形态的 reasoning 档位/默认/强制）驱动 `/reasoning` 的 Tab 选项——即调研 §2.6 说的"Codex preset 表的同构物"；但未做 Pi 式 clamp（非法档位仍透传、由服务器仲裁）。
+- **已知边界**（2026-11-08 维护者实测）：DashScope 网关不回显生效档位，客户端只能证明"参数发出 + 思考发生"，无法证明"按档执行"；模型对自身档位的自我报告是 confabulation（系统提示不含该字段），验证以 debug dump（`/log debug`，REQUEST 体 + usage.reasoning_tokens）为准。
+
+### 5.3 与调研结论的差距清单（待落地候选）
+
+| 候选 | 来源 | 现状 |
+| --- | --- | --- |
+| 上下文压缩（ctx 超阈值自动/触发式摘要） | 四家共同行为（§3.2，最大缺口） | 未做，只显示 |
+| `effective_context_window_percent` 折扣分母 | Codex §1.3 | 未做（现用原始窗口 + 70/90 显示阈值） |
+| 动态 `max_tokens = f(窗口, 已用输入)` | opencode §1.4 | 未做（发固定请求形态） |
+| 档位 clamp（caps 存在时建议就近可用档） | Pi §2.5 | 未做（透传+400 提示） |
+| effort 变更击穿 prompt cache 的提示 | opencode §2.4 | 未做（DashScope 有 cache，实测 `cached_tokens` 可证） |
+| probe 值溯源标记（区分目录/探测/手工） | Codewhale §1.2 来历诚实 | 未做（probe 写 config 后与手工值不可分） |
