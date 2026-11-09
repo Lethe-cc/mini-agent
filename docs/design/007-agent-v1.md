@@ -391,6 +391,15 @@ TUI 规划（自绘最小集，已实现）：主屏内联渲染（见 5.6 规�
 
 验证（2026-11-09）：`test_v415_session_recency`（空存储/新→旧排序/lock 文件不入候选/save 刷新 recency）通过；agent_test 全量/CTest 3/3/cpp_format 通过。PTY smoke 新增 8 项（line-mode 基线→bare 复用同 id→不再多建文件→--temp 丢弃提示→--temp 不落盘→--temp+--session 配置错误 2→锁全部释放）全 PASS；另手测：复用跨 `--cwd` 不匹配时新建、忙锁候选跳过、新存储首启新建、TUI banner `(resumed)/(temp)` 标注、`--temp` 全程零写入。既有 flake "queue depth shown in status line" 在基线（stash 后）同样失败，与本改动无关。
 
+## v4.14.1 修订（2026-11-09 维护者实测：`session rm 598` 报 cannot remove）
+
+直接原因：`598` 是前缀不是完整 id，旧 `SessionStore::remove` 对不存在的 `598.json` 只会笼统报 `cannot remove session`。修正：
+
+- **`session rm` 支持前缀**（v4.14.1）：复用 TUI `/session` 的 `match_session_ref`——唯一前缀命中即删除（打印 `removed session <full id>`）、歧义列出候选（exit 2）、无命中走文件删除路径报 **`no such session: <id>`**（旧文案 `cannot remove session` 只在真实 unlink 失败时出现，并附 errno 文本）。`session list` 不变。
+- 单测补双重删除→`no such session` 断言。
+
+验证（2026-11-09）：手测三态（歧义 `598` 列两候选、完整 id 删除成功、缺失 id 报 no such session）；agent_test 全量/CTest 通过。
+
 ## v4.14 修订（2026-11-08 维护者需求：跳进侧栏选择文件）
 
 侧栏从只读展示升级为**模态选择**：

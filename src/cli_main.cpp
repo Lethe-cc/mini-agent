@@ -52,7 +52,8 @@ void print_usage(std::ostream& out) {
            "      fresh session that is never saved and is discarded on exit\n"
            "  mini-agent                     bare == run: open the TUI directly (v4.9)\n"
            "      in-TUI session switch: /session <id|prefix> | /session new\n"
-           "  mini-agent session list|rm ID  manage sessions (rm needs the exact id)\n"
+           "  mini-agent session list|rm ID  manage sessions\n"
+           "      rm: ID may be the full session id or an unambiguous prefix\n"
            "  mini-agent mcp list            show configured MCP servers\n"
            "  --mcp NAME=SPEC (ask/run/mcp)  add one server this session:\n"
            "      NAME=https://host/mcp          Streamable HTTP\n"
@@ -681,13 +682,36 @@ int cmd_session(int argc, char** argv) {
         return kOk;
     }
     if (argc == 4 && std::strcmp(argv[2], "rm") == 0) {
-        if (!store.remove(argv[3], &io_error)) {
+        // v4.14.1: same prefix resolution as the TUI's /session -- an
+        // unambiguous prefix removes the hit, an ambiguous one lists the
+        // candidates instead of silently failing on a nonexistent id.
+        const std::string ref = argv[3];
+        std::string list_err;
+        const auto ids = store.list(&list_err);
+        const auto m = mini_agent::match_session_ref(ref, ids);
+        if (m.exact) {
+            if (!store.remove(m.id, &io_error)) {
+                std::cerr << "error: " << io_error << '\n';
+                return kRuntimeError;
+            }
+            std::cout << "removed session " << m.id << '\n';
+            return kOk;
+        }
+        if (!m.candidates.empty()) {
+            std::cerr << "error: ambiguous session prefix '" << ref << "':\n";
+            for (const auto& id : m.candidates)
+                std::cerr << "  " << id << '\n';
+            return kConfigError;
+        }
+        if (!store.remove(ref, &io_error)) { // exact-file path keeps the "no such session" wording
             std::cerr << "error: " << io_error << '\n';
             return kRuntimeError;
         }
+        std::cout << "removed session " << ref << '\n';
         return kOk;
     }
-    std::cerr << "usage: mini-agent session list | mini-agent session rm ID\n";
+    std::cerr << "usage: mini-agent session list | mini-agent session rm ID\n"
+                 "  (ID may be a full session id or an unambiguous prefix)\n";
     return kConfigError;
 }
 

@@ -181,6 +181,9 @@ void test_session_store_atomic_and_lock() {
     auto ids = store.list(&error);
     check(ids.size() == 1 && ids[0] == session.meta.id, "list finds session");
     check(store.remove(session.meta.id, &error), "remove ok");
+    check(!store.remove(session.meta.id, &error), "double remove fails");
+    check(error.find("no such session") != std::string::npos,
+          "missing id reports 'no such session' (v4.14.1)");
     check(store.list(&error).empty(), "list empty after remove");
     std::filesystem::remove_all(root);
 }

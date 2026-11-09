@@ -392,9 +392,15 @@ bool SessionStore::remove(const std::string& id, std::string* error) {
         return false;
     }
     std::error_code ec;
-    if (!std::filesystem::remove(path_for(id), ec) || ec) {
+    const auto target = path_for(id);
+    if (!std::filesystem::exists(target)) {
         if (error)
-            *error = "cannot remove session " + id;
+            *error = "no such session: " + id;
+        return false;
+    }
+    if (!std::filesystem::remove(target, ec) || ec) {
+        if (error)
+            *error = "cannot remove session " + id + (ec ? ": " + ec.message() : "");
         return false;
     }
     std::error_code lock_ec;
