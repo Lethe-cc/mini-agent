@@ -868,6 +868,19 @@ std::vector<std::string> compose_columns(const std::vector<std::string>& content
     return out;
 }
 
+std::string compose_footer(std::string_view left, std::string_view right, std::size_t cols) {
+    if (right.empty())
+        return std::string(left);
+    const std::size_t rw = md::display_width(right);
+    if (rw + 1 >= cols)
+        return std::string(right);            // no room for both: the info wins
+    const std::size_t budget = cols - rw - 1; // min one-space gutter
+    std::string head = md::clip(std::string(left), budget);
+    const std::size_t hw = md::display_width(head);
+    head.append(cols - rw - hw, ' ');
+    return head + std::string(right);
+}
+
 std::string sysinfo_line(bool colors, const std::string& user, const std::string& host,
                          const std::string& cwd, const std::string& clock) {
     // v4.12 (design 007 §v4.12): bottom system-info row. Pure so the
@@ -1041,9 +1054,9 @@ class LiveScreen {
         last_session_ids_ = session_ids;
         last_sidebar_ = sidebar;
         last_sidebar_sel_ = sidebar_sel;
-        // v4.12: two fixed rows at the bottom (status + optional system
-        // info) on top of the cursor row; block budget shrinks to match.
-        const std::size_t fixed_rows = sysinfo.empty() ? 2 : 3;
+        // v4.16: one merged footer row (status + right-aligned sysinfo)
+        // on top of the cursor row.
+        const std::size_t fixed_rows = 2;
         // v4.13: with the sidebar active the content column shrinks to
         // cols - side_w - 3 (" | " gutter); every content row wraps to
         // that width, then composes 1:1 with a sidebar row. Composed rows
@@ -1106,9 +1119,11 @@ class LiveScreen {
         // row carries SGR segments: md::clip can cut mid-span, and this is
         // the block's last row, so an unclosed span would leak into the next
         // repaint's rows (5.6 rule 2: no style may survive a row boundary).
-        content.push_back(md::clip(status, cols) + "\x1b[0m");
-        if (!sysinfo.empty()) // v4.12: system-info row below the status row
-            content.push_back(md::clip(sysinfo, cols) + "\x1b[0m");
+        // v4.16: status left + system info right-aligned on ONE row
+        // (the two-row footer of v4.12 read as clutter; the info stays
+        // fully visible, the status clips with the width budget).
+        content.push_back(compose_footer(md::clip(status, cols), md::clip(sysinfo, cols), cols) +
+                          "\x1b[0m");
         // Bottom-anchored live block (2026-11-05 maintainer request): pad
         // the TOP with blank rows so the status row rests one line above
         // the screen bottom and the cursor sits on the last line, whether

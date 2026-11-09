@@ -178,6 +178,12 @@ std::vector<std::string> compose_columns(const std::vector<std::string>& content
 // " M " -> "M", "A " -> "A", "R.." -> "R"); empty on unparseable input.
 std::string sidebar_status_glyph(std::string_view xy);
 
+// v4.16: merge a left-aligned status line and a right-aligned info line
+// into ONE bottom row: `left` is clipped (with an ellipsis budget) so
+// `right` always lands flush against the right edge; a single space is
+// the minimum gutter. Returns the composed row (display-width exact).
+std::string compose_footer(std::string_view left, std::string_view right, std::size_t cols);
+
 // v4.12: one bottom system-info row: "user@host · cwd · clock" (dim when
 // colors on). Pure: the caller gathers the values (USER/getpwuid,
 // gethostname, workspace-or-cwd with $HOME abbreviated to ~, local

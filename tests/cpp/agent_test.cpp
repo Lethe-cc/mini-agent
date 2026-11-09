@@ -2241,6 +2241,14 @@ void test_v411_turn_panel() {
     check(info == "marvin@box · ~/w/mini · 23:50:01", "sysinfo format");
     check(T::sysinfo_line(false, "a\x1b[31mb", "h", "c", "t").find("\x1b") == std::string::npos,
           "sysinfo never carries escape bytes");
+    // v4.16 merged footer: right block flush to the edge, left clipped.
+    const auto foot = T::compose_footer("status", "info", 16);
+    check(mini_agent::md::display_width(foot) == 16 && foot.substr(foot.size() - 4) == "info",
+          "footer pads the gap, info flush right");
+    const auto tight = T::compose_footer("0123456789abcdefghij", "info", 16);
+    check(mini_agent::md::display_width(tight) == 16 && tight.substr(tight.size() - 4) == "info",
+          "long status clips to leave the gutter");
+    check(T::compose_footer("only", "", 20) == "only", "no info = status alone");
     // v4.13 sidebar composition: rows merge with the gutter, the shorter
     // column pads out, and every composed row is exactly one terminal row.
     const auto merged = T::compose_columns({"abc", "de"}, {"123456", "x", "long"}, 20, 6);
