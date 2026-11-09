@@ -602,6 +602,13 @@ def main():
     prev_esc = strip_csi(read_all(afd, 2.0))
     expect("[error] preview" in prev_esc and "escapes workspace" in prev_esc,
            "v5 /preview refuses workspace escape")
+    # v5 5.6: /preview of a recognized code file highlights (def -> cyan).
+    open(ws_dir + "/main.py", "w").write("def greet():\n    return 1\n")
+    os.write(afd, b"/preview main.py\r")
+    py_out = read_all(afd, 2.0)
+    expect("[preview] main.py" in strip_csi(py_out), "v5 /preview shows the code file")
+    expect("\x1b[36mdef\x1b[0m" in py_out, "v5 code preview highlights keyword cyan")
+    os.remove(ws_dir + "/main.py")
     # v3.1 runtime approval switch: query shows current policy; switching
     # to off persists + warns; the NEXT tool call then runs WITHOUT an
     # approval block (status row carries the auto-tools marker instead).

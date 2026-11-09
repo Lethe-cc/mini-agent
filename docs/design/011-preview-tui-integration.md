@@ -30,10 +30,11 @@ v3 落地后，文件编辑、diff、Markdown 渲染三个能力各自存在但�
 - **TUI**：`ToolRound` 携带 result_preview 文本；`drain_tool_events` 在 `[tool]` 行后提交预览块（diff 复用审批块色表并抽成共享 `tint_diff_line`；markdown 走 `md::render`）；新 `/preview <path>` 斜杠命令。
 - **CLI**：`ask` 的 `on_tool` 在 stderr 为 TTY 时回显 result_preview。
 - **system prompt**：默认提示词区分 `read_file`（自己看）与 `preview_file`（给用户看）。
+- **语法高亮**（追加，见 §5.6）：手写行词法模块 `hl::`（零依赖），接入代码围栏渲染、`/preview`/侧栏 `p`、`preview_file` 正文三处。
 
 明确不做：
 
-- 语法高亮（无依赖前提下不做 token 级着色）。
+- 解析级高亮（tree-sitter/syntect 类真语法树；行词法近似见 §5.6，不做）。
 - 审批块内"渲染视图"切换（`?` 语义保持 params 切换，不扩第三态）。
 - `run_bash` 输出入流（输出现已随工具结果文本给模型；transcript 回显大输出会淹没有效信息，维持 v4.11 turn panel 一行摘要）。
 - 图片/二进制预览、IDE 形态。
@@ -76,6 +77,17 @@ stderr `isatty` 门控，管道场景保持 v3 字节形状（008 回归钩子�
 - `/preview <path>`：不经过模型，直接读工作区内文件（同 ADR 007 边界），`.md` 渲染、其他逐行原样，500 行截断；binary/不可读/越界报 `[error]`。登记入 `kCommands` 与 `/help`。
 - **侧栏 `p` 键**（2026-11-09 维护者追问"选中文件怎么预览"后补充）：Ctrl-F 侧栏焦点下按 `p` 直接预览高亮文件（与 `/preview` 共用 `preview_workspace_file` 帮助函数），焦点保持；进入焦点时提交一行 `[hint]` 说明键位（Up/Down walk · p=preview · Enter=insert path · Esc=leave）。Enter 插入路径的原语义不变。
 
+### 5.6 语法高亮（`include/mini_agent/highlight.hpp`、`src/highlight.cpp`；2026-11-09 维护者追加"像 vim/emacs 那样高亮预览"）
+
+- **取向**：vim 的 `syntax/*.vim` 与 emacs 传统 font-lock 都是正则/行状态机，非真解析器；据此选**手写行词法高亮**（方案 A），零依赖（ADR 003），不 vendored tree-sitter（重、需逐语言 grammar + ADR，调研 §5 明确 syntect/chroma 为"不参考"的重依赖）。仅覆盖识别的语言，未知语言/Markdown 原样透传。
+- **模块**：`hl::State`（跨行携带：C `/* */` 块注释、py 三引号串）+ 纯函数 `highlight_line(line, lang, state)`、`language_for_path`（按扩展名）、`language_for_fence`（按 ``` 后 info 词，别名归一）、`supports`。语言族 C（cpp/c/h/js/ts/go 共用 C 词法 + 各关键字表）、Py、Sh、Json。六类 SGR（basic-16，同 md.cpp 色域）：注释 dim、串绿、数字品红、关键字青、预处理/变量黄、函数调用蓝。关键字表只取核心词（少标优于误标，同 vim default filetype）。
+- **接入点（三处）**：
+  1. `md::render` 代码围栏：`MD_BLOCK_CODE` 读 `MD_BLOCK_CODE_DETAIL::lang` 选高亮器；`MD_TEXT_CODE` 分支按物理行喂 `highlight_line`（识别语言时去掉整块 dim、改为逐行 token 着色，未知/无语言围栏维持原 dim+缩进）。模型回复里的代码块同步受益。
+  2. `preview_workspace_file`（`/preview` 与侧栏 `p`）：非 Markdown 且 `language_for_path` 命中时逐行高亮（受 `colors_enabled()` 门控），否则维持原逐行 `sanitize_display`。
+  3. `result_preview_rows`：`preview_file` 命中代码扩展名时（`ToolRound.preview_lang`，Markdown 优先）按语言高亮正文，上限 200 行。
+- **SGR 与换行不变量**：`highlight_line` 每行输出成对 reset（`Run` 类保证开/闭），SGR 段对 `md::wrap` 是零宽（同 md::render 既有约定），列宽不变量与 `style_history_line` 的 "producer-styled 直通" 均不破——单测断言 20 列 wrap 与行尾闭合。
+- **未做**：diff 行内的 token 二次着色（±已是主信号，叠加易糊）；truecolor/主题可配（basic-16 足够，TERM 兼容）；C++ 模板/raw-string、py f-string 嵌套等解析级细节按行词法近似，偶发串色与 vim 同级、可接受。
+
 ### 5.3 CLI（`src/cli_main.cpp`）
 
 - `ask` 的 `on_tool`：`executed && !is_error && isatty(STDERR_FILENO)` 时取 `registry->result_preview()` 写 stderr（diff 原文，无 ANSI——CLI 不假设终端色能力，与 v3 审批预览一致）。日志红线不变：日志仍只记元数据。
@@ -113,12 +125,17 @@ stderr `isatty` 门控，管道场景保持 v3 字节形状（008 回归钩子�
 | ASan | 全部单测 | `python3 scripts/cpp_check.py --sanitizers` | 通过 | gcc Debug+ASan |
 | TUI 审批后 transcript 回显 applied diff | `tests/pty_tui_smoke.py` v5 断言 | `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent` | 通过 | pty 手动门禁 |
 | `/preview` 正文展示 + 越界拒绝 | 同上 v5 断言 | 同上 | 通过 | — |
+| 语法高亮：语言映射/六类 SGR/跨行携带/SGR 零宽不变量 | `tests/cpp/agent_test.cpp` test_highlight | `python3 scripts/cpp_check.py` | 通过 | gcc Debug |
+| 围栏高亮：识别语言着色、未知围栏维持 dim、inline code 不变 | 同上 test_highlight_in_render | 同上 | 通过 | — |
+| `/preview` 代码文件关键字高亮（cyan def） | `tests/pty_tui_smoke.py` v5 5.6 断言 | `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent` | 通过 | pty 手动门禁 |
+| Release preset 回归（高亮加入后） | linux-gcc-release | `python3 scripts/cpp_check.py --preset linux-gcc-release` | 通过 3/3 | 本机无 clang 门禁 |
 | CLI TTY applied diff 回显 | 手工：mock CODEFIX + `script` 包 TTY | `mini-agent ask --tools allowlist`（伪 TTY） | 通过 | 手工证据，未入自动化 |
 | 基线对照（pty 3 项既有失败非本设计引入） | stash 前后对比 | 同上 | 通过（失败集与基线一致，列宽违例 6→5） | 失败属维护者未提交 v4.x 工作 |
 
 ## 9. 实现偏差与已知限制
 
 - **D1（未做）**：§2 列出的 `run_bash` 输出入流未实施（非目标声明），一体化目前覆盖"编辑→diff→渲染"主线；shell 输出仍走 turn panel 一行摘要。
+- **D4（时序）**：语法高亮（§5.6）为本文初版交付后的维护者追加需求（"像 vim/emacs 那样高亮预览"），按同一文档扩展记录，未另立设计编号。tree-sitter 方案按调研 §5 结论搁置（重依赖、逐语言 grammar、需 ADR），如后续要真解析级精度再评估。
 - **D2**：`preview_file` 暂存状态在"call 成功但 result_preview 未被调用"的极端路径（如回合在执行与回调之间抛异常）会残留到下一次同工具调用被覆盖——无害（内容自洽、一次性消费、无跨 session 泄漏），未加显式清理。
 - **D3**：`/preview` 非 markdown 分支逐行原样但跳过空行为单个空格提交（LiveScreen 空行提交会丢缩进行语义），与 markdown 分支同款处理。
 - 已知限制：applied diff 与审批 preview diff 在同一竞态守卫下必然一致；若审批策略为 `off`（无 preview arm），diff 由执行前重读重建，与盘上真值一致但极端并发写仍可能显示"将要 vs 实际"差异——显示层问题，不改变写入正确性。

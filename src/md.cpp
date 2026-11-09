@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <sstream>
 
+#include "mini_agent/highlight.hpp"
+
 namespace mini_agent::md {
 namespace {
 
@@ -271,6 +273,10 @@ struct SgrWriter {
     bool at_line_start = true;
     bool block_open = false;
     bool in_code = false;
+    // v5 (design 011 5.6): active fence language + cross-line highlight
+    // carry; reset when a code block opens/closes.
+    std::string code_lang;
+    hl::State hl_state;
     unsigned heading_level = 0;
     std::string pending_marker; // emitted with the first text of an item
     bool heading_started = false;
@@ -483,11 +489,19 @@ int enter_block(MD_BLOCKTYPE type, void* detail, // NOLINT(bugprone-easily-swapp
         w.heading_started = false;
         break;
     }
-    case MD_BLOCK_CODE:
+    case MD_BLOCK_CODE: {
         w.newline_if_open();
         w.in_code = true;
         w.at_line_start = true;
+        // v5 (design 011 5.6): fence info string selects the highlighter;
+        // unknown/plain fences stay dim-indented as before.
+        w.hl_state.reset();
+        w.code_lang.clear();
+        const auto* d = static_cast<const MD_BLOCK_CODE_DETAIL*>(detail);
+        if (d && d->lang.text != nullptr && d->lang.size > 0)
+            w.code_lang = hl::language_for_fence(std::string_view(d->lang.text, d->lang.size));
         break;
+    }
     case MD_BLOCK_P:
         w.newline_if_open();
         w.at_line_start = true;
@@ -701,7 +715,11 @@ int process_text(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* user
     }
     case MD_TEXT_CODE:
         if (w.in_code) {
-            // code block body: dim + two-space indent per physical line
+            // code block body: dim + two-space indent per physical line.
+            // v5 (design 011 5.6): recognized fences highlight instead of
+            // staying dim -- strings/comments/keywords carry their own SGR
+            // (Run emits balanced resets, so wrap() accounting holds).
+            const bool lit = !w.code_lang.empty();
             std::size_t pos = 0;
             while (pos < s.size()) {
                 const auto nl = s.find('\n', pos);
@@ -710,11 +728,19 @@ int process_text(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* user
                     if (w.at_line_start) {
                         for (int i = 0; i < w.quote_depth; ++i)
                             w.out += "\x1b[2m│\x1b[0m ";
-                        w.out += "\x1b[2m  ";
+                        if (!lit)
+                            w.out += "\x1b[2m  ";
+                        else
+                            w.out += "  ";
                         w.at_line_start = false;
                     }
-                    w.out.append(s.substr(pos, end - pos));
-                    w.out += "\x1b[0m";
+                    if (lit)
+                        w.out +=
+                            hl::highlight_line(s.substr(pos, end - pos), w.code_lang, w.hl_state);
+                    else
+                        w.out.append(s.substr(pos, end - pos));
+                    if (!lit)
+                        w.out += "\x1b[0m";
                     w.block_open = true;
                 }
                 if (nl != std::string_view::npos) {

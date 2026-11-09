@@ -45,6 +45,7 @@ add_library(agent_core STATIC
     src/chat.cpp
     src/config.cpp
     src/diff.cpp
+    src/highlight.cpp
     src/log.cpp
     src/md.cpp
     src/loop.cpp
