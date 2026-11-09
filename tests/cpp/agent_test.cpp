@@ -1555,7 +1555,7 @@ void test_file_tools() {
     FileRuntime runtime(fc);
 
     const auto tools = runtime.list();
-    check(tools.size() == 5, "five file tools listed");
+    check(tools.size() == 6, "six file tools listed");
 
     auto call = [&](const char* name, const std::string& args) {
         return runtime.call(ToolCall{"1", name, args}, [] { return false; });
@@ -1677,6 +1677,85 @@ void test_file_tools() {
     check(p.find("+brand new") != std::string::npos, "registry.preview delegates");
     check(registry->preview(ToolCall{"1", "run_bash", R"({"command":"ls"})"}).empty(),
           "registry.preview empty for no-preview tool");
+
+    // v5 (design 011): preview_file returns a short model-facing note and
+    // stages the RAW body for result_preview(); boundary + binary posture
+    // match read_file.
+    {
+        std::ofstream f(ws.root / "doc.md");
+        f << "# Title\n\nbody line\n";
+    }
+    const auto pv = call("preview_file", R"({"path":"doc.md"})");
+    check(!pv.is_error && pv.text.find("previewed doc.md") != std::string::npos,
+          "preview_file confirms to model");
+    const auto pv_body =
+        runtime.result_preview(ToolCall{"1", "preview_file", R"({"path":"doc.md"})"}, pv);
+    check(pv_body == "# Title\n\nbody line\n", "preview_file stages raw body");
+    const auto pv_again =
+        runtime.result_preview(ToolCall{"1", "preview_file", R"({"path":"doc.md"})"}, pv);
+    check(pv_again.empty(), "preview body consumed once");
+    check(call("preview_file", R"({"path":"../../etc/passwd"})").is_error,
+          "preview_file blocks escape");
+    check(call("preview_file", R"({"path":"nope.txt"})").is_error, "preview_file missing errors");
+
+    // v5: result_preview stages the APPLIED diff after write_file (with a
+    // preview-armed approval) and edit_file, and clears after consume.
+    {
+        {
+            std::ofstream f(ws.root / "ap.txt");
+            f << "one\ntwo\n";
+        }
+        ToolCall wc{"1", "write_file", R"({"path":"ap.txt","content":"one\nTWO\n"})"};
+        runtime.preview(wc); // arms the race guard (approval flow shape)
+        const auto wr = runtime.call(wc, [] { return false; });
+        check(!wr.is_error, "write_file with armed preview succeeds");
+        const auto rd = runtime.result_preview(wc, wr);
+        check(rd.find("-two") != std::string::npos && rd.find("+TWO") != std::string::npos &&
+                  rd.find("b/ap.txt") != std::string::npos,
+              "result_preview yields applied diff");
+        check(runtime.result_preview(wc, wr).empty(), "applied diff consumed once");
+    }
+    {
+        // Un-armed edit (auto/allowlist tier): pre-image comes from the
+        // re-read body, so the diff still shows the real change.
+        ToolCall ec{"1", "edit_file", R"({"path":"ap.txt","old_str":"TWO","new_str":"three"})"};
+        const auto er = runtime.call(ec, [] { return false; });
+        check(!er.is_error, "un-armed edit_file succeeds");
+        const auto ed = runtime.result_preview(ec, er);
+        check(ed.find("-TWO") != std::string::npos && ed.find("+three") != std::string::npos,
+              "result_preview diffs un-armed edit too");
+    }
+    {
+        // New file (no pre-image on disk): diff against empty.
+        ToolCall nc{"1", "write_file", R"({"path":"brand.txt","content":"fresh\n"})"};
+        const auto nr = runtime.call(nc, [] { return false; });
+        check(!nr.is_error, "new write_file succeeds");
+        const auto nd = runtime.result_preview(nc, nr);
+        // New file: header + all-`+` body, no removal content line.
+        check(nd.find("+fresh") != std::string::npos && nd.find("\n-") == std::string::npos,
+              "new-file applied diff runs against empty");
+    }
+    // Error results carry no preview; error write stages nothing.
+    {
+        ToolResult bad_result{"nope", true};
+        check(runtime.result_preview(ToolCall{"1", "write_file", "{}"}, bad_result).empty(),
+              "error result previews empty");
+        const auto failed = call("write_file", R"({"path":"nodir/x.txt","content":"y"})");
+        check(failed.is_error, "failed write errors");
+        ToolCall ok_prev{"1", "write_file", R"({"path":"ok.txt","content":"z\n"})"};
+        const auto ok_res = runtime.call(ok_prev, [] { return false; });
+        (void)ok_res;
+        // The failed write must NOT have staged a diff: consuming after a
+        // later successful call returns that call's diff, never stale rows.
+        const auto after = runtime.result_preview(ok_prev, ok_res);
+        check(after.find("+z") != std::string::npos, "staged diff belongs to last call");
+    }
+    // registry.result_preview delegates + empty for no-preview tools.
+    check(registry
+              ->result_preview(ToolCall{"1", "run_bash", R"({"command":"ls"})"},
+                               ToolResult{"x", false})
+              .empty(),
+          "registry.result_preview empty for run_bash");
 }
 
 void test_v3_config_and_prompt() {
@@ -1710,6 +1789,7 @@ void test_v3_config_and_prompt() {
     // passthrough; "" disabled.
     const auto prompt = build_system_prompt("/work/dir", "gpt-test", std::nullopt);
     check(prompt.find("Workspace: /work/dir") != std::string::npos, "workspace line present");
+    check(prompt.find("preview_file") != std::string::npos, "prompt teaches preview_file");
     check(prompt.find("edit_file") != std::string::npos &&
               prompt.find("git_commit") != std::string::npos &&
               prompt.find("never") != std::string::npos,

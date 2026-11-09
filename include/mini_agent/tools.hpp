@@ -62,6 +62,18 @@ class ToolRuntime {
     virtual void disarm(const ToolCall& call) {
         (void)call;
     }
+    // v5 (design 011): post-execution human preview for the transcript
+    // (applied diff for file writes, rendered-ready body for preview_file).
+    // Distinct from preview(), the pre-approval "what WILL change" view.
+    // Read-only by contract except for consuming per-call state the
+    // runtime computed during call(). Fires on the loop thread right
+    // after call() returns -- same owner contract as call(). Empty string
+    // = nothing to show.
+    virtual std::string result_preview(const ToolCall& call, const ToolResult& result) {
+        (void)call;
+        (void)result;
+        return {};
+    }
 };
 
 class ToolRegistry {
@@ -83,6 +95,10 @@ class ToolRegistry {
     std::string preview(const ToolCall& call);
     // v3: denial cleanup hook, same thread contract as preview().
     void disarm(const ToolCall& call);
+    // v5 (design 011): delegates to the owning runtime's result_preview()
+    // (empty when the tool has none or the name is unknown). Loop callers
+    // invoke it right after execute_one, same thread contract as call().
+    std::string result_preview(const ToolCall& call, const ToolResult& result);
 
     // OpenAI wire array: [{type:"function", function:{name, description,
     // parameters}}]. "[]" when empty -- byte-identical to a no-tools v1
@@ -191,6 +207,11 @@ class FileRuntime final : public ToolRuntime {
     // Denial after preview armed the guard: drop the armed state so the
     // next legitimate call is not refused by the stale snapshot.
     void disarm(const ToolCall& call) override;
+    // v5 (design 011): after a successful write_file/edit_file, returns the
+    // APPLIED unified diff (what actually changed on disk) so the TUI can
+    // echo it into the transcript; preview_file returns the raw body for
+    // human rendering. Consumes the per-call snapshot recorded in call().
+    std::string result_preview(const ToolCall& call, const ToolResult& result) override;
 
   private:
     FileToolsConfig config_;
@@ -198,6 +219,14 @@ class FileRuntime final : public ToolRuntime {
     // against. §5.3 race guard -- call() refuses when the on-disk file
     // differs from the previewed old content.
     std::map<std::string, std::string> armed_previews_;
+    // v5 (design 011): unified diff of the LAST successful write_file/
+    // edit_file, staged for result_preview() which fires on the same
+    // (loop) thread right after call(). Cleared on consume.
+    std::string last_applied_path_;
+    std::string last_applied_diff_;
+    // v5: last preview_file body staged for result_preview() rendering.
+    std::string last_preview_path_;
+    std::string last_preview_body_;
 };
 
 // Strips C0 control characters (except \n and \t) and ANSI escape

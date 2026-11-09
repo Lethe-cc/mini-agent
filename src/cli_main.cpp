@@ -357,8 +357,9 @@ int cmd_ask(int argc, char** argv) {
                            : mini_agent::Approval::Deny;
             };
         }
-        turn_options.on_tool = [&logger](const mini_agent::ToolCall& call,
-                                         const mini_agent::ToolResult& result, bool executed) {
+        turn_options.on_tool = [&, registry_ptr = registry.get()](
+                                   const mini_agent::ToolCall& call,
+                                   const mini_agent::ToolResult& result, bool executed) {
             // Metadata only (008 section 6): name/status/ms/bytes, never
             // arguments or output text.
             logger.event("tool_exec", {{"tool", call.name},
@@ -368,6 +369,15 @@ int cmd_ask(int argc, char** argv) {
                                        {"bytes", std::to_string(result.text.size())}});
             std::cerr << "[tool] " << call.name << " " << (result.is_error ? "error" : "ok")
                       << "\n";
+            // v5 (design 011): on a TTY, echo the applied diff / preview
+            // body to stderr so `ask --tools ask|allowlist` shows the same
+            // edit -> diff flow as the TUI. stdout keeps the reply-only
+            // pipe contract; non-TTY runs stay byte-identical to v3.
+            if (executed && !result.is_error && ::isatty(STDERR_FILENO) == 1) {
+                const auto body = registry_ptr->result_preview(call, result);
+                if (!body.empty())
+                    std::cerr << body << (body.back() == '\n' ? "" : "\n");
+            }
         };
         logger.event("tools", {{"mode", "ask_cli"}, {"level", tools_mode}});
     }

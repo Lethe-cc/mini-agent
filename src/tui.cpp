@@ -25,12 +25,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -43,9 +45,9 @@ namespace mini_agent::tui {
 namespace {
 
 constexpr std::string_view kCommands[] = {
-    "/approve",   "/config",  "/context",  "/cwd",     "/debug",   "/exit",
-    "/help",      "/login",   "/mcp",      "/model",   "/models",  "/provider",
-    "/reasoning", "/session", "/sessions", "/sidebar", "/sysinfo", "/tools"};
+    "/approve", "/config",   "/context", "/cwd",     "/debug",   "/exit",     "/help",
+    "/login",   "/mcp",      "/model",   "/models",  "/preview", "/provider", "/reasoning",
+    "/session", "/sessions", "/sidebar", "/sysinfo", "/tools"};
 
 class RawMode {
   public:
@@ -183,6 +185,8 @@ std::vector<std::string> slash_arg_choices(std::string_view command,
     if (command == "/login")
         return {"<key>"};
     if (command == "/cwd")
+        return {"<path>"};
+    if (command == "/preview")
         return {"<path>"};
     return {};
 }
@@ -690,6 +694,62 @@ std::string tool_activity_line(const std::string& tool_name, const std::string& 
     return line;
 }
 
+// v5 (design 011): one colour map for every unified-diff view (the
+// approval block and the post-edit transcript block share it). Mirrors
+// `git diff` defaults (2026-11-05 maintainer reference screenshot): file
+// headers bold meta, hunk header cyan, removed red, added green, context
+// left terminal-default. Input must already be sanitized.
+std::string tint_diff_line(std::string_view line, bool colors) {
+    if (line.rfind("--- ", 0) == 0 || line.rfind("+++ ", 0) == 0)
+        return tint(colors, "1", line);
+    if (!line.empty() && line[0] == '+')
+        return tint(colors, "32", line);
+    if (!line.empty() && line[0] == '-')
+        return tint(colors, "31", line);
+    if (!line.empty() && line[0] == '@')
+        return tint(colors, "36", line);
+    if (!line.empty() && line[0] == ':')
+        return tint(colors, "2", line);
+    return std::string(line); // context: plain
+}
+
+// v5 (design 011): transcript block echoing what a file tool actually
+// did AFTER execution -- the applied diff (write_file/edit_file) or the
+// file body (preview_file; Markdown rendered). Committed right after the
+// [tool] activity line so the user sees edit -> diff -> effect in one
+// flow. Producer-styled rows (carry SGR) pass commit()'s classifier
+// untouched, same contract as markdown replies.
+std::vector<std::string> result_preview_rows(const std::string& tool_name,
+                                             const std::string& preview, bool is_markdown,
+                                             std::size_t cols) {
+    std::vector<std::string> rows;
+    if (preview.empty())
+        return rows;
+    const bool colors = colors_enabled();
+    if (is_markdown) {
+        rows.push_back(tint(colors, "36", "[preview] " + sanitize_display(tool_name)));
+        const auto rendered = md::render(preview, cols);
+        std::string line;
+        std::istringstream stream(rendered);
+        while (std::getline(stream, line))
+            rows.push_back(line.empty() ? std::string(" ") : line);
+        return rows;
+    }
+    // Diff body: shared colour map, capped so a huge write cannot flood
+    // the transcript.
+    std::string line;
+    std::istringstream stream(preview);
+    std::size_t shown = 0;
+    while (std::getline(stream, line) && shown < 40) {
+        rows.push_back("  " + tint_diff_line(sanitize_display(line), colors));
+        ++shown;
+    }
+    if (!stream.eof())
+        rows.push_back(
+            tint(colors, "2", "  ... diff truncated in transcript (full change applied)"));
+    return rows;
+}
+
 std::optional<ApprovalKey> approval_key(int ch, bool& expanded) noexcept {
     switch (ch) {
     case 'y':
@@ -738,24 +798,8 @@ std::vector<std::string> approval_rows(const std::string& tool_name,
         std::istringstream stream(preview);
         std::size_t shown = 0;
         while (std::getline(stream, line) && shown < 24) {
-            // Colour map mirrors `git diff` defaults (2026-11-05 maintainer
-            // reference screenshot): file headers bold meta, hunk header
-            // cyan, removed red, added green, context left terminal-default.
-            std::string tinted;
-            const bool meta_header = line.rfind("--- ", 0) == 0 || line.rfind("+++ ", 0) == 0;
-            if (meta_header)
-                tinted = tint(colors, "1", sanitize_display(line));
-            else if (!line.empty() && line[0] == '+')
-                tinted = tint(colors, "32", sanitize_display(line));
-            else if (!line.empty() && line[0] == '-')
-                tinted = tint(colors, "31", sanitize_display(line));
-            else if (!line.empty() && line[0] == '@')
-                tinted = tint(colors, "36", sanitize_display(line));
-            else if (!line.empty() && line[0] == ':')
-                tinted = tint(colors, "2", sanitize_display(line));
-            else
-                tinted = std::string(sanitize_display(line)); // context: plain
-            rows.push_back(std::move(tinted));
+            // v5: colour map shared with the post-edit transcript block.
+            rows.push_back(tint_diff_line(sanitize_display(line), colors));
             ++shown;
         }
         if (!stream.eof())
@@ -1313,7 +1357,21 @@ struct ToolRound {
     long long elapsed_ms = 0;
     std::size_t result_bytes = 0;
     bool approval_timeout = false;
+    // v5 (design 011): post-execution human preview staged by the worker
+    // (applied diff for file writes / body for preview_file). Plain text,
+    // unsanitized; the UI thread styles it when committing the block.
+    std::string result_preview;
+    // Set when the preview should render as Markdown (preview_file on a
+    // .md/.markdown file) rather than as a diff.
+    bool preview_is_markdown = false;
 };
+
+// Auto-deny budget for one approval request (design 008 section 5.4): the
+// worker waits this long for a keypress before denying. The last third of
+// the budget renders as a countdown in the status line (v4.17), so a user
+// returning to the terminal still gets a chance to answer.
+constexpr long long kApprovalTimeoutS = 120;
+constexpr long long kApprovalWarnAtS = 90;
 
 // Fixed approval slot (no dynamic ownership races): the worker fills the
 // call fields, publishes request_seq, and waits for answer_seq to catch
@@ -1329,6 +1387,9 @@ struct ApprovalSlot {
     std::atomic<unsigned long long> request_seq{0};
     std::atomic<unsigned long long> answer_seq{0};
     std::atomic<int> answer{0}; // 1 allow, 2 deny, 3 allow-session
+    // Steady-clock ms of the publish that opened this request (worker
+    // writes before request_seq, main reads per frame for the countdown).
+    std::atomic<long long> published_at_ms{0};
 };
 
 } // namespace
@@ -1589,6 +1650,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         for (const auto& round : batch) {
             screen.commit(tool_activity_line(round.tool_name, round.arguments_json, round.executed,
                                              round.is_error, round.elapsed_ms, round.result_bytes));
+            // v5 (design 011): echo the applied diff / preview body right
+            // after the activity row -- edit -> diff -> effect in one
+            // transcript flow.
+            for (const auto& row : result_preview_rows(round.tool_name, round.result_preview,
+                                                       round.preview_is_markdown, cols_now()))
+                screen.commit(row);
             // v4.11: the panel keeps the whole turn's rows (history scrolls).
             panel_tool_rows.push_back(tool_activity_line(round.tool_name, round.arguments_json,
                                                          round.executed, round.is_error,
@@ -1704,6 +1771,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     // contract as list/call) and arm the runtime's race
                     // guard -- both inside the mutex, before publish.
                     approval_slot.preview = registry ? registry->preview(call) : std::string();
+                    // v4.17: countdown source for the UI warning; steady
+                    // ms since epoch, published before request_seq so the
+                    // frame loop can never read a stale stamp.
+                    approval_slot.published_at_ms.store(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count());
                     seq = approval_slot.request_seq.load() + 1;
                     approval_slot.request_seq.store(seq); // publish (call set first)
                 }
@@ -1715,7 +1789,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     const auto waited = std::chrono::duration_cast<std::chrono::seconds>(
                                             std::chrono::steady_clock::now() - wait_start)
                                             .count();
-                    if (waited >= 120) { // never block the worker forever
+                    if (waited >= kApprovalTimeoutS) { // never block the worker forever
                         std::lock_guard<std::mutex> lock(tool_mutex);
                         ToolRound timeout_round;
                         timeout_round.tool_name = call.name;
@@ -1767,6 +1841,30 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 round.is_error = tool_result.is_error;
                 round.elapsed_ms = tool_result.elapsed_ms;
                 round.result_bytes = tool_result.text.size();
+                // v5 (design 011): stage the human preview on the worker
+                // (loop) thread right after execution -- the registry's
+                // result_preview shares call()'s single-owner contract.
+                if (executed && !tool_result.is_error && registry) {
+                    round.result_preview = registry->result_preview(call, tool_result);
+                    if (call.name == "preview_file") {
+                        // .md/.markdown bodies render; others show verbatim.
+                        // The path lives in the args; parse it for the
+                        // extension (staged body carries no name).
+                        const auto args =
+                            nlohmann::json::parse(call.arguments_json, nullptr, false);
+                        std::string path =
+                            args.is_object() && args.contains("path") && args["path"].is_string()
+                                ? args["path"].get<std::string>()
+                                : std::string();
+                        for (auto& c : path)
+                            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        const auto ends = [&](std::string_view suf) {
+                            return path.size() >= suf.size() &&
+                                   path.compare(path.size() - suf.size(), suf.size(), suf) == 0;
+                        };
+                        round.preview_is_markdown = ends(".md") || ends(".markdown");
+                    }
+                }
                 std::lock_guard<std::mutex> lock(tool_mutex);
                 running_tool.clear(); // v4.11: the row lands in tool_events
                 tool_events.push_back(std::move(round));
@@ -2041,6 +2139,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit(
                 "          /config · /sessions · /session <id|prefix>|new · /sysinfo on|off");
             screen.commit("          /sidebar on|off (tree + changed files)");
+            screen.commit("          /preview <path> (show a file; .md renders)");
             screen.commit("          /exit");
             screen.commit("Each of /provider /login /model saves on its own;");
             screen.commit("configure them in any order, any number of sittings.");
@@ -2578,6 +2677,70 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                           (config.workspace == std::filesystem::current_path().string()
                                ? "(matches launch cwd)"
                                : "run_bash now starts inside it"));
+            return true;
+        }
+        if (line.rfind("/preview", 0) == 0) {
+            // v5 (design 011): show a workspace file to the human without
+            // involving the model. Markdown renders; everything else shows
+            // verbatim. Read-only, bounded to the session workspace -- the
+            // same rule the file tools enforce (ADR 007).
+            const auto arg = arg_of(line);
+            if (arg.empty()) {
+                screen.commit("usage: /preview <path> (workspace-bounded; .md renders)");
+                return true;
+            }
+            std::filesystem::path resolved;
+            std::string bounds_error;
+            const std::string root =
+                config.workspace.empty()
+                    ? std::filesystem::current_path().string()
+                    : std::filesystem::weakly_canonical(config.workspace).string();
+            if (!resolve_within_workspace(root, std::string(arg), &resolved, &bounds_error)) {
+                screen.commit("[error] /preview " + sanitize_display(arg) + ": " +
+                              sanitize_display(bounds_error));
+                return true;
+            }
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(resolved, ec)) {
+                screen.commit("[error] /preview: not a regular file: " + sanitize_display(arg));
+                return true;
+            }
+            std::ifstream stream(resolved, std::ios::binary);
+            if (!stream) {
+                screen.commit("[error] /preview: cannot open: " + sanitize_display(arg));
+                return true;
+            }
+            std::ostringstream buffer;
+            buffer << stream.rdbuf();
+            const std::string body = buffer.str();
+            if (body.find('\0') != std::string::npos) {
+                screen.commit("[error] /preview: binary file: " + sanitize_display(arg));
+                return true;
+            }
+            std::string lower(arg);
+            for (auto& c : lower)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const bool markdown =
+                lower.size() >= 3 &&
+                (lower.compare(lower.size() - 3, 3, ".md") == 0 ||
+                 (lower.size() >= 9 && lower.compare(lower.size() - 9, 9, ".markdown") == 0));
+            screen.commit("[preview] " + sanitize_display(arg));
+            if (markdown) {
+                std::string pline;
+                std::istringstream pr(md::render(body, cols_now()));
+                while (std::getline(pr, pline))
+                    screen.commit(pline.empty() ? std::string(" ") : pline);
+            } else {
+                std::string pline;
+                std::istringstream pr(body);
+                std::size_t shown = 0;
+                while (std::getline(pr, pline) && shown < 500) {
+                    screen.commit("  " + sanitize_display(pline));
+                    ++shown;
+                }
+                if (!pr.eof())
+                    screen.commit("  ... truncated (file longer than 500 lines)");
+            }
             return true;
         }
         if (line == "/tools") {
@@ -3263,6 +3426,22 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     snapshot_preview = approval_slot.preview;
                 }
                 status += tint(sc, "1;33", " · AWAITING APPROVAL");
+                // v4.17: after 90 s of the 120 s auto-deny budget, show the
+                // remaining seconds. The line changes once per second, which
+                // naturally busts render()'s input cache (no per-frame
+                // repaint otherwise).
+                const long long pub_ms = approval_slot.published_at_ms.load();
+                if (pub_ms > 0) {
+                    const long long now_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+                    const long long waited_s = (now_ms - pub_ms) / 1000;
+                    if (waited_s >= kApprovalWarnAtS) {
+                        const long long left = std::max<long long>(0, kApprovalTimeoutS - waited_s);
+                        status += tint(sc, "1;31", " · auto-deny in " + std::to_string(left) + "s");
+                    }
+                }
                 extra_rows = approval_rows(snapshot.name, snapshot.arguments_json,
                                            approval_expanded, snapshot_preview);
             }

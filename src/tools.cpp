@@ -78,6 +78,11 @@ void ToolRegistry::disarm(const ToolCall& call) {
         runtime->disarm(call);
 }
 
+std::string ToolRegistry::result_preview(const ToolCall& call, const ToolResult& result) {
+    auto* runtime = find(call.name);
+    return runtime ? runtime->result_preview(call, result) : std::string();
+}
+
 std::string ToolRegistry::to_openai_tools_json() {
     nlohmann::json arr = nlohmann::json::array();
     for (const auto& definition : list()) {
@@ -513,6 +518,17 @@ std::vector<ToolDefinition> FileRuntime::list() {
         "Returns \"path:line: text\" rows. Arguments: {\"pattern\": \"...\", "
         "\"is_regex\": optional false, \"path_prefix\": optional subdir/file filter}.",
         R"({"type":"object","properties":{"pattern":{"type":"string"},"is_regex":{"type":"boolean"},"path_prefix":{"type":"string"}},"required":["pattern"]})");
+    // v5 (design 011): human-facing file preview. Unlike read_file (which
+    // feeds the MODEL line-numbered text), preview_file returns the RAW
+    // body so the TUI/CLI can render it for the user (Markdown files are
+    // rendered, others shown verbatim). Its result is surfaced through the
+    // result_preview() hook, not the model turn.
+    add("preview_file",
+        "Preview a workspace text file for the human user (the terminal renders it; "
+        "Markdown shows formatted). Returns the raw file body, not line numbers. Use "
+        "this to SHOW a file to the user; use read_file to inspect content yourself. "
+        "Arguments: {\"path\": \"relative or absolute path\"}.",
+        R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})");
     return out;
 }
 
@@ -632,6 +648,30 @@ void FileRuntime::disarm(const ToolCall& call) {
     armed_previews_.erase(resolved.string());
 }
 
+// v5 (design 011): post-execution transcript preview. write_file/edit_file
+// -> the APPLIED unified diff staged by call(); preview_file -> the raw
+// body staged for the UI viewer. Consumed once (staged state cleared) so a
+// later unrelated tool call cannot resend stale content.
+std::string FileRuntime::result_preview(const ToolCall& call, const ToolResult& result) {
+    if (result.is_error)
+        return {};
+    if (call.name == "write_file" || call.name == "edit_file") {
+        std::string diff;
+        diff.swap(last_applied_diff_);
+        last_applied_path_.clear();
+        if (diff.empty())
+            return {};
+        return diff;
+    }
+    if (call.name == "preview_file") {
+        std::string body;
+        body.swap(last_preview_body_);
+        last_preview_path_.clear();
+        return body;
+    }
+    return {};
+}
+
 ToolResult FileRuntime::call(const ToolCall& call, const ShouldAbort& should_abort) {
     namespace fs = std::filesystem;
     ToolResult bad{"arguments must be a JSON object", true};
@@ -694,6 +734,36 @@ ToolResult FileRuntime::call(const ToolCall& call, const ShouldAbort& should_abo
                           false};
     }
 
+    if (call.name == "preview_file") {
+        // v5 (design 011): raw body for the human viewer (the UI renders
+        // it; the model gets only a short confirmation back). Same
+        // boundary, size cap, and binary posture as read_file.
+        std::string path_raw;
+        if (!get_string(parsed, "path", &path_raw, &bad))
+            return bad;
+        fs::path resolved;
+        if (auto early = resolve(path_raw, &resolved))
+            return *early;
+        std::error_code ec;
+        if (!fs::is_regular_file(resolved, ec))
+            return ToolResult{path_raw + ": not a regular file", true};
+        std::string content;
+        if (!read_file_bytes(resolved, config_.read_limit_bytes, &content, &bad))
+            return bad;
+        if (content.find('\0') != std::string::npos)
+            return ToolResult{path_raw + ": binary file (NUL found); use run_bash", true};
+        if (content.empty())
+            return ToolResult{"(empty file)", false};
+        // The body is carried to the UI via result_preview(); the model
+        // only needs to know it was shown (keeps tokens out of the chat).
+        const std::size_t body_bytes = content.size();
+        last_preview_path_ = path_raw;
+        last_preview_body_ = std::move(content);
+        return ToolResult{"previewed " + path_raw + " (" + std::to_string(body_bytes) +
+                              " bytes) for the user",
+                          false};
+    }
+
     if (call.name == "write_file" || call.name == "edit_file") {
         std::string path_raw;
         if (!get_string(parsed, "path", &path_raw, &bad))
@@ -702,6 +772,11 @@ ToolResult FileRuntime::call(const ToolCall& call, const ShouldAbort& should_abo
         if (auto early = resolve(path_raw, &resolved))
             return *early;
         std::error_code ec;
+        // v5 (design 011): the pre-write body, captured for the applied
+        // diff staged after a successful rename. Empty/absent => the file
+        // is new and the diff runs against empty.
+        std::string pre_image;
+        bool has_pre_image = false;
         // Race guard (design 009 5.3): if a preview armed the expected old
         // content, refuse when the file changed underneath us since. Runs
         // BEFORE any content work so the refusal is about the race, not a
@@ -728,6 +803,11 @@ ToolResult FileRuntime::call(const ToolCall& call, const ShouldAbort& should_abo
                 return ToolResult{
                     path_raw + ": changed since the approved preview; re-read and retry", true};
             }
+            // The file is byte-identical to the approved preview: that
+            // snapshot IS the pre-image (and it also covers a new file:
+            // armed empty + not readable => not the mismatch branch).
+            pre_image = armed->second;
+            has_pre_image = true;
             armed_previews_.erase(armed);
         }
         std::string new_text;
@@ -743,7 +823,8 @@ ToolResult FileRuntime::call(const ToolCall& call, const ShouldAbort& should_abo
                 return bad;
             if (old_str.empty())
                 return ToolResult{"edit_file: 'old_str' must be non-empty", true};
-            std::string old_text;
+            std::string& old_text = pre_image; // doubles as the pre-image
+            has_pre_image = true;              // for the applied diff below
             if (!read_file_bytes(resolved, config_.write_limit_bytes, &old_text, &bad))
                 return bad;
             std::string edit_error;
@@ -781,6 +862,31 @@ ToolResult FileRuntime::call(const ToolCall& call, const ShouldAbort& should_abo
         if (::rename(tmp.c_str(), resolved.c_str()) != 0) {
             ::unlink(tmp.c_str());
             return ToolResult{path_raw + ": rename failed: " + std::strerror(errno), true};
+        }
+        // v5 (design 011): stage the APPLIED diff for result_preview().
+        // Pre-image sources, in order: the race-guard snapshot (approval
+        // flow), the re-read body (edit_file), else the file as it stands
+        // right before this write (write_file without a preview). On any
+        // read failure the diff falls back to "new file against empty".
+        if (!has_pre_image) {
+            if (existed) {
+                std::ifstream before(resolved, std::ios::binary);
+                if (before) {
+                    std::ostringstream buffer;
+                    buffer << before.rdbuf();
+                    pre_image = buffer.str();
+                }
+            } else {
+                has_pre_image = true; // new file: empty pre-image is final
+            }
+        }
+        {
+            const auto result =
+                pre_image.empty() ? diff_against_empty(new_text) : diff_texts(pre_image, new_text);
+            const auto label = relative_to_root(config_.workspace, resolved);
+            last_applied_path_ = path_raw;
+            last_applied_diff_ =
+                result.changed ? result.to_unified_text("a/" + label, "b/" + label) : std::string();
         }
         return ToolResult{std::string(existed ? "wrote " : "created ") + path_raw + " (" +
                               std::to_string(new_text.size()) + " bytes)",

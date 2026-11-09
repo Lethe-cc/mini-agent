@@ -571,6 +571,11 @@ def main():
     approved_plain = strip_csi(approved)
     expect("[tool] write_file" in approved_plain and "ok" in approved_plain,
            "v3 approved tool row lands in history")
+    # v5 (design 011): after execution the applied diff echoes into the
+    # transcript (green added rows) right below the [tool] row -- the
+    # edit -> diff -> effect flow, distinct from the pre-approval preview.
+    expect("\x1b[32m+hello from approval" in approved,
+           "v5 applied diff echoes in transcript after execute")
     expect("tool said: created" in approved_plain or "tool said: wrote" in approved_plain,
            "v3 mock consumed the tool result (flow completed)")
     expect(os.path.exists(ws_dir + "/note.txt")
@@ -580,6 +585,17 @@ def main():
     cwd_out = read_all(afd, 2.5)
     expect("workspace: " in strip_csi(cwd_out),
            "v3 /cwd shows the session workspace")
+    # v5 (design 011): /preview shows a workspace file to the human without
+    # a model turn. note.txt is plain text (verbatim rows); escape the
+    # boundary must refuse.
+    os.write(afd, b"/preview note.txt\r")
+    prev_out = strip_csi(read_all(afd, 2.0))
+    expect("[preview] note.txt" in prev_out and "hello from approval" in prev_out,
+           "v5 /preview shows the file body")
+    os.write(afd, b"/preview ../../etc/passwd\r")
+    prev_esc = strip_csi(read_all(afd, 2.0))
+    expect("[error] /preview" in prev_esc and "escapes workspace" in prev_esc,
+           "v5 /preview refuses workspace escape")
     # v3.1 runtime approval switch: query shows current policy; switching
     # to off persists + warns; the NEXT tool call then runs WITHOUT an
     # approval block (status row carries the auto-tools marker instead).
