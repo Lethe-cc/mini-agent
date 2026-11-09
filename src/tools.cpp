@@ -138,10 +138,14 @@ std::optional<BashRequest> parse_bash_arguments(std::string_view arguments_json,
     return request;
 }
 
+// Shared head+tail truncation marker (cap_tool_output + BoundedOutputSink
+// must emit the identical byte sequence; design 008 5.2).
+constexpr std::string_view kOutputTruncationMarker = "\n[... output truncated ...]\n";
+
 std::string cap_tool_output(std::string_view text, std::size_t limit_bytes) {
     if (text.size() <= limit_bytes || limit_bytes < 64)
         return std::string(text);
-    const std::string marker = "\n[... output truncated ...]\n";
+    const std::string marker(kOutputTruncationMarker);
     const std::size_t half = (limit_bytes - marker.size()) / 2;
     std::string out;
     out.append(text.substr(0, half));
@@ -149,6 +153,75 @@ std::string cap_tool_output(std::string_view text, std::size_t limit_bytes) {
     out.append(text.substr(text.size() - half));
     return out;
 }
+
+namespace {
+// v4.17: bounded head+tail sink for run_subprocess (design 008 5.2 cap
+// semantics, byte-identical to cap_tool_output on the same stream). The
+// old loop could buffer 4x the cap of a runaway producer before trimming,
+// and its "stop appending, keep draining" branch silently dropped the
+// true tail -- exit-cascade errors live there. The sink holds at most
+// ~1.5x the cap (a verbatim prefix + a last-`half` ring) and the final
+// tail is always the real stream end.
+
+class BoundedOutputSink {
+  public:
+    // `limit_bytes` must be the same cap passed to cap_tool_output; below
+    // 64 the cap function returns text verbatim, so the sink mirrors that
+    // by buffering everything (degenerate mode) instead of ringing.
+    explicit BoundedOutputSink(std::size_t limit_bytes)
+        : limit_(limit_bytes),
+          degenerate_(limit_bytes < 64),
+          half_(degenerate_ ? limit_bytes : (limit_bytes - kOutputTruncationMarker.size()) / 2),
+          ring_(degenerate_ ? 1 : half_, '\0') {
+        prefix_.reserve(limit_bytes + 1024);
+    }
+    void append(std::string_view chunk) {
+        total_ += chunk.size();
+        if (degenerate_) {
+            prefix_.append(chunk); // tiny limit: cap_tool_output is verbatim anyway
+            return;
+        }
+        if (prefix_.size() < limit_) {
+            const std::size_t take = std::min(chunk.size(), limit_ - prefix_.size());
+            prefix_.append(chunk.data(), take);
+            chunk.remove_prefix(take);
+        }
+        for (std::size_t i = 0; i < chunk.size(); ++i) {
+            ring_[write_] = chunk[i];
+            write_ = (write_ + 1) % ring_.size();
+        }
+    }
+    std::string finish() const {
+        if (degenerate_ || total_ <= limit_)
+            return prefix_; // fits: verbatim, same as cap_tool_output
+        std::string out = prefix_.substr(0, half_);
+        out += kOutputTruncationMarker;
+        const std::size_t ring_cap = ring_.size();
+        const std::size_t ringed = total_ - limit_ > ring_cap ? ring_cap : total_ - limit_;
+        if (total_ - limit_ >= ring_cap) {
+            // Ring wrapped: last half bytes are the rotation from write_.
+            out.append(ring_, write_, ring_cap - write_);
+            out.append(ring_, 0, write_);
+        } else {
+            // Ring underfilled: the tail straddles prefix end and ring start.
+            const std::size_t tail_start = total_ - half_;
+            if (tail_start < limit_)
+                out.append(prefix_, tail_start, limit_ - tail_start);
+            out.append(ring_, 0, ringed);
+        }
+        return out;
+    }
+
+  private:
+    std::size_t limit_ = 0;
+    bool degenerate_ = false;
+    std::size_t half_ = 0;
+    std::string prefix_;
+    std::string ring_; // circular last-half buffer (may be size 1 in degenerate mode)
+    std::size_t write_ = 0;
+    std::size_t total_ = 0;
+};
+} // namespace
 
 std::string sanitize_display(std::string_view text) {
     std::string out;
@@ -255,7 +328,7 @@ ToolResult run_subprocess(const SubprocessSpec& spec, const ShouldAbort& should_
 
     // Non-blocking read loop with deadline; poll gives us abort/timeout
     // granularity without busy waiting.
-    std::string output;
+    BoundedOutputSink output(limit);
     bool timed_out = false;
     bool aborted = false;
     struct timespec deadline{};
@@ -285,9 +358,10 @@ ToolResult run_subprocess(const SubprocessSpec& spec, const ShouldAbort& should_
             for (;;) {
                 const ssize_t got = ::read(pipe_fds[0], buffer, sizeof(buffer));
                 if (got > 0) {
-                    output.append(buffer, static_cast<std::size_t>(got));
-                    if (output.size() > limit * 4)
-                        break; // runaway: rely on the cap below, keep draining
+                    // v4.17: the sink is bounded -- a runaway producer can
+                    // no longer balloon memory or silently drop the tail,
+                    // so this loop always drains to EAGAIN/EOF.
+                    output.append(std::string_view(buffer, static_cast<std::size_t>(got)));
                 } else if (got == 0) {
                     break; // EOF
                 } else if (errno != EAGAIN && errno != EINTR) {
@@ -300,8 +374,9 @@ ToolResult run_subprocess(const SubprocessSpec& spec, const ShouldAbort& should_
         if (pr > 0 && (pfd.revents & POLLHUP) && !(pfd.revents & POLLIN)) {
             // Drain then let the reaper below notice the exit.
             char buffer[4096];
-            while (::read(pipe_fds[0], buffer, sizeof(buffer)) > 0) {
-                output.append(buffer);
+            ssize_t got = 0;
+            while ((got = ::read(pipe_fds[0], buffer, sizeof(buffer))) > 0) {
+                output.append(std::string_view(buffer, static_cast<std::size_t>(got)));
             }
         }
         const pid_t r = ::waitpid(pid, &status, WNOHANG);
@@ -309,8 +384,9 @@ ToolResult run_subprocess(const SubprocessSpec& spec, const ShouldAbort& should_
             reaped = true;
             // Final drain of whatever the child flushed before exit.
             char buffer[4096];
-            while (::read(pipe_fds[0], buffer, sizeof(buffer)) > 0) {
-                output.append(buffer);
+            ssize_t got = 0;
+            while ((got = ::read(pipe_fds[0], buffer, sizeof(buffer))) > 0) {
+                output.append(std::string_view(buffer, static_cast<std::size_t>(got)));
             }
             break;
         }
@@ -334,7 +410,7 @@ ToolResult run_subprocess(const SubprocessSpec& spec, const ShouldAbort& should_
                               "s; process group killed",
                           true};
     }
-    auto capped = cap_tool_output(output, limit);
+    auto capped = output.finish(); // same head+tail bytes as cap_tool_output
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
         return ToolResult{capped.empty() ? std::string("(no output)") : capped, false};
     }

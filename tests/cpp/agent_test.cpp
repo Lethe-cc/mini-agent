@@ -16,6 +16,7 @@
 #include "mini_agent/chat.hpp"
 #include "mini_agent/config.hpp"
 #include "mini_agent/diff.hpp"
+#include "mini_agent/highlight.hpp"
 #include "mini_agent/log.hpp"
 #include "mini_agent/loop.hpp"
 #include "mini_agent/mcp.hpp"
@@ -25,6 +26,7 @@
 #include "mini_agent/session.hpp"
 #include "mini_agent/tools.hpp"
 #include "mini_agent/tui.hpp"
+#include "mini_agent/tui_bridge.hpp"
 
 namespace {
 
@@ -698,6 +700,92 @@ void test_md4c_gfm_extensions() {
     check(mini_agent::md::render("", 80).empty(), "empty input safe");
 }
 
+void test_highlight() {
+    using namespace mini_agent;
+    // Language mapping: paths, fences, aliases, unknowns stay empty.
+    check(hl::language_for_path("src/a.cpp") == "cpp", "path .cpp -> cpp");
+    check(hl::language_for_path("x/y.py") == "py", "path .py -> py");
+    check(hl::language_for_path("run.sh") == "sh", "path .sh -> sh");
+    check(hl::language_for_path("data.json") == "json", "path .json -> json");
+    check(hl::language_for_path("App.tsx") == "js", "path .tsx -> js");
+    check(hl::language_for_path("README.md").empty(), "markdown not a code lang");
+    check(hl::language_for_path("a.dir/file").empty(), "dir dot is not an extension");
+    check(hl::language_for_fence("python") == "py", "fence alias");
+    check(hl::language_for_fence("C++") == "cpp", "fence case-insensitive");
+    check(hl::language_for_fence("jsonc").empty() || hl::language_for_fence("jsonc") == "json",
+          "fence jsonc resolves");
+    check(hl::language_for_fence("brainfuck").empty(), "unknown fence empty");
+
+    auto lit = [&](const std::string& line, const std::string& lang) {
+        hl::State st;
+        return hl::highlight_line(line, lang, st);
+    };
+    // cpp: keyword cyan, call blue, comment dim, string green, preproc yellow.
+    const auto cpp = lit("int main() { return 0; }", "cpp");
+    check(cpp.find("\x1b[36mint\x1b[0m") != std::string::npos, "cpp keyword cyan");
+    check(cpp.find("\x1b[34mmain\x1b[0m") != std::string::npos, "cpp call name blue");
+    check(cpp.find("\x1b[35m0\x1b[0m") != std::string::npos, "cpp number magenta");
+    check(lit("int x; // note", "cpp").find("\x1b[2m// note") != std::string::npos,
+          "cpp line comment dim");
+    check(lit("#include <x>", "cpp").rfind("\x1b[33m#", 0) == 0, "cpp preproc yellow line-wide");
+    check(lit("s = \"hi\";", "cpp").find("\x1b[32m\"hi\"") != std::string::npos,
+          "cpp string green");
+
+    // python: triple quote + comment + keyword.
+    check(lit("# c", "py").find("\x1b[2m# c") != std::string::npos, "py comment");
+    check(lit("def f():", "py").find("\x1b[36mdef\x1b[0m") != std::string::npos, "py def keyword");
+
+    // shell: variable expansion yellow, keyword.
+    const auto sh = lit("echo $HOME", "sh");
+    check(sh.find("\x1b[33m$HOME\x1b[0m") != std::string::npos, "sh var yellow");
+    check(lit("for x in 1 2; do :; done", "sh").find("\x1b[36mfor\x1b[0m") != std::string::npos,
+          "sh keyword");
+
+    // json: key vs value vs literal.
+    const auto js = lit(R"({"a": 1, "b": "s", "c": null})", "json");
+    check(js.find("\x1b[34m\"a\"") != std::string::npos, "json key blue");
+    check(js.find("\x1b[36mnull\x1b[0m") != std::string::npos, "json literal keyword");
+
+    // Unknown language and empty pass through unchanged.
+    check(lit("plain text", "").find('\x1b') == std::string::npos, "empty lang passthrough");
+    check(lit("x", "brainfuck").find('\x1b') == std::string::npos, "unknown lang passthrough");
+
+    // SGR spans are zero-width to md::wrap: highlighted rows still respect
+    // the column invariant (the TUI commit path relies on it).
+    hl::State st;
+    const auto long_line = hl::highlight_line(
+        "static const std::string keyword = \"a very long string value here\"", "cpp", st);
+    bool fits = true;
+    for (const auto& row : md::wrap(long_line, 20)) {
+        if (md::display_width(row) > 20)
+            fits = false;
+    }
+    check(fits, "highlighted text wraps within cols (SGR zero-width)");
+    // Balanced resets: no SGR survives end of line.
+    check(long_line.rfind("\x1b[0m") == long_line.size() - 4, "highlight closes every span");
+    // Cross-line block comment carries.
+    hl::State cs;
+    const auto c1 = hl::highlight_line("/* open", "cpp", cs);
+    const auto c2 = hl::highlight_line("still comment */ int x;", "cpp", cs);
+    check(c1.find("\x1b[2m") != std::string::npos, "block comment opens dim");
+    check(c2.find("\x1b[2m") != std::string::npos && c2.find("\x1b[36mint") != std::string::npos,
+          "block comment closes mid-line, code resumes");
+    check(cs.open == 0, "state returns to normal after close");
+}
+
+void test_highlight_in_render() {
+    using namespace mini_agent;
+    // md::render highlights recognized fences, leaves unknown fences dim.
+    const auto code = md::render("```cpp\nint x = 1; // c\n```\n", 60);
+    check(code.find("\x1b[36mint\x1b[0m") != std::string::npos, "fence highlights keyword");
+    const auto plain = md::render("```\nint x = 1;\n```\n", 60);
+    check(plain.find("\x1b[2m") != std::string::npos &&
+              plain.find("\x1b[36mint\x1b[0m") == std::string::npos,
+          "plain fence stays dim (no highlight)");
+    // inline code is unchanged (not a fence body).
+    check(md::render("`code`", 60).find("\x1b[7m") != std::string::npos, "inline code inverse");
+}
+
 void test_tui_helpers() {
     // slash registry & prefix matching
     auto matches = mini_agent::tui::slash_matches("/s");
@@ -1333,6 +1421,19 @@ void test_run_bash_and_helpers() {
               big.text.find("truncated") != std::string::npos && big.text.front() == 'A' &&
               big.text.back() == 'B',
           "runaway output truncated head+tail");
+
+    // v4.17 (BoundedOutputSink): >4x the cap used to break the old
+    // "stop appending, keep draining" loop -- the true stream tail (where
+    // exit errors live) was silently dropped. The sink keeps the REAL
+    // last bytes regardless of total volume.
+    const auto huge = runtime.call(
+        ToolCall{"1", "run_bash",
+                 R"J({"command":"printf 'A%.0s' $(seq 1 200000); printf ENDING"})J"},
+        [] { return false; });
+    check(!huge.is_error && huge.text.size() < 40000 &&
+              huge.text.find("truncated") != std::string::npos &&
+              huge.text.compare(huge.text.size() - 6, 6, "ENDING") == 0,
+          "over-4x output keeps the true tail (ring buffer)");
 
     // cap_tool_output pure helper
     check(cap_tool_output("short", 1024) == "short", "short text untouched");
@@ -2572,6 +2673,102 @@ void test_v44_debug_log() {
     check(!cfg.to_provider().debug_aux, "info -> provider aux off");
 }
 
+// v4.17 (008 D4): TurnBridge worker<->UI handoff, unit-tested WITHOUT a
+// pty -- two threads drive the exact protocol tui.cpp runs, so regressions
+// in the approval sequence / delta buffer / tool queue are caught here
+// instead of only in tests/pty_tui_smoke.py.
+void test_v417_turn_bridge() {
+    using namespace mini_agent;
+    using namespace mini_agent::tui;
+    TurnBridge bridge;
+
+    // deltas: concurrent appends from a worker thread must all land
+    {
+        std::atomic<bool> stop{false};
+        std::thread worker([&] {
+            for (int i = 0; i < 500 && !stop.load(); ++i)
+                bridge.append_delta("x");
+        });
+        std::string seen;
+        while (seen.size() < 500) {
+            seen = bridge.deltas_snapshot();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        stop = true;
+        worker.join();
+        check(seen.size() >= 500 && seen.find_first_not_of('x') == std::string::npos,
+              "deltas accumulate append-only across threads");
+        bridge.reset_turn();
+        check(bridge.deltas_snapshot().empty(), "reset_turn clears deltas");
+    }
+
+    // tool queue: push under worker, drain under main, running_tool atomic
+    {
+        ToolRound r1;
+        r1.tool_name = "a";
+        ToolRound r2;
+        r2.tool_name = "b";
+        bridge.set_running_tool("[tool] b [running]");
+        check(bridge.running_tool() == "[tool] b [running]", "running_tool readable");
+        bridge.finish_running_tool(std::move(r1));
+        check(bridge.running_tool().empty(), "finish clears running_tool");
+        bridge.push_tool_event(std::move(r2));
+        auto batch = bridge.drain_tool_events();
+        check(batch.size() == 2 && batch[0].tool_name == "a" && batch[1].tool_name == "b",
+              "drain returns FIFO and empties the queue");
+        check(bridge.drain_tool_events().empty(), "second drain is empty");
+    }
+
+    // approval protocol: worker publishes+waits, main answers via keys
+    {
+        check(!bridge.approval_pending(), "no pending approval initially");
+        ToolCall call{"c1", "git_commit", R"({"message":"x"})"};
+        unsigned long long seq = bridge.publish_approval(call, "diff-preview");
+        check(bridge.approval_pending(), "publish makes the request pending");
+        check(bridge.approval_call().name == "git_commit", "call snapshot readable");
+        check(bridge.approval_preview() == "diff-preview", "preview readable");
+        check(bridge.approval_waited_s() >= 0, "countdown stamps publish time");
+        std::atomic<int> worker_answer{-1};
+        std::thread worker([&] {
+            auto w = bridge.wait_approval(seq, 5, [] { return false; });
+            worker_answer = bridge.approval_answer(seq);
+            check(w == ApprovalWait::Answer, "worker observes the answer");
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        bridge.answer_approval(1); // allow
+        worker.join();
+        check(worker_answer.load() == 1, "allow value crosses the boundary");
+        check(!bridge.approval_pending(), "answered request is no longer pending");
+    }
+
+    // timeout branch: tiny injectable budget returns Timeout, and the
+    // un-answered value reads as deny (the tui.cpp denial-round contract)
+    {
+        unsigned long long seq = bridge.publish_approval(ToolCall{"t", "x", "{}"}, "");
+        std::thread worker([&] {
+            auto w = bridge.wait_approval(seq, 0, [] { return false; });
+            check(w == ApprovalWait::Timeout, "zero budget times out immediately");
+            check(bridge.approval_answer(seq) == 2,
+                  "un-answered approval reads as deny");
+        });
+        worker.join();
+        bridge.answer_approval(2); // close the sequence for the next test
+    }
+
+    // abort branch: an abort flag raises without an answer -> Aborted
+    {
+        unsigned long long seq = bridge.publish_approval(ToolCall{"t", "x", "{}"}, "");
+        std::thread worker([&] {
+            auto w = bridge.wait_approval(seq, 30, [] { return true; });
+            check(w == ApprovalWait::Aborted, "abort flag exits the wait");
+            check(bridge.approval_answer(seq) == 2,
+                  "abort without answer reads as deny");
+        });
+        worker.join();
+        bridge.answer_approval(2);
+    }
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -2589,6 +2786,8 @@ int main() {
     test_logger();
     test_md_width_and_wrap();
     test_md_render_subset();
+    test_highlight();
+    test_highlight_in_render();
     test_md4c_gfm_extensions();
     test_tui_helpers();
     test_tool_ui_helpers();
@@ -2616,6 +2815,7 @@ int main() {
     test_v410_arg_completion();
     test_v411_turn_panel();
     test_v44_debug_log();
+    test_v417_turn_bridge();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

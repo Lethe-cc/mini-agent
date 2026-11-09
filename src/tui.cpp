@@ -7,6 +7,9 @@
 // composer, status) is redrawn in place. No alternate screen, no full diff.
 #include "mini_agent/tui.hpp"
 
+#include "mini_agent/highlight.hpp"
+#include "mini_agent/tui_bridge.hpp"
+
 #include "mini_agent/log.hpp"
 #include "mini_agent/loop.hpp"
 #include "mini_agent/mcp.hpp"
@@ -91,26 +94,9 @@ int term_rows() {
     return 24;
 }
 
-// ---- delta buffer: worker appends, main drains per frame (5.6 rule 1) ----
-class DeltaBuffer {
-  public:
-    void append(std::string_view delta) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        text_.append(delta);
-    }
-    std::string snapshot() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return text_;
-    }
-    void clear() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        text_.clear();
-    }
-
-  private:
-    std::mutex mutex_;
-    std::string text_;
-};
+// ---- delta buffer / tool events / approvals: worker<->UI handoff now
+// lives in tui::TurnBridge (tui_bridge.hpp, v4.17) so agent_test can
+// exercise the thread boundary without a pty (008 D4). ----
 
 struct TurnResult {
     bool ok = false;
@@ -715,13 +701,15 @@ std::string tint_diff_line(std::string_view line, bool colors) {
 
 // v5 (design 011): transcript block echoing what a file tool actually
 // did AFTER execution -- the applied diff (write_file/edit_file) or the
-// file body (preview_file; Markdown rendered). Committed right after the
-// [tool] activity line so the user sees edit -> diff -> effect in one
-// flow. Producer-styled rows (carry SGR) pass commit()'s classifier
-// untouched, same contract as markdown replies.
+// file body (preview_file; Markdown rendered, code highlighted). Committed
+// right after the [tool] activity line so the user sees edit -> diff ->
+// effect in one flow. Producer-styled rows (carry SGR) pass commit()'s
+// classifier untouched, same contract as markdown replies.
+// `lang` non-empty = highlight the plain body with that language lexer;
+// `is_markdown` takes precedence. Diff bodies use the shared colour map.
 std::vector<std::string> result_preview_rows(const std::string& tool_name,
                                              const std::string& preview, bool is_markdown,
-                                             std::size_t cols) {
+                                             const std::string& lang, std::size_t cols) {
     std::vector<std::string> rows;
     if (preview.empty())
         return rows;
@@ -733,6 +721,23 @@ std::vector<std::string> result_preview_rows(const std::string& tool_name,
         std::istringstream stream(rendered);
         while (std::getline(stream, line))
             rows.push_back(line.empty() ? std::string(" ") : line);
+        return rows;
+    }
+    if (!lang.empty()) {
+        // v5 5.6: code preview with per-line syntax highlighting (SGR
+        // spans are zero-width to md::wrap; the sanitizer already ran).
+        rows.push_back(tint(colors, "36", "[preview] " + sanitize_display(tool_name)));
+        std::string line;
+        std::istringstream stream(preview);
+        hl::State state;
+        std::size_t shown = 0;
+        while (std::getline(stream, line) && shown < 200) {
+            const auto lit = hl::highlight_line(sanitize_display(line), lang, state);
+            rows.push_back(line.empty() ? std::string(colors ? lit : " ") : lit);
+            ++shown;
+        }
+        if (!stream.eof())
+            rows.push_back(tint(colors, "2", "  ... truncated (200 lines)"));
         return rows;
     }
     // Diff body: shared colour map, capped so a huge write cannot flood
@@ -1344,56 +1349,6 @@ std::chrono::steady_clock::time_point steady_now() {
 
 } // namespace
 
-namespace {
-
-// One decided tool invocation parked for the main thread (worker -> UI
-// handoff: rounds are committed to history only on the main thread, same
-// rule as models_result/deltas -- 5.6 rule 1).
-struct ToolRound {
-    std::string tool_name;
-    std::string arguments_json;
-    bool executed = false;
-    bool is_error = false;
-    long long elapsed_ms = 0;
-    std::size_t result_bytes = 0;
-    bool approval_timeout = false;
-    // v5 (design 011): post-execution human preview staged by the worker
-    // (applied diff for file writes / body for preview_file). Plain text,
-    // unsanitized; the UI thread styles it when committing the block.
-    std::string result_preview;
-    // Set when the preview should render as Markdown (preview_file on a
-    // .md/.markdown file) rather than as a diff.
-    bool preview_is_markdown = false;
-};
-
-// Auto-deny budget for one approval request (design 008 section 5.4): the
-// worker waits this long for a keypress before denying. The last third of
-// the budget renders as a countdown in the status line (v4.17), so a user
-// returning to the terminal still gets a chance to answer.
-constexpr long long kApprovalTimeoutS = 120;
-constexpr long long kApprovalWarnAtS = 90;
-
-// Fixed approval slot (no dynamic ownership races): the worker fills the
-// call fields, publishes request_seq, and waits for answer_seq to catch
-// up. The main thread reads/writes only through the sequence numbers, so
-// the object never moves and no pointer can dangle.
-struct ApprovalSlot {
-    std::mutex mutex; // guards `call` payload writes
-    ToolCall call;    // valid between request and answer
-    // v3 (design 009 5.3): pre-computed diff preview for write-side tools,
-    // written under the same mutex BEFORE request_seq publishes, so the UI
-    // thread never sees a pending approval without its preview settled.
-    std::string preview;
-    std::atomic<unsigned long long> request_seq{0};
-    std::atomic<unsigned long long> answer_seq{0};
-    std::atomic<int> answer{0}; // 1 allow, 2 deny, 3 allow-session
-    // Steady-clock ms of the publish that opened this request (worker
-    // writes before request_seq, main reads per frame for the countdown).
-    std::atomic<long long> published_at_ms{0};
-};
-
-} // namespace
-
 // ---------------------------------------------------------------- main loop
 
 int run_loop(AppConfig& config, Session& session, SessionStore& store, const TuiOptions& options) {
@@ -1405,7 +1360,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         const int c = term_columns();
         return c > 0 ? static_cast<std::size_t>(c) : 80u;
     };
-    DeltaBuffer deltas;
+    TurnBridge bridge;
     std::atomic<bool> abort_requested{false};
     std::atomic<bool> turn_done{false};
     bool exiting{false};
@@ -1583,12 +1538,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // v2 tool layer (design 008 section 5.4): registry, approval bridge.
     std::string tool_note;
     auto tool_registry = build_tool_registry(config, &tool_note);
-    std::mutex tool_mutex;
-    std::vector<ToolRound> tool_events;
     // v4.11 turn panel (design 010 §21): live process rows during a turn.
-    // `running_tool` is set by on_tool_start (worker thread, under
-    // tool_mutex) and cleared by on_tool; `reasoning_live` is set by the
-    // SSE parser the first time a reasoning delta arrives this turn.
+    // `running_tool` is set by on_tool_start (worker thread) and cleared
+    // by on_tool -- both through TurnBridge's tool queue; `reasoning_live`
+    // is set by the SSE parser the first time a reasoning delta arrives.
     bool show_sysinfo = true; // v4.12: /sysinfo on|off toggle
     // v4.13: right sidebar (workspace tree + changed files). Data comes
     // from a short-lived worker (fs walk + `git status --porcelain`): the
@@ -1612,13 +1565,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // into rows/paths; navigation skips non-selectable entries.
     bool sidebar_focus = false;
     std::size_t sidebar_sel = 0;
-    std::string running_tool;
     std::atomic<bool> reasoning_live{false};
     // Completed tool rows for THIS turn, kept for the panel even after
     // drain_tool_events commits them to history (the panel is the turn's
     // process view; history scrolls away).
     std::vector<std::string> panel_tool_rows;
-    ApprovalSlot approval_slot;
     std::atomic<bool> approval_abort{false};
     bool approval_expanded = false;
     std::set<std::string> session_allowed_tools;
@@ -1642,19 +1593,15 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             {"builtin", tool_registry->empty() ? "no" : "yes"}});
 
     auto drain_tool_events = [&] {
-        std::vector<ToolRound> batch;
-        {
-            std::lock_guard<std::mutex> lock(tool_mutex);
-            batch.swap(tool_events);
-        }
-        for (const auto& round : batch) {
+        for (const auto& round : bridge.drain_tool_events()) {
             screen.commit(tool_activity_line(round.tool_name, round.arguments_json, round.executed,
                                              round.is_error, round.elapsed_ms, round.result_bytes));
             // v5 (design 011): echo the applied diff / preview body right
             // after the activity row -- edit -> diff -> effect in one
             // transcript flow.
-            for (const auto& row : result_preview_rows(round.tool_name, round.result_preview,
-                                                       round.preview_is_markdown, cols_now()))
+            for (const auto& row :
+                 result_preview_rows(round.tool_name, round.result_preview,
+                                     round.preview_is_markdown, round.preview_lang, cols_now()))
                 screen.commit(row);
             // v4.11: the panel keeps the whole turn's rows (history scrolls).
             panel_tool_rows.push_back(tool_activity_line(round.tool_name, round.arguments_json,
@@ -1665,13 +1612,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     };
 
     auto approval_pending = [&] {
-        return approval_slot.request_seq.load() != approval_slot.answer_seq.load();
+        return bridge.approval_pending();
     };
     // Answer the pending approval with the UI key semantics (008 5.4):
     // y allow once, n deny, a allow-name for the session, Esc/Ctrl-C deny.
     auto answer_approval = [&](int key) {
-        std::lock_guard<std::mutex> lock(approval_slot.mutex);
-        ToolCall call = approval_slot.call; // snapshot under the slot mutex
+        ToolCall call = bridge.approval_call(); // snapshot under the slot mutex
         int answer = 2;
         bool handled = true;
         switch (key) {
@@ -1697,8 +1643,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         }
         if (!handled)
             return;
-        approval_slot.answer.store(answer);
-        approval_slot.answer_seq.store(approval_slot.request_seq.load());
+        bridge.answer_approval(answer);
         logger->event("tool_approve",
                       {{"tool", call.name},
                        {"decision", answer == 1 ? "allow" : (answer == 3 ? "session" : "deny")}});
@@ -1709,15 +1654,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             worker.join();
         config_snapshot = config; // refresh after join, before worker start
         last_user = text;
-        deltas.clear();
+        bridge.reset_turn();
         abort_requested = false;
         turn_done = false;
         result = TurnResult{};
-        {
-            std::lock_guard<std::mutex> lock(tool_mutex);
-            tool_events.clear();
-            running_tool.clear();
-        }
         reasoning_live = false; // v4.11 panel evidence belongs to the new turn
         panel_tool_rows.clear();
         approval_abort = false;
@@ -1738,10 +1678,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             auto provider_config = turn_config.to_provider();
             provider_config.reasoning_live = &reasoning_live; // v4.11 panel
             OpenAiProvider provider(std::move(provider_config));
-            Chat outgoing;
-            for (const auto& m : session.chat.messages())
-                outgoing.add(Message{m});
-            outgoing.add(Message{user_msg});
+            // v4.17: the old second deep copy (`Chat outgoing`) was dead
+            // code -- run_turn builds and commits its own `turn_chat`
+            // below; one snapshot per turn is the thread boundary.
             TurnResult r;
             // Snapshot of the shared control state for this turn's tools
             // (thread-boundary discipline mirrors turn_config; the TUI
@@ -1763,48 +1702,28 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 if (auto_run || session_allowed_tools.count(call.name) != 0)
                     return Approval::Allow;
                 unsigned long long seq = 0;
-                {
-                    std::lock_guard<std::mutex> lock(approval_slot.mutex);
-                    approval_slot.call = call;
-                    // v3: compute the diff preview on the worker thread
-                    // (registry preview honors the same single-owner
-                    // contract as list/call) and arm the runtime's race
-                    // guard -- both inside the mutex, before publish.
-                    approval_slot.preview = registry ? registry->preview(call) : std::string();
-                    // v4.17: countdown source for the UI warning; steady
-                    // ms since epoch, published before request_seq so the
-                    // frame loop can never read a stale stamp.
-                    approval_slot.published_at_ms.store(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch())
-                            .count());
-                    seq = approval_slot.request_seq.load() + 1;
-                    approval_slot.request_seq.store(seq); // publish (call set first)
+                // v3: compute the diff preview on the worker thread
+                // (registry preview honors the same single-owner
+                // contract as list/call) and arm the runtime's race
+                // guard -- both before publish. publish_approval stamps
+                // the countdown source and publishes request_seq (v4.17:
+                // protocol lives in TurnBridge).
+                seq = bridge.publish_approval(
+                    call, registry ? registry->preview(call) : std::string());
+                const auto wait =
+                    bridge.wait_approval(seq, kApprovalTimeoutS, [&] {
+                        return abort_requested.load();
+                    });
+                if (wait == ApprovalWait::Timeout) { // never block the worker forever
+                    ToolRound timeout_round;
+                    timeout_round.tool_name = call.name;
+                    timeout_round.arguments_json = call.arguments_json;
+                    timeout_round.executed = false;
+                    timeout_round.is_error = true;
+                    timeout_round.approval_timeout = true;
+                    bridge.push_tool_event(std::move(timeout_round));
                 }
-                const auto wait_start = std::chrono::steady_clock::now();
-                int answer = 0;
-                while (approval_slot.answer_seq.load() != seq) {
-                    if (abort_requested.load())
-                        break;
-                    const auto waited = std::chrono::duration_cast<std::chrono::seconds>(
-                                            std::chrono::steady_clock::now() - wait_start)
-                                            .count();
-                    if (waited >= kApprovalTimeoutS) { // never block the worker forever
-                        std::lock_guard<std::mutex> lock(tool_mutex);
-                        ToolRound timeout_round;
-                        timeout_round.tool_name = call.name;
-                        timeout_round.arguments_json = call.arguments_json;
-                        timeout_round.executed = false;
-                        timeout_round.is_error = true;
-                        timeout_round.approval_timeout = true;
-                        tool_events.push_back(std::move(timeout_round));
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                }
-                answer = abort_requested.load() && approval_slot.answer_seq.load() != seq
-                             ? 2
-                             : approval_slot.answer.load();
+                const int answer = bridge.approval_answer(seq);
                 switch (answer) {
                 case 1:
                     return Approval::Allow;
@@ -1825,12 +1744,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 // v4.11: panel shows the call as running until on_tool
                 // lands (approval-gated calls fire this only after the
                 // approve decision, denied calls never fire it).
-                std::lock_guard<std::mutex> lock(tool_mutex);
-                running_tool = "[tool] " + sanitize_display(call.name) +
-                               (tool_arg_summary(call.arguments_json).empty()
-                                    ? std::string()
-                                    : " · " + tool_arg_summary(call.arguments_json)) +
-                               " [running]";
+                bridge.set_running_tool("[tool] " + sanitize_display(call.name) +
+                                        (tool_arg_summary(call.arguments_json).empty()
+                                             ? std::string()
+                                             : " · " + tool_arg_summary(call.arguments_json)) +
+                                        " [running]");
             };
             turn_options.on_tool = [&](const ToolCall& call, const ToolResult& tool_result,
                                        bool executed) {
@@ -1856,18 +1774,21 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             args.is_object() && args.contains("path") && args["path"].is_string()
                                 ? args["path"].get<std::string>()
                                 : std::string();
-                        for (auto& c : path)
+                        std::string lower = path;
+                        for (auto& c : lower)
                             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
                         const auto ends = [&](std::string_view suf) {
-                            return path.size() >= suf.size() &&
-                                   path.compare(path.size() - suf.size(), suf.size(), suf) == 0;
+                            return lower.size() >= suf.size() &&
+                                   lower.compare(lower.size() - suf.size(), suf.size(), suf) == 0;
                         };
                         round.preview_is_markdown = ends(".md") || ends(".markdown");
+                        // v5 5.6: non-markdown recognized code files
+                        // highlight; markdown takes precedence above.
+                        if (!round.preview_is_markdown)
+                            round.preview_lang = hl::language_for_path(path);
                     }
                 }
-                std::lock_guard<std::mutex> lock(tool_mutex);
-                running_tool.clear(); // v4.11: the row lands in tool_events
-                tool_events.push_back(std::move(round));
+                bridge.finish_running_tool(std::move(round));
             };
             // v4: run_turn writes here only on a successful turn; the
             // worker copies it into `result` (join-then-read discipline).
@@ -1876,19 +1797,21 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             ActualReasoning turn_reasoning; // v4.2
             turn_options.reasoning_out = &turn_reasoning;
             try {
-                // Run the (possibly multi-round) turn on a detached copy:
-                // run_turn commits the whole turn to its Chat only on
-                // success; on error we discard the copy, so session.chat
-                // stays at the previous turn boundary exactly as in v1
-                // (5.6 rule: errors never reach storage; 008 section 4).
-                Chat turn_chat;
-                for (const auto& m : session.chat.messages())
-                    turn_chat.add(Message{m});
+                // v4.17 (copy-on-write thread boundary): run_turn takes
+                // the stored chat by reference and commits the whole turn
+                // to it ONLY on success -- the loop's internal staging
+                // copy is the error isolation (5.6 rule: failures never
+                // reach history; 008 section 4). The worker's former deep
+                // copy of the entire history was redundant defense and
+                // made every turn O(chat) twice; the CLI path already
+                // passes session.chat directly. Main-thread reads of the
+                // chat during the turn are gated exactly as before: the
+                // only writer window is the commit at turn end, and the
+                // same-turn success write happened in the old design too.
                 r.reply = run_turn(
-                    turn_chat, provider, user_msg.content,
-                    [&](std::string_view d) { deltas.append(d); },
+                    session.chat, provider, user_msg.content,
+                    [&](std::string_view d) { bridge.append_delta(d); },
                     [&] { return abort_requested.load(); }, turn_options);
-                session.chat = std::move(turn_chat);
                 r.usage = turn_usage;
                 r.reasoning = turn_reasoning;
                 r.ok = true;
@@ -2168,11 +2091,20 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             while (std::getline(pr, pline))
                 screen.commit(pline.empty() ? std::string(" ") : pline);
         } else {
+            // v5 (design 011 5.6): recognized code files highlight; colors
+            // gate like every other styled path.
+            const auto lang = hl::language_for_path(path_raw);
+            const bool lit = !lang.empty() && colors_enabled();
             std::string pline;
             std::istringstream pr(body);
+            hl::State hstate;
             std::size_t shown = 0;
             while (std::getline(pr, pline) && shown < 500) {
-                screen.commit("  " + sanitize_display(pline));
+                const auto safe = sanitize_display(pline);
+                if (lit)
+                    screen.commit(hl::highlight_line(safe, lang, hstate));
+                else
+                    screen.commit("  " + safe);
                 ++shown;
             }
             if (!pr.eof())
@@ -3336,18 +3268,15 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto cols = static_cast<std::size_t>(term_columns());
             drain_tool_events();                 // [tool] rows land in history as they arrive
             std::vector<std::string> extra_rows; // approval block when pending
-            const std::string tail = streaming ? deltas.snapshot() : std::string{};
+            const std::string tail = streaming ? bridge.deltas_snapshot() : std::string{};
             // v4.11 turn panel: while streaming, the extra-rows slot shows
             // the process (thinking marker + tool rows incl. the running
             // call). Approval rows keep priority when a decision is pending
             // (the pending call IS the process at that moment).
             if (streaming && !approval_pending()) {
                 std::vector<std::string> panel_tools = panel_tool_rows;
-                {
-                    std::lock_guard<std::mutex> lock(tool_mutex);
-                    if (!running_tool.empty())
-                        panel_tools.push_back(running_tool);
-                }
+                if (const auto running = bridge.running_tool(); !running.empty())
+                    panel_tools.push_back(running);
                 const bool thinking = reasoning_live.load(std::memory_order_relaxed);
                 const auto secs =
                     std::chrono::duration_cast<std::chrono::seconds>(steady_now() - turn_start)
@@ -3430,31 +3359,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // streaming/approval messages keep their established position.
             status += status_usage_segments(sc, context_reading());
             if (approval_pending()) {
-                unsigned long long seq = approval_slot.request_seq.load();
-                ToolCall snapshot;
-                std::string snapshot_preview;
-                {
-                    std::lock_guard<std::mutex> lock(approval_slot.mutex);
-                    (void)seq;
-                    snapshot = approval_slot.call;
-                    snapshot_preview = approval_slot.preview;
-                }
+                const ToolCall snapshot = bridge.approval_call();
+                const std::string snapshot_preview = bridge.approval_preview();
                 status += tint(sc, "1;33", " · AWAITING APPROVAL");
                 // v4.17: after 90 s of the 120 s auto-deny budget, show the
                 // remaining seconds. The line changes once per second, which
                 // naturally busts render()'s input cache (no per-frame
                 // repaint otherwise).
-                const long long pub_ms = approval_slot.published_at_ms.load();
-                if (pub_ms > 0) {
-                    const long long now_ms =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch())
-                            .count();
-                    const long long waited_s = (now_ms - pub_ms) / 1000;
-                    if (waited_s >= kApprovalWarnAtS) {
-                        const long long left = std::max<long long>(0, kApprovalTimeoutS - waited_s);
-                        status += tint(sc, "1;31", " · auto-deny in " + std::to_string(left) + "s");
-                    }
+                if (const long long waited_s = bridge.approval_waited_s();
+                    waited_s >= kApprovalWarnAtS) {
+                    const long long left = std::max<long long>(0, kApprovalTimeoutS - waited_s);
+                    status += tint(sc, "1;31", " · auto-deny in " + std::to_string(left) + "s");
                 }
                 extra_rows = approval_rows(snapshot.name, snapshot.arguments_json,
                                            approval_expanded, snapshot_preview);
