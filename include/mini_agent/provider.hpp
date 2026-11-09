@@ -219,6 +219,14 @@ class OpenAiProvider final : public Provider {
   public:
     explicit OpenAiProvider(ProviderConfig config) : config_(std::move(config)) {
     }
+    // One libcurl easy handle lives as long as the provider: every request
+    // in a turn (SSE chat rounds, probe POSTs) reuses the same handle, so
+    // TCP+TLS connections persist across tool rounds. libcurl handles are
+    // NOT thread-safe, but a provider is constructed and used inside one
+    // thread only (TUI worker / CLI main), matching the existing contract.
+    OpenAiProvider(const OpenAiProvider&) = delete;
+    OpenAiProvider& operator=(const OpenAiProvider&) = delete;
+    ~OpenAiProvider() override;
     std::string complete(const Chat& chat, const std::function<void(std::string_view)>& on_delta,
                          const ShouldAbort& should_abort) override;
     // Tool-aware path: request body carries the `tools` array when
@@ -237,7 +245,12 @@ class OpenAiProvider final : public Provider {
     ProbeOutcome probe_context_window() override;
 
   private:
+    // Opaque CURL* (the header stays curl-free). Lazily created on the
+    // first request, reused by all later requests, freed in the dtor.
+    void* curl_handle() noexcept;
+
     ProviderConfig config_;
+    void* curl_ = nullptr;
 };
 
 } // namespace mini_agent

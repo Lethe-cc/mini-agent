@@ -89,6 +89,11 @@ struct McpToolInfo {
 // `ensure_started()` runs transport start + initialize + initialized on
 // first use (cold-start guarantee, design 008 section 5.5). After a hard
 // failure the client marks itself down; `restart()` clears the state.
+// `call()` performs ONE transparent restart+re-handshake+retry when the
+// transport died (stdio child crashed / was killed, HTTP session broken):
+// without it a crashed server would stay down for the whole process
+// because nothing ever called restart(). A retry that fails again marks
+// the client down and surfaces the error as before.
 //
 // Threading: NOT internally synchronized -- one client instance is owned
 // by exactly one caller at a time (CLI: the turn; TUI: the worker between

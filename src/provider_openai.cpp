@@ -399,6 +399,21 @@ std::string preview_chat_request_body(const Chat& chat, const std::string& model
     return request_body(chat, model, tools_json, reasoning_effort, include_usage);
 }
 
+OpenAiProvider::~OpenAiProvider() {
+    if (curl_)
+        ::curl_easy_cleanup(static_cast<CURL*>(curl_));
+}
+
+void* OpenAiProvider::curl_handle() noexcept {
+    // Persistent handle: reused by every request this provider makes, so
+    // libcurl keeps the TCP+TLS connection alive across tool rounds of one
+    // turn. Every request path below re-sets URL/headers/write options
+    // before perform (curl keeps pointers to freed slists otherwise).
+    if (!curl_)
+        curl_ = ::curl_easy_init();
+    return curl_;
+}
+
 std::string OpenAiProvider::complete(const Chat& chat,
                                      const std::function<void(std::string_view)>& on_delta,
                                      const ShouldAbort& should_abort) {
@@ -423,7 +438,7 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     if (config_.base_url.empty() || config_.api_key.empty() || config_.model.empty()) {
         throw ProviderError(ProviderErrorKind::Protocol, "provider config incomplete");
     }
-    CURL* curl = ::curl_easy_init();
+    CURL* curl = static_cast<CURL*>(curl_handle());
     if (!curl) {
         throw ProviderError(ProviderErrorKind::Network, "curl init failed");
     }
@@ -598,7 +613,8 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     const CURLcode code = ::curl_easy_perform(curl);
     ::curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     ::curl_slist_free_all(headers);
-    ::curl_easy_cleanup(curl);
+    // Handle stays open (connection cache lives here); aborted transfers
+    // are safe to reuse -- curl closes the socket itself when needed.
 
     if (should_abort()) {
         throw ProviderError(ProviderErrorKind::Cancelled, "request cancelled");
@@ -825,11 +841,11 @@ namespace {
 // list_model_capabilities (v4.2): returns the response body; throws
 // ProviderError on network/HTTP failure. The api_key only ever enters the
 // Authorization header (never the returned body handling or error text).
-std::string fetch_models_body(const ProviderConfig& config) {
+// `curl` is the provider's persistent handle (connection reuse, v4.17).
+std::string fetch_models_body(const ProviderConfig& config, CURL* curl) {
     if (config.base_url.empty() || config.api_key.empty()) {
         throw ProviderError(ProviderErrorKind::Protocol, "provider config incomplete");
     }
-    CURL* curl = ::curl_easy_init();
     if (!curl) {
         throw ProviderError(ProviderErrorKind::Network, "curl init failed");
     }
@@ -865,7 +881,7 @@ std::string fetch_models_body(const ProviderConfig& config) {
     long status = 0;
     ::curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     ::curl_slist_free_all(headers);
-    ::curl_easy_cleanup(curl);
+    // Caller-owned persistent handle: no cleanup here.
 
     if (code != CURLE_OK) {
         const std::string detail = error_buffer[0] ? error_buffer : ::curl_easy_strerror(code);
@@ -939,7 +955,7 @@ std::optional<std::vector<ModelCapabilities>> parse_models_meta_json(std::string
 }
 
 std::vector<std::string> OpenAiProvider::list_models() {
-    const std::string body = fetch_models_body(config_);
+    const std::string body = fetch_models_body(config_, static_cast<CURL*>(curl_handle()));
     std::string parse_error;
     auto ids = parse_models_json(body, &parse_error);
     if (!ids) {
@@ -953,7 +969,7 @@ std::vector<std::string> OpenAiProvider::list_models() {
 }
 
 std::vector<ModelCapabilities> OpenAiProvider::list_model_capabilities() {
-    const std::string body = fetch_models_body(config_);
+    const std::string body = fetch_models_body(config_, static_cast<CURL*>(curl_handle()));
     std::string parse_error;
     auto caps = parse_models_meta_json(body, &parse_error);
     if (!caps) {
@@ -965,9 +981,9 @@ std::vector<ModelCapabilities> OpenAiProvider::list_model_capabilities() {
 namespace {
 // One non-streaming chat POST for probing: returns (http_status, body).
 // Network/config failures throw like the rest of the transport.
-std::pair<long, std::string> probe_post_chat(const ProviderConfig& config,
+// `curl` is the provider's persistent handle (connection reuse, v4.17).
+std::pair<long, std::string> probe_post_chat(const ProviderConfig& config, CURL* curl,
                                              const nlohmann::json& request) {
-    CURL* curl = ::curl_easy_init();
     if (!curl)
         throw ProviderError(ProviderErrorKind::Network, "curl init failed");
     const std::string url = config.base_url;
@@ -1000,7 +1016,7 @@ std::pair<long, std::string> probe_post_chat(const ProviderConfig& config,
     long status = 0;
     ::curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     ::curl_slist_free_all(headers);
-    ::curl_easy_cleanup(curl);
+    // Caller-owned persistent handle: no cleanup here.
     if (code != CURLE_OK) {
         const std::string detail = error_buffer[0] ? error_buffer : ::curl_easy_strerror(code);
         throw ProviderError(ProviderErrorKind::Network, "network error: " + detail);
@@ -1031,7 +1047,7 @@ ProbeOutcome OpenAiProvider::probe_context_window() {
     req["messages"] = {{{"role", "user"}, {"content", "ping"}}};
     req["max_tokens"] = 1000000000;
     req["stream"] = false;
-    const auto [status1, body1] = probe_post_chat(config_, req);
+    const auto [status1, body1] = probe_post_chat(config_, static_cast<CURL*>(curl_handle()), req);
     if (status1 >= 200 && status1 < 300)
         return {}; // silent clamp: nothing learnable, never parse a success
     auto first = parse_context_probe_error(body1);
@@ -1049,7 +1065,7 @@ ProbeOutcome OpenAiProvider::probe_context_window() {
     req2["messages"] = {{{"role", "user"}, {"content", std::string(2400000, 'a')}}};
     req2["max_tokens"] = 1;
     req2["stream"] = false;
-    const auto [status2, body2] = probe_post_chat(config_, req2);
+    const auto [status2, body2] = probe_post_chat(config_, static_cast<CURL*>(curl_handle()), req2);
     auto second =
         (status2 >= 200 && status2 < 300) ? ProbeOutcome{} : parse_context_probe_error(body2);
     if (second.kind == ProbeLimitKind::Window || second.kind == ProbeLimitKind::InputCap)

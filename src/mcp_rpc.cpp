@@ -155,6 +155,15 @@ bool McpClient::ensure_started(std::string* error) {
     }
     if (!rpc_) {
         auto transport = factory_(config_);
+        if (!transport) {
+            // Failed / exhausted factory (one-shot test fakes included):
+            // stay down instead of wrapping a null transport.
+            down_ = true;
+            last_error_ = "mcp transport factory returned nothing";
+            if (error)
+                *error = last_error_;
+            return false;
+        }
         rpc_ = std::make_unique<McpRpcClient>(std::move(transport));
     }
     std::string start_error;
@@ -343,15 +352,6 @@ ToolResult McpClient::call(const ToolCall& call, const ShouldAbort& should_abort
     if (should_abort())
         return ToolResult{"aborted before mcp call", true};
 
-    std::string error;
-    if (!ensure_started(&error))
-        return ToolResult{"mcp server down: " + error, true};
-    if (!rpc_->alive()) {
-        down_ = true;
-        last_error_ = "transport closed";
-        return ToolResult{"mcp transport closed; server marked down", true};
-    }
-
     std::string remote_name = call.name.substr(prefix.size());
     auto mapped = wire_to_remote_.find(call.name);
     if (mapped != wire_to_remote_.end())
@@ -362,16 +362,49 @@ ToolResult McpClient::call(const ToolCall& call, const ShouldAbort& should_abort
     params["arguments"] = arguments.is_discarded() || !arguments.is_object()
                               ? nlohmann::json::object()
                               : std::move(arguments);
+
+    // One transparent recovery: if the transport DIED (stdio child
+    // crashed/killed, HTTP endpoint down) the request never completed, so
+    // restart + re-handshake + retry once is safe. We detect death by
+    // transport `alive()` (not error strings). A timeout is NOT retried --
+    // the tool may have run with side effects -- but it still marks the
+    // client down like before (the RPC stream can desync after a late
+    // reply, design 008 section 5.2).
+    bool retried = false;
     std::string result;
-    if (!rpc_->request("tools/call", params.dump(), call_timeout_, &result, &error)) {
-        // Transport-level death (not a tool-level isError): mark down.
-        if (error.find("closed") != std::string::npos ||
-            error.find("timed out") != std::string::npos) {
-            down_ = true;
-            last_error_ = error;
+    std::string error;
+    // A server already marked down is NOT respawned here: /tools restart
+    // and registry rebuild stay the operator's explicit paths, and a broken
+    // command would otherwise pay the handshake timeout on every call.
+    // Recovery below only covers a session that was up and then died.
+    for (;;) {
+        error.clear();
+        result.clear();
+        bool dead = false;
+        if (!ensure_started(&error)) {
+            return ToolResult{"mcp server down: " + error, true};
+        } else if (!rpc_->alive()) {
+            error = "transport closed";
+            dead = true;
+        } else if (!rpc_->request("tools/call", params.dump(), call_timeout_, &result, &error)) {
+            dead = !rpc_->alive(); // transport died mid-request
+            if (!dead && error.find("timed out") != std::string::npos) {
+                down_ = true; // stream desync risk: keep the v2.0 rule
+                last_error_ = error;
+            }
         }
-        return ToolResult{"mcp call failed: " + error, true};
+        if (!result.empty() || !dead)
+            break; // success, or a non-transport failure to report below
+        if (retried) {
+            down_ = true; // restart did not help: stop respawning per call
+            last_error_ = error;
+            break;
+        }
+        retried = true;
+        restart(); // clears down_, drops rpc_: fresh transport + handshake
     }
+    if (result.empty())
+        return ToolResult{"mcp call failed: " + error, true};
     if (should_abort())
         return ToolResult{"aborted after mcp response", true};
 

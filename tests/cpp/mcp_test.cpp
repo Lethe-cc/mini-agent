@@ -46,6 +46,10 @@ class FakeTransport final : public mini_agent::McpTransport {
         if (index < reply_script_.size())
             for (const auto& r : reply_script_[index])
                 inbox_.push_back(r);
+        // v4.17 auto-restart tests: simulate a channel that dies mid-
+        // request (child crash after the message went out, no reply).
+        if (die_after_sends_ > 0 && sent_.size() == static_cast<std::size_t>(die_after_sends_))
+            alive_ = false;
         return true;
     }
     std::optional<std::string> recv(std::chrono::milliseconds, std::string* error) override {
@@ -72,6 +76,7 @@ class FakeTransport final : public mini_agent::McpTransport {
     std::vector<std::string> inbox_;
     bool fail_on_empty_ = false;
     bool alive_ = false;
+    int die_after_sends_ = 0; // >0: channel dies after that many sends
 };
 
 std::string reply_to(long long id, const std::string& result_json) {
@@ -340,6 +345,63 @@ void test_http_transport_round_trip() {
     check(client.alive(), "tool-level error keeps http server alive");
 }
 
+void test_call_restart_after_child_death() {
+    using namespace mini_agent;
+    // v4.17: a transport that was UP and died mid-request gets one
+    // transparent restart + re-handshake + retry. The factory hands out a
+    // fresh fake per spawn; the first fake dies right after the call is
+    // sent (request never answered -> no side-effect risk -> retry safe).
+    std::vector<FakeTransport*> spawned;
+    auto factory = [&spawned](const McpServerConfig&) {
+        auto fake = std::make_unique<FakeTransport>();
+        auto* raw = fake.get();
+        spawned.push_back(raw);
+        if (spawned.size() == 1) {
+            // send 1 = initialize, send 2 = initialized, send 3 = the
+            // tools/call: the channel dies with no reply (id stays 2 on
+            // the respawned server, which restart() re-handshakes fresh).
+            raw->reply_script_ = {
+                {reply_to(1, R"({"protocolVersion":"2025-06-18","capabilities":{"tools":{}}})")},
+                {},
+            };
+            raw->die_after_sends_ = 3;
+        } else {
+            raw->reply_script_ = {
+                {reply_to(1, R"({"protocolVersion":"2025-06-18","capabilities":{"tools":{}}})")},
+                {},
+                {reply_to(2, R"({"content":[{"type":"text","text":"recovered"}]})")},
+            };
+        }
+        return std::move(fake);
+    };
+    McpClient client(server_config("phx"), factory);
+    const auto result =
+        client.call(ToolCall{"t1", "phx__echo", R"({"x":1})"}, [] { return false; });
+    check(!result.is_error && result.text == "recovered",
+          "call auto-restarts a dead transport and retries once");
+    check(spawned.size() == 2, "recovery spawned exactly one fresh transport");
+    check(client.alive(), "client stays alive after successful recovery");
+
+    // Third spawn also dead -> single retry budget, plain error, no loop.
+    auto factory2 = [&spawned](const McpServerConfig&) {
+        auto fake = std::make_unique<FakeTransport>();
+        auto* raw = fake.get();
+        spawned.push_back(raw);
+        raw->reply_script_ = {
+            {reply_to(1, R"({"protocolVersion":"2025-06-18","capabilities":{"tools":{}}})")},
+            {},
+        };
+        raw->die_after_sends_ = 3; // dies on both attempts
+        return std::move(fake);
+    };
+    const std::size_t before = spawned.size();
+    McpClient client2(server_config("phx"), factory2);
+    const auto failed = client2.call(ToolCall{"t2", "phx__echo", "{}"}, [] { return false; });
+    check(failed.is_error && failed.text.find("closed") != std::string::npos,
+          "repeated transport death surfaces an error after one retry");
+    check(spawned.size() == before + 2, "retry budget is exactly one restart");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -358,6 +420,8 @@ int main(int argc, char** argv) {
         test_stdio_transport_dies_clean();
     if (only == 0 || only == 6)
         test_http_transport_round_trip();
+    if (only == 0 || only == 7)
+        test_call_restart_after_child_death();
     if (failures) {
         std::cerr << failures << " mcp check(s) failed\n";
         return EXIT_FAILURE;
