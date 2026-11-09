@@ -2122,6 +2122,63 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         }
     };
 
+    // v5 (design 011): show a workspace file to the human without
+    // involving the model. Markdown renders; everything else shows verbatim.
+    // Read-only, bounded to the session workspace -- the same rule the file
+    // tools enforce (ADR 007). Shared by /preview and the sidebar `p` key.
+    auto preview_workspace_file = [&](const std::string& path_raw) {
+        std::filesystem::path resolved;
+        std::string bounds_error;
+        const std::string root = config.workspace.empty()
+                                     ? std::filesystem::current_path().string()
+                                     : std::filesystem::weakly_canonical(config.workspace).string();
+        if (!resolve_within_workspace(root, path_raw, &resolved, &bounds_error)) {
+            screen.commit("[error] preview " + sanitize_display(path_raw) + ": " +
+                          sanitize_display(bounds_error));
+            return;
+        }
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(resolved, ec)) {
+            screen.commit("[error] preview: not a regular file: " + sanitize_display(path_raw));
+            return;
+        }
+        std::ifstream stream(resolved, std::ios::binary);
+        if (!stream) {
+            screen.commit("[error] preview: cannot open: " + sanitize_display(path_raw));
+            return;
+        }
+        std::ostringstream buffer;
+        buffer << stream.rdbuf();
+        const std::string body = buffer.str();
+        if (body.find('\0') != std::string::npos) {
+            screen.commit("[error] preview: binary file: " + sanitize_display(path_raw));
+            return;
+        }
+        std::string lower = path_raw;
+        for (auto& c : lower)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        const bool markdown =
+            lower.size() >= 3 &&
+            (lower.compare(lower.size() - 3, 3, ".md") == 0 ||
+             (lower.size() >= 9 && lower.compare(lower.size() - 9, 9, ".markdown") == 0));
+        screen.commit("[preview] " + sanitize_display(path_raw));
+        if (markdown) {
+            std::string pline;
+            std::istringstream pr(md::render(body, cols_now()));
+            while (std::getline(pr, pline))
+                screen.commit(pline.empty() ? std::string(" ") : pline);
+        } else {
+            std::string pline;
+            std::istringstream pr(body);
+            std::size_t shown = 0;
+            while (std::getline(pr, pline) && shown < 500) {
+                screen.commit("  " + sanitize_display(pline));
+                ++shown;
+            }
+            if (!pr.eof())
+                screen.commit("  ... truncated (file longer than 500 lines)");
+        }
+    };
     auto handle_slash = [&](std::string_view line) -> bool {
         auto arg_of = [](std::string_view text) -> std::string_view {
             const auto space = text.find(' ');
@@ -2680,67 +2737,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             return true;
         }
         if (line.rfind("/preview", 0) == 0) {
-            // v5 (design 011): show a workspace file to the human without
-            // involving the model. Markdown renders; everything else shows
-            // verbatim. Read-only, bounded to the session workspace -- the
-            // same rule the file tools enforce (ADR 007).
             const auto arg = arg_of(line);
             if (arg.empty()) {
                 screen.commit("usage: /preview <path> (workspace-bounded; .md renders)");
                 return true;
             }
-            std::filesystem::path resolved;
-            std::string bounds_error;
-            const std::string root =
-                config.workspace.empty()
-                    ? std::filesystem::current_path().string()
-                    : std::filesystem::weakly_canonical(config.workspace).string();
-            if (!resolve_within_workspace(root, std::string(arg), &resolved, &bounds_error)) {
-                screen.commit("[error] /preview " + sanitize_display(arg) + ": " +
-                              sanitize_display(bounds_error));
-                return true;
-            }
-            std::error_code ec;
-            if (!std::filesystem::is_regular_file(resolved, ec)) {
-                screen.commit("[error] /preview: not a regular file: " + sanitize_display(arg));
-                return true;
-            }
-            std::ifstream stream(resolved, std::ios::binary);
-            if (!stream) {
-                screen.commit("[error] /preview: cannot open: " + sanitize_display(arg));
-                return true;
-            }
-            std::ostringstream buffer;
-            buffer << stream.rdbuf();
-            const std::string body = buffer.str();
-            if (body.find('\0') != std::string::npos) {
-                screen.commit("[error] /preview: binary file: " + sanitize_display(arg));
-                return true;
-            }
-            std::string lower(arg);
-            for (auto& c : lower)
-                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            const bool markdown =
-                lower.size() >= 3 &&
-                (lower.compare(lower.size() - 3, 3, ".md") == 0 ||
-                 (lower.size() >= 9 && lower.compare(lower.size() - 9, 9, ".markdown") == 0));
-            screen.commit("[preview] " + sanitize_display(arg));
-            if (markdown) {
-                std::string pline;
-                std::istringstream pr(md::render(body, cols_now()));
-                while (std::getline(pr, pline))
-                    screen.commit(pline.empty() ? std::string(" ") : pline);
-            } else {
-                std::string pline;
-                std::istringstream pr(body);
-                std::size_t shown = 0;
-                while (std::getline(pr, pline) && shown < 500) {
-                    screen.commit("  " + sanitize_display(pline));
-                    ++shown;
-                }
-                if (!pr.eof())
-                    screen.commit("  ... truncated (file longer than 500 lines)");
-            }
+            preview_workspace_file(std::string(arg));
             return true;
         }
         if (line == "/tools") {
@@ -2872,6 +2874,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                 break;
                             }
                         }
+                        // v5: make the preview key discoverable on entry.
+                        screen.commit("[hint] sidebar focus: Up/Down walk · p=preview · "
+                                      "Enter=insert path · Esc=leave");
                     }
 
                 } else if (c == 0x1B) { // ESC: edit sequences or interrupt
@@ -3076,8 +3081,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     if (utf8_erase_before(composer, cursor))
                         mark_edited();
                 } else if (c >= 0x20) {
-                    utf8_insert(composer, cursor, std::string_view(&buf[i], 1));
-                    mark_edited();
+                    // v5 (design 011): while the sidebar owns focus, `p`
+                    // previews the highlighted file into the transcript
+                    // (no model turn, focus stays); any other printable
+                    // char goes to the composer as usual.
+                    if (sidebar_focus && c == 'p' && sidebar_sel < sidebar_result.paths.size() &&
+                        !sidebar_result.paths[sidebar_sel].empty()) {
+                        preview_workspace_file(sidebar_result.paths[sidebar_sel]);
+                    } else {
+                        utf8_insert(composer, cursor, std::string_view(&buf[i], 1));
+                        mark_edited();
+                    }
                 }
             }
         }

@@ -472,6 +472,12 @@ def main():
     os.write(fd, b"\x06")
     focus_raw = read_all(fd, 1.0)
     expect("\x1b[7m" in focus_raw, "sidebar focus highlights a row")
+    expect("p=preview" in strip_csi(focus_raw),
+           "v5 sidebar focus entry shows the key legend (p=preview)")
+    os.write(fd, b"p")
+    pvk = strip_csi(read_all(fd, 1.0))
+    expect("[preview]" in pvk or "[error] preview" in pvk,
+           "v5 `p` in sidebar focus previews the highlighted row")
     os.write(fd, b"\x1b[B\r")
     picked = read_all(fd, 1.0)
     expect("[sidebar] inserted:" in strip_csi(picked),
@@ -594,7 +600,7 @@ def main():
            "v5 /preview shows the file body")
     os.write(afd, b"/preview ../../etc/passwd\r")
     prev_esc = strip_csi(read_all(afd, 2.0))
-    expect("[error] /preview" in prev_esc and "escapes workspace" in prev_esc,
+    expect("[error] preview" in prev_esc and "escapes workspace" in prev_esc,
            "v5 /preview refuses workspace escape")
     # v3.1 runtime approval switch: query shows current policy; switching
     # to off persists + warns; the NEXT tool call then runs WITHOUT an

@@ -74,6 +74,7 @@ stderr `isatty` 门控，管道场景保持 v3 字节形状（008 回归钩子�
 - 主线程 `drain_tool_events`：`[tool]` 行后逐行 `screen.commit()` 预览块：diff 行复用抽出的共享色表 `tint_diff_line`（与审批块同一 git 默认配色），最多 40 行后 dim 截断标记；markdown 经 `md::render(body, cols)` 提交。行首两空格缩进保持 transcript "list entries" 视觉层级。
 - `tint_diff_line` 为 `approval_rows` 与 transcript 块共用（原审批块内联色表提取，行为不变）。
 - `/preview <path>`：不经过模型，直接读工作区内文件（同 ADR 007 边界），`.md` 渲染、其他逐行原样，500 行截断；binary/不可读/越界报 `[error]`。登记入 `kCommands` 与 `/help`。
+- **侧栏 `p` 键**（2026-11-09 维护者追问"选中文件怎么预览"后补充）：Ctrl-F 侧栏焦点下按 `p` 直接预览高亮文件（与 `/preview` 共用 `preview_workspace_file` 帮助函数），焦点保持；进入焦点时提交一行 `[hint]` 说明键位（Up/Down walk · p=preview · Enter=insert path · Esc=leave）。Enter 插入路径的原语义不变。
 
 ### 5.3 CLI（`src/cli_main.cpp`）
 
