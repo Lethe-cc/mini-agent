@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -55,6 +56,17 @@ class StdioTransport final : public McpTransport {
             ::close(err_pipe[0]);
             ::close(err_pipe[1]);
             ::setpgid(0, 0);
+            // Orphan guard (v5): if the mini-agent PROCESS dies without
+            // running transport close() -- SIGKILL, crash -- the kernel
+            // SIGKILLs this child instead of leaving it reparented. Safe
+            // for cross-turn persistence: PDEATHSIG is keyed on the
+            // creating thread's PROCESS, not the thread (verified on
+            // Linux 6.12: worker-thread exit does NOT fire it, process
+            // exit does). getppid()==1 closes the fork-to-prctl race
+            // where the parent is already gone.
+            ::prctl(PR_SET_PDEATHSIG, SIGKILL);
+            if (::getppid() == 1)
+                ::_exit(126);
             // Explicit env entries only, plus PATH/HOME baseline (008 5.3):
             // the API key must never reach the child implicitly.
             ::clearenv();

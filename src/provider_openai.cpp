@@ -73,6 +73,20 @@ size_t curl_accumulate(char* ptr, size_t size, size_t nmemb, void* userdata) {
     return size * nmemb;
 }
 
+// Periodic transfer-progress hook (v5, design 007 5.6 CLI abort): curl
+// calls this roughly every 500 ms while perform runs, including idle and
+// connect phases where the write callback never fires. Without it, a
+// silent-thinking gateway leaves the abort flag unchecked for as long as
+// no bytes arrive, and Ctrl-C looks dead. Returning nonzero aborts with
+// CURLE_ABORTED_BY_CALLBACK (already mapped to ProviderErrorKind::Cancelled).
+int curl_abort_checkpoint(void* clientp, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    auto* ctx = static_cast<CurlWriteCtx*>(clientp);
+    if (ctx->should_abort && (*ctx->should_abort)()) {
+        return 1;
+    }
+    return 0;
+}
+
 namespace {
 // v4.4 (design 010 §15): raw chat-traffic debug dump. Opt-in via
 // ProviderConfig::debug_log_path; append-only, 0600, one file shared by
@@ -566,6 +580,11 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     ::curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     ::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
     ::curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
+    // Abort even when the server sends nothing (idle thinking time): the
+    // progress callback fires ~2x/second regardless of traffic.
+    ::curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_abort_checkpoint);
+    ::curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
+    ::curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     ::curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
     ::curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
                        static_cast<long>(config_.connect_timeout_seconds));

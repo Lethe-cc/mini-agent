@@ -1,6 +1,9 @@
 // mini-agent CLI. Exit codes (design 007 section 5): 0 success,
 // 1 runtime error (network/HTTP/protocol/io), 2 configuration error.
+#include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -33,6 +36,60 @@ namespace {
 constexpr int kOk = 0;
 constexpr int kRuntimeError = 1;
 constexpr int kConfigError = 2;
+
+// CLI interrupt channel (v5, design 007 5.6): TTY-only SIGINT handler
+// feeding the existing should_abort plumbing (curl write/XFERINFO
+// callbacks, subprocess poll slices). First Ctrl-C requests a clean
+// cancel: run_turn throws Cancelled at the next checkpoint, history
+// stays at the previous turn boundary, session lock is released on the
+// normal return path. A second Ctrl-C restores SIG_DFL so a wedged
+// transport can still be killed outright (escape hatch, TUI parity).
+// Non-TTY pipes keep the default disposition: no behavior change for
+// the byte-identical script contract (008 5.4).
+std::atomic<int> g_sigint_count{0};
+
+void cli_sigint_handler(int) {
+    // Async-signal-safe: relaxed store + re-raise. First Ctrl-C only sets
+    // the flag; the second resets to SIG_DFL and re-raises so the default
+    // disposition kills the process NOW (a wedged transport is a hard
+    // stop, TUI parity). Deliberately NO SA_RESTART: blocking getlines
+    // (approval prompt, line-mode input) must surface EINTR -- denial on
+    // a failed approval read is exactly the Ctrl-C-during-approval
+    // semantic, and an interrupted idle read takes the graceful
+    // save/unlock exit path instead of a raw death.
+    if (g_sigint_count.fetch_add(1, std::memory_order_relaxed) >= 1) {
+        std::signal(SIGINT, SIG_DFL);
+        std::raise(SIGINT);
+    }
+}
+
+void install_cli_sigint() {
+    // Gate: any terminal attached (stdin or stdout). Fully piped runs --
+    // the scripted contract -- keep the default SIGINT disposition
+    // (immediate process death) so nothing about automation changes.
+    // Line mode runs with piped stdin but can still have a controlling
+    // terminal (kill -INT), so stdout counts too.
+    if (::isatty(STDIN_FILENO) != 1 && ::isatty(STDOUT_FILENO) != 1)
+        return;
+    g_sigint_count.store(0);
+    struct sigaction act{};
+    act.sa_handler = cli_sigint_handler;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0; // no SA_RESTART: EINTR is our idle-interrupt channel
+    ::sigaction(SIGINT, &act, nullptr);
+}
+
+// Sticky within a turn: every should_abort query in the plumbing (curl
+// write/XFERINFO, subprocess poll slices, loop post-tool check) must see
+// it until the turn unwinds. Cleared explicitly at the line-mode input
+// boundary so an idle Ctrl-C does not poison the NEXT turn.
+bool cli_abort_requested() {
+    return g_sigint_count.load(std::memory_order_relaxed) > 0;
+}
+
+void reset_cli_sigint() {
+    g_sigint_count.store(0, std::memory_order_relaxed);
+}
 
 void print_usage(std::ostream& out) {
     out << "mini-agent " MINI_AGENT_VERSION
@@ -266,6 +323,13 @@ int cmd_ask(int argc, char** argv) {
                      "\"question\" | mini-agent ask - (stdin)\n";
         return kConfigError;
     }
+    // v5 CLI interrupt: TTY only (read question above may already have
+    // consumed a piped stdin; non-TTY keeps the default SIGINT == the
+    // historical byte-identical script behavior).
+    // v5 CLI interrupt: install_cli_sigint is TTY-gated, so on fully
+    // piped runs the flag can never be set and cli_abort_requested()
+    // stays false -- the request path is behaviorally unchanged.
+    install_cli_sigint();
 
     mini_agent::OpenAiProvider provider(config.to_provider());
     mini_agent::Logger logger(
@@ -389,7 +453,8 @@ int cmd_ask(int argc, char** argv) {
         // Tool status lines print to stderr, keeping the stdout contract.
         mini_agent::run_turn(
             chat, provider, question,
-            [](std::string_view delta) { std::cout << delta << std::flush; }, [] { return false; },
+            [](std::string_view delta) { std::cout << delta << std::flush; },
+            cli_abort_requested,
             turn_options);
         std::cout << '\n';
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -622,6 +687,9 @@ int cmd_run(int argc, char** argv) {
         return code;
     }
     // Non-TTY fallback: line-mode (keeps scripted E2E valid; design 007 §9).
+    // v5 CLI interrupt: the TUI branch above owns SIGINT itself (raw mode +
+    // SIG_IGN); line mode installs the cooperative Ctrl-C handler here.
+    install_cli_sigint();
     mini_agent::OpenAiProvider provider(config.to_provider());
     mini_agent::Logger logger(
         mini_agent::Logger::resolve_path(config).value_or(std::filesystem::path{}));
@@ -630,7 +698,28 @@ int cmd_run(int argc, char** argv) {
     std::cout << "session " << session.meta.id << " (model " << config.model << ")\n"
               << "type a line to chat; /exit or EOF (Ctrl-D) exits\n";
     std::string line;
-    while (std::getline(std::cin, line)) {
+    for (;;) {
+        // Fresh cycle: drop any sticky flag left by the previous (possibly
+        // cancelled) turn, so each turn takes at most its own Ctrl-C(s).
+        // During a turn the abort stays sticky: every should_abort query
+        // sees it until run_turn unwinds. Two Ctrl-C within one turn =
+        // hard kill (handler re-raises); Ctrl-C at idle only discards the
+        // partial line. Exit stays /exit or EOF (Ctrl-D) as before.
+        reset_cli_sigint();
+        std::cout.flush();
+        if (!std::getline(std::cin, line)) {
+            // Without SA_RESTART a first Ctrl-C lands here as EINTR:
+            // discard the (partial) line and keep the session alive --
+            // the same "first Ctrl-C interrupts, does not quit" semantic
+            // as the TUI. The flag (set by the handler) distinguishes an
+            // interrupt from real EOF, so we do not depend on errno
+            // surviving the iostream layers.
+            if (g_sigint_count.load(std::memory_order_relaxed) == 1) {
+                std::cin.clear();
+                continue;
+            }
+            break;
+        }
         if (line.empty())
             continue;
         if (line == "/exit")
@@ -638,7 +727,8 @@ int cmd_run(int argc, char** argv) {
         const auto started = std::chrono::steady_clock::now();
         try {
             mini_agent::run_turn(session.chat, provider, line,
-                                 [](std::string_view delta) { std::cout << delta << std::flush; });
+                                 [](std::string_view delta) { std::cout << delta << std::flush; },
+                                 cli_abort_requested);
             std::cout << '\n';
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - started)
