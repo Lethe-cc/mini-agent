@@ -51,7 +51,7 @@
 
 ```
 mini-agent mcp list [--mcp NAME=SPEC ...]   # 查看生效 server 清单（脱敏）
-mini-agent ask [--tools off|ask|auto] [--mcp NAME=SPEC] "问题"| -
+mini-agent ask [--tools off|ask|allowlist|auto] [--mcp NAME=SPEC] "问题"| -
 mini-agent run [--session ID] [--new] [--temp] [--mcp NAME=SPEC]
 ```
 
@@ -63,7 +63,9 @@ mini-agent run [--session ID] [--new] [--temp] [--mcp NAME=SPEC]
 --mcp 'api={"transport":"http","url":"https://h/mcp","bearer_token":"t"}'  # JSON：全量字段
 ```
 
-`ask --tools` 语义：`off`（默认，脚本契约与 v1 一致，stdout 只有回复）；`ask`（TTY 内联 y/N，提示走 stderr；**非 TTY 降级为 off 并提示**——绝不在管道里静默执行命令）；`auto`（不询问——包含 run_bash，慎用）。工具状态行走 stderr，不污染管道输出。
+`ask --tools` 语义：`off`（默认，脚本契约与 v1 一致，stdout 只有回复）；`ask`（TTY 内联 y/N，提示走 stderr；**非 TTY 降级为 off 并提示**——绝不在管道里静默执行命令）；`allowlist`（v3 脚本安全档：只有 config `tool_allowlist` 里的工具名执行，**名单未命中一律拒绝**并以 error Tool 消息回填模型；名单为空 = 全部拒绝，全程不阻塞、不需 TTY）；`auto`（不询问——包含 run_bash，慎用）。工具状态行走 stderr，不污染管道输出。
+
+注意 `allowlist` 在两处语义不同：CLI `--tools allowlist` 未命中是**拒绝**（脚本要确定性），TUI `/approve allowlist` 未命中是**照问**（见 §4）。
 
 环境变量：`MINI_AGENT_TOOL_APPROVAL=ask|allowlist|off` 覆盖审批策略；`MINI_AGENT_NO_MCP=1` 全禁 MCP（排障开关）。
 
