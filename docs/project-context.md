@@ -52,6 +52,7 @@
 - 语言优先级：C++（快速启动是首要体验目标，冷启动应尽量减少运行时依赖与初始化开销）。
 - 依赖策略：沿用模板规则——小步修改、不无故新增依赖；新增第三方库前必须核实许可证、署名及分发义务，并记录 ADR。
 - 密钥策略：遵循 AGENTS.md——不读取真实密钥进仓库，不在文档或 URL 中放 token。
+- git提交策略：使用英文commit, 推送到远端需要确认
 
 注：`project.json` 的 `language` 已按迁移流程接入 cpp profile（2026-10-31，在临时生成后合并骨架，未重跑 `init_project.py`），`quality_commands` 为 CMake configure → build → CTest。
 
