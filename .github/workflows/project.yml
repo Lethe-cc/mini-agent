@@ -19,6 +19,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      # CMakeLists.txt calls find_package(CURL REQUIRED); the hosted ubuntu-24.04
+      # image ships curl CLI but not the development headers. Dependency list and
+      # rationale: docs/development.md "新 Linux 主机编译安装依赖".
+      - name: Install libcurl development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+          dpkg -s libcurl4-openssl-dev | grep -E '^(Package|Version|Status):'
       # Hosted runner toolchains are used; verify image versions against project policy.
       - name: Inspect CMake
         run: cmake --version
