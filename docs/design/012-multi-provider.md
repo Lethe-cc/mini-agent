@@ -51,6 +51,32 @@
   各家网关对 `/models` 的开放程度不同（有的 404/405），必须容忍单档案失败。
 - 本设计不引入新第三方库；全部复用现有 nlohmann/json、OpenAiProvider、worker join-then-read 纪律。
 
+### 3.1 参考实现调研（2026-11，本地只读快照）
+
+对四个主流开源 agent 的多 provider 实现做了源码级调研（只读参考，未复制代码；许可证均允许借鉴思路：
+codex Apache-2.0，其余 MIT）。快照：`codex-main`（源码目录，无 commit 号）、`opencode@69269e4ebe`、
+`Codewhale@4df5d2914`、`pi@2c8d1feb1`（均位于本机 `/home/marvin/code/repos/AI/`）。
+
+| 维度 | codex (Rust) | opencode (TS) | Codewhale (Rust) | pi (TS) |
+| --- | --- | --- | --- | --- |
+| provider 配置 | `model_providers` 命名 map + `model_provider` 活动指针（`model-provider-info/src/lib.rs:149`、`core/src/config/mod.rs:978`） | provider 定义 map，无活动指针；模型身份即 `(providerID, modelID)` 对 | `[providers.<name>]` 命名表 + 顶层 `provider` 指针（config.example.toml） | provider 定义与凭据分离；models.json 不含密钥 |
+| 凭据存储 | 单个 OpenAI 登录（auth.json+keyring）；第三方 key 走各 provider 的 `env_key` 环境变量，不做多 key 存储 | SQLite 凭据库，每 integration 多凭据、可切换激活（`credential.ts`） | keyring 优先，config 里只留 `__KEYRING__` 哨兵；事务式写入+回滚（`credentials.rs`） | auth.json 按 providerId 存 key，0600 文件/0700 目录 + lockfile（`auth-storage.ts`） |
+| key 优先级 | CLI > env（`env_key` 缺失即报错） | 显式配置 > 凭据库 | CLI > 配置文件 > keyring > env（`config_resolve.rs:823`） | 显式 > 已存凭据 > env；刷新失败不静默回落 env（`resolve.ts:28`） |
+| 模型目录 | 内置 preset + 启动时 JSON 目录；ChatGPT OAuth 仅限原生 openai provider | models.dev 集中目录快照+HTTP 刷新；本地端点（ollama/vllm/lmstudio）实时 discover | 逐 provider 实时 `list_models()`，30s 预算+防密钥泄漏进目录（`client.rs:4060`） | 静态 models.json + 动态 provider `refreshModels()`，按 provider 加锁缓存（`models-store.ts`） |
+| 切换 UX | profile 预设（model+provider+审批打包）+ preset 弹窗 | 弹窗按 provider 分组、fuzzy 搜索、最近使用置顶（`dialog-model.tsx`） | provider 选择器发出原子 `SwitchProvider{provider, model}`（`apply.rs:2582`） | `/model` 菜单只列已登录 provider；文本 `provider/id` 可省前缀，歧义显式报候选（`model-resolver.ts:70`） |
+| 逐模型 window | preset 内置 | 目录/用户配置每模型 limit | `model_context_windows` 逐模型表（`provider_toml.rs:118`） | models.json 每模型 contextWindow |
+
+对本设计的印证与差异（采纳思路，不采纳实现）：
+
+- **印证**：命名档案 + 活动指针 ≈ Codewhale（含旧顶层字段迁移进档案表的做法）；`provider/model` 限定名
+  ≈ opencode（schema 强制限定）与 pi；裸名歧义 fail-closed ≈ pi 的"先收集全部候选再选 provider，歧义报错"
+  （Q2 取本稿策略有先例）；key 0600 + 掩码 ≈ pi；逐模型 window 覆盖 ≈ Codewhale/010；单档案失败不拖垮
+  聚合 ≈ Codewhale 30s 预算、pi 按 provider 独立刷新。
+- **差异（有意不采纳）**：Codewhale keyring / opencode SQLite 凭据库引入新依赖，与"零新增依赖"冲突，
+  维持 0600 config.json；pi 的 stored>env 与本稿 env-wins 相反——env-wins 保住既有 CI 语义，代价记入 Q3；
+  opencode 无活动指针（provider 由所选模型推导）不适配我们"顶层三元组向后兼容"的前提，保留指针；
+  models.dev 式集中目录依赖外部服务，维持逐档案 `GET /models`。
+
 ## 4. 方案与关键取舍
 
 **选定：命名档案 + 聚合菜单 + 活动指针。**
