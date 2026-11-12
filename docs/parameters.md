@@ -44,7 +44,7 @@ CLI 旗标（--cwd/--tools/--mcp/--log-level…，仅本次进程）
 | 范围 | 含义 | 例子 |
 | --- | --- | --- |
 | 持久化 | 写入 config.json（0600，原子替换），下次启动仍生效 | `/provider` `/login` `/model` `/approve` `/context` `/reasoning`、`/log <路径/off/default>` |
-| 仅本次会话 | 只改当前进程，退出即失，不写文件 | `/log info|debug|trace`、`/debug`、`/sidebar` `/sysinfo`、审批按键 `a`、`--mcp`、全部 CLI 旗标与 env |
+| 仅本次会话 | 只改当前进程，退出即失，不写文件 | `/log info\|debug\|trace`、`/debug`、`/sidebar` `/sysinfo`、审批按键 `a`、`--mcp`、全部 CLI 旗标与 env |
 
 ### 1.4 安全红线（所有入口共同）
 
@@ -116,7 +116,7 @@ mini-agent --help | --version
 | 命令 | 行为 | 失败 |
 | --- | --- | --- |
 | `session list` | stdout 逐行打印会话 id（新→旧） | 存储目录不可用 → 1 |
-| `session rm ID|前缀` | 删除会话文件与锁文件（v4.14.1 支持唯一前缀） | 歧义 → 列候选退出 2；不存在 → 1；缺参数 → 2 |
+| `session rm ID\|前缀` | 删除会话文件与锁文件（v4.14.1 支持唯一前缀） | 歧义 → 列候选退出 2；不存在 → 1；缺参数 → 2 |
 
 会话文件本身也有 `meta.schema_version`（当前 1；回合含工具消息时写 2）：旧二进制读到更高版本会明确拒绝而非静默丢数据，与 config.json 的 `schema_version` 是两回事。
 
@@ -245,15 +245,15 @@ TTY 下 `run` 进入 TUI。输入 `/` 触发补全（Tab 循环候选，含参�
 | `/login` | `[key]` | ✅ | 不带参数进入掩码输入（Enter 确认，空取消）；保存后重置鉴权探测、可能自动拉取模型列表 |
 | `/model` | `<name>` | ✅ | 设置模型并写入会话元数据；重置用量读数 |
 | `/models` | — | — | 强制重新拉取模型列表（需 base_url+key），数字选择器：Enter 选定、Esc 收起 |
-| `/reasoning` | `[值|off]` | ✅ | 原样透传 `reasoning_effort`；不带参数打开缓存档位选择器（low/medium/high/off 为常见提示）；服务端 400 时提示、不自动回退 |
-| `/context` | `[tokens|off|0|probe]` | ✅（probe 除外） | 设置/清除 `context_window`；不带参数显示当前值或目录建议值；`probe` 显式发一次超大请求探测上限（需配置齐全，≤30s，绝不自动触发） |
+| `/reasoning` | `[值\|off]` | ✅ | 原样透传 `reasoning_effort`；不带参数打开缓存档位选择器（low/medium/high/off 为常见提示）；服务端 400 时提示、不自动回退 |
+| `/context` | `[tokens\|off\|0\|probe]` | ✅（probe 除外） | 设置/清除 `context_window`；不带参数显示当前值或目录建议值；`probe` 显式发一次超大请求探测上限（需配置齐全，≤30s，绝不自动触发） |
 
 ### 5.2 会话与工作区
 
 | 命令 | 参数 | 持久化 | 说明 |
 | --- | --- | --- | --- |
 | `/sessions` | — | — | 列出会话，标注当前 |
-| `/session` | `<id|前缀> \| new` | 会话切换 | 需回合空闲；唯一前缀可用（歧义列候选）；保存并解锁旧会话→加载并锁定新会话（失败回滚）；temp 会话经 `new` 保持 temp，恢复旧会话则结束 temp |
+| `/session` | `<id\|前缀> \| new` | 会话切换 | 需回合空闲；唯一前缀可用（歧义列候选）；保存并解锁旧会话→加载并锁定新会话（失败回滚）；temp 会话经 `new` 保持 temp，恢复旧会话则结束 temp |
 | `/cwd` | `[path]` | 会话戳 | 查询/重绑 workspace（须为已存在目录）；重绑会话戳、系统提示、工具注册表与侧栏 |
 | `/preview` | `<path>` | — | workspace 内文件预览（`.md` 渲染；正文走 UI 通道，不进模型上下文，v5） |
 | `/exit` | — | — | 保存并退出（temp 丢弃） |
@@ -262,9 +262,19 @@ TTY 下 `run` 进入 TUI。输入 `/` 触发补全（Tab 循环候选，含参�
 
 | 命令 | 参数 | 持久化 | 说明 |
 | --- | --- | --- | --- |
-| `/approve` | `[ask|allowlist|off]` | ✅ | 查看/切换审批档位（需 worker 空闲）。`off` 回显警示（无沙箱）且状态行常显红色 `auto-tools`；**`allowlist` 未命中名单时仍然询问**（与 CLI 的拒绝语义不同） |
+| `/approve` | `[ask\|allowlist\|off]` | ✅ | 不带参数：显示当前档位（allowlist 档另列名单）；带参数：切换并写盘，回合执行中会先等本回合结束再生效。三档语义见表下说明 |
 | `/tools` | — | — | 重建注册表并列出 名字·来源·描述 与当前审批策略；**改完 MCP 配置免重启的生效手段** |
 | `/mcp` | — | — | 列出配置的 server（脱敏） |
+
+`/approve` 三档在 TUI 中的语义（默认 `ask`；初始值取 config/env，切换即持久化）：
+
+| 档位 | 工具调用时 | 备注 |
+| --- | --- | --- |
+| `ask` | 每次弹审批块询问 | 默认档 |
+| `allowlist` | 命中 config `tool_allowlist` 名单（含 `server__tool`）→ **免问直接执行**；未命中 → **照问** | 与 CLI `--tools allowlist` 的"未命中一律拒绝"不同（[§2.3](#23---tools-四档语义)）；名单为空 = 全部照问（切换时会提示） |
+| `off` | 全部免问直接执行 | 无沙箱：切换时回显警示，状态行常显红色 `auto-tools` |
+
+任一档位下，按过 `a` 的工具名本会话内免问（仅内存，见下方按键表）。档位每回合快照生效：回合执行中切换会先等该回合结束（同 `/cwd`、`/tools` 的 join 纪律），不会中途改变正在等待的审批。
 
 **审批按键**（模型请求工具时，composer 上方出现审批块；写/改类先展示 diff 预览）：
 
