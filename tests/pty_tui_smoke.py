@@ -31,6 +31,10 @@ PORT = 8939
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Class attribute so the v6 multi-provider section can run a second
+    # instance demanding its OWN key (per-profile auth must be provable).
+    KEY = "pty-smoke-key"
+
     def do_GET(self):
         # Model listing for the /provider auto-list and the /models command.
         # A wrong key must produce a real 401 so the login-status reporting is
@@ -38,7 +42,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.path.rstrip("/").endswith("/models"):
             self.send_error(404)
             return
-        if self.headers.get("Authorization", "") != "Bearer pty-smoke-key":
+        if self.headers.get("Authorization", "") != f"Bearer {self.KEY}":
             self.send_error(401)
             return
         body = json.dumps({"object": "list", "data": [
@@ -118,6 +122,20 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve():
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+
+
+class BetaHandler(Handler):
+    """Second provider endpoint for the v6 multi-provider section: same
+    behavior, its OWN key, so a key accepted by alpha must not pass here."""
+
+    KEY = "pty-beta-key"
+
+
+BETA_PORT = 8941
+
+
+def serve_beta():
+    ThreadingHTTPServer(("127.0.0.1", BETA_PORT), BetaHandler).serve_forever()
 
 
 def read_all(fd, timeout):
@@ -512,7 +530,9 @@ def main():
     log_written = os.path.exists(log_path) and open(log_path).read()
     expect("turn status=ok" in log_written, "log file records turns")
     expect("pty-smoke-key" not in log_written, "log never contains the API key")
-    expect("models_list status=start" in log_written and "models_list status=ok" in log_written,
+    # v6 (design 012): outcome events carry provider=<name> before status=.
+    expect("models_list status=start" in log_written
+           and re.search(r"models_list .*status=ok", log_written),
            "log records the model listing start and outcome")
     expect("model_select model=mock-large source=menu" in log_written,
            "log records the model chosen from the menu")
@@ -770,6 +790,197 @@ def main():
            and batched_cfg.get("api_key") == "batch-key"
            and batched_cfg.get("model") == "mock-large",
            "batched: all three pieces accumulated in one config file")
+
+    # v6 multi-provider end-to-end (design 012 §8 M4): two mock endpoints
+    # demanding DIFFERENT keys, one long-lived TUI process. Proves profiles
+    # persist side by side, per-profile auth verdicts stay separate, the
+    # aggregated menu qualifies ids, qualified /model switches atomically,
+    # ambiguous bare names fail closed, and rm of the active profile keeps
+    # the session usable. No MINI_AGENT_* LLM env vars (batch_env already
+    # strips them), private config/session/log under multi_root.
+    multi_root = "/tmp/mini_agent_pty_smoke_multi"
+    subprocess.run(["rm", "-rf", multi_root], check=False)
+    os.makedirs(multi_root + "/cfg", 0o700)
+    multi_env = dict(batch_env)
+    multi_env["MINI_AGENT_CONFIG"] = multi_root + "/cfg/config.json"
+    multi_env["MINI_AGENT_SESSION_DIR"] = multi_root + "/sess"
+    multi_env["MINI_AGENT_LOG"] = multi_root + "/agent.log"
+    threading.Thread(target=serve_beta, daemon=True).start()
+    time.sleep(0.3)
+
+    mpid, mfd = pty.fork()
+    if mpid == 0:
+        os.execve(binary, [binary, "run", "--new"], multi_env)
+    set_pty_size(mfd, 24, 80)
+    mbanner = read_all(mfd, 1.0)
+    expect("config 0/3 · next: /provider <url>" in strip_csi(mbanner),
+           "multi: empty config points at /provider only")
+
+    def multi_send(keys, marker, tries=16):
+        """Send keys, poll until marker renders (fetches are async)."""
+        os.write(mfd, keys)
+        out = ""
+        for _ in range(tries):
+            out += read_all(mfd, 0.5)
+            if marker in out:
+                break
+        return out
+
+    added_a = multi_send(f"/provider add alpha http://127.0.0.1:{PORT}/v1\r".encode(),
+                         "provider 'alpha' added")
+    expect("[ok] provider 'alpha' added" in added_a,
+           "multi: /provider add alpha")
+    expect("next: /login alpha (key stays hidden)" in added_a,
+           "multi: add with url hints /login <name>")
+    expect("config 0/3" in strip_csi(added_a),
+           "multi: profiles alone leave the top-level progress at 0/3")
+    added_b = multi_send(f"/provider add beta http://127.0.0.1:{BETA_PORT}/v1\r".encode(),
+                         "provider 'beta' added")
+    expect("[ok] provider 'beta' added" in added_b, "multi: /provider add beta")
+
+    listed_a = multi_send(b"/login alpha pty-smoke-key\r", "models (2)")
+    expect("1. mock-large" in listed_a and "2. mock-small" in listed_a
+           and "alpha/mock-large" not in listed_a,
+           "multi: single ready profile keeps bare menu ids")
+    expect("pty-smoke-key" not in listed_a, "multi: inline key never echoed")
+    os.write(mfd, b"\x1b")
+    dismiss_a = read_all(mfd, 0.8)
+    expect("dismissed" in dismiss_a, "multi: Esc dismisses the alpha menu")
+
+    bad_b = multi_send(b"/login beta wrong-beta-key\r",
+                       "model list failed for beta")
+    expect("[warn] model list failed for beta:" in bad_b,
+           "multi: beta's 401 surfaces as a per-profile warning")
+    expect("models (2)" in bad_b and "1. alpha/mock-large" in bad_b
+           and "2. alpha/mock-small" in bad_b,
+           "multi: failed part still counts -> aggregate qualifies alpha ids")
+    expect("wrong-beta-key" not in bad_b, "multi: rejected beta key never echoed")
+    os.write(mfd, b"\x1b")
+    read_all(mfd, 0.8)
+
+    secret_prompt = multi_send(b"/login beta\r", "[input] API key (beta)")
+    expect("[input] API key (beta) (hidden); Enter confirms, empty Enter cancels"
+           in secret_prompt,
+           "multi: /login <name> opens the masked field pinned to beta")
+    os.write(mfd, b"pty-beta-key")
+    masked = read_all(mfd, 0.8)
+    expect("pty-beta-key" not in masked and "************" in masked,
+           "multi: secret field masks the key with stars")
+    fixed_b = multi_send(b"\r", "models (4)")
+    expect("[ok] api_key updated" in fixed_b, "multi: secret Enter saves the beta key")
+    expect("1. alpha/mock-large" in fixed_b and "2. alpha/mock-small" in fixed_b
+           and "3. beta/mock-large" in fixed_b and "4. beta/mock-small" in fixed_b,
+           "multi: aggregated menu lists both providers, qualified + sorted")
+    os.write(mfd, b"\x1b")
+    read_all(mfd, 0.8)
+
+    switched = multi_send(b"/model beta/mock-large\r", "model=beta/mock-large")
+    expect("model=beta/mock-large" in switched,
+           "multi: qualified /model switches profile + model atomically")
+    expect("MINI_AGENT_" not in switched, "multi: no env-override warning without env vars")
+    ambiguous = multi_send(b"/model mock-small\r", "several providers")
+    expect("[error] model 'mock-small' exists on several providers: alpha, beta"
+           in ambiguous,
+           "multi: ambiguous bare id fails closed, names both owners")
+    expect("pick one with /model <provider>/mock-small" in ambiguous,
+           "multi: ambiguity error teaches the qualified syntax")
+
+    plist = multi_send(b"/provider list\r", "usage /provider")
+    expect("providers (2):" in plist, "multi: /provider list counts both profiles")
+    expect("key=***set***" in plist and "pty-smoke-key" not in plist
+           and "pty-beta-key" not in plist,
+           "multi: /provider list masks keys")
+    expect("beta · http://127.0.0.1:8941/v1 · key=***set***  <- active" in plist,
+           "multi: /provider list marks the active profile")
+    cfg_view = multi_send(b"/config\r", "providers=2 active=beta")
+    expect("providers=2 active=beta" in cfg_view, "multi: /config shows profile count + active")
+    # The trailing "config file: ... (env overrides file)" help line always
+    # mentions env; only the live status suffix proves an actual override.
+    expect("env override in effect" not in cfg_view,
+           "multi: /config reports no env override")
+
+    mid_cfg = json.load(open(multi_env["MINI_AGENT_CONFIG"]))
+    expect(set(mid_cfg.get("providers", {})) == {"alpha", "beta"}
+           and mid_cfg["providers"]["alpha"].get("api_key") == "pty-smoke-key"
+           and mid_cfg["providers"]["beta"].get("api_key") == "pty-beta-key"
+           and mid_cfg.get("active_provider") == "beta"
+           and mid_cfg.get("model") == "mock-large",
+           "multi: config file stores both profiles, keys, active, model")
+
+    tabbed = multi_send(b"/login \t", "options for /login")
+    expect("options for /login (cycle with Tab):" in strip_csi(tabbed),
+           "multi: Tab on /login lists provider-name choices")
+    expect("/login alpha" in strip_csi(tabbed),
+           "multi: Tab inserts the first provider name")
+    ctrlc = multi_send(b"\x03", "press Ctrl-C again")
+    expect("[hint] press Ctrl-C again to quit, or type a new prompt" in ctrlc,
+           "multi: single Ctrl-C clears the composer, does not quit")
+
+    removed = multi_send(b"/provider rm beta\r", "provider 'beta' removed")
+    # The full info line wraps at 80 cols; assert only the short prefix.
+    expect("[info] active profile removed" in removed,
+           "multi: removing the active profile keeps unnamed values")
+    expect("[ok] provider 'beta' removed" in removed, "multi: /provider rm beta")
+    after_rm = multi_send(b"/config\r", "providers=1 active=(unnamed)")
+    expect("providers=1 active=(unnamed)" in after_rm,
+           "multi: after rm one profile remains, active is unnamed")
+
+    # Sessions persist after a turn (not on exit), so run one through the
+    # kept unnamed route (beta's url/key/model). This proves rm left a
+    # working configuration AND gives the meta.provider assertion a file.
+    # "You: hello" is committed at fold time, just before store.save().
+    turn = multi_send(b"hello\r", "You: hello", tries=24)
+    expect("tok0" in turn and "You: hello" in turn,
+           "multi: a turn works on the unnamed values kept by rm")
+    read_all(mfd, 0.8) # let the post-turn save land before /exit
+
+    os.write(mfd, b"/exit\r")
+    exit_out = read_all(mfd, 2.0)
+    _, mstatus = os.waitpid(mpid, 0)
+    expect(os.WEXITSTATUS(mstatus) == 0, "multi: /exit returns 0")
+    expect("saved session" in exit_out and "run --session" in exit_out,
+           "multi: exit saves the session with resume hint")
+    os.close(mfd)
+
+    mfiles = glob.glob(multi_root + "/sess/*.json")
+    expect(len(mfiles) == 1, "multi: one session persisted")
+    if mfiles:
+        mdata = json.load(open(mfiles[0]))
+        expect(mdata["meta"].get("provider") == "beta"
+               and mdata["meta"].get("model") == "mock-large",
+               "multi: session meta records the last selected provider/model")
+    final_cfg = json.load(open(multi_env["MINI_AGENT_CONFIG"]))
+    expect(set(final_cfg.get("providers", {})) == {"alpha"}
+           and "active_provider" not in final_cfg
+           and final_cfg.get("api_key") == "pty-beta-key",
+           "multi: final config keeps alpha + unnamed values, drops beta")
+
+    mlog = open(multi_env["MINI_AGENT_LOG"]).read()
+    expect(mlog.count("provider_add ") == 2, "multi: log records both provider_add events")
+    expect("login status=verified models=2 provider=alpha" in mlog,
+           "multi: log records alpha's verified key")
+    expect("login status=rejected models=0 provider=beta http_status=401" in mlog,
+           "multi: log records beta's 401 rejection")
+    expect("login status=verified models=2 provider=beta" in mlog,
+           "multi: log records beta's later accepted key")
+    expect(re.search(r"models_list provider=alpha .*status=ok count=2", mlog)
+           and re.search(r"models_list provider=beta .*status=ok count=2", mlog),
+           "multi: log records per-provider listing outcomes")
+    expect("provider_activate provider=beta source=slash" in mlog,
+           "multi: log records the qualified /model profile switch")
+    expect("model_select model=mock-large source=slash provider=beta" in mlog,
+           "multi: log records the selected model with its provider")
+    expect("provider_rm provider=beta" in mlog, "multi: log records provider_rm")
+    expect("pty-smoke-key" not in mlog and "pty-beta-key" not in mlog
+           and "wrong-beta-key" not in mlog,
+           "multi: no key value ever reaches the log")
+
+    ghost = subprocess.run([binary, "ask", "--provider", "ghost", "hi"],
+                           env=multi_env, text=True, capture_output=True, timeout=15)
+    expect(ghost.returncode == 2, "multi: unknown --provider exits with config error 2")
+    expect("error: unknown provider 'ghost' (available: alpha)" in ghost.stderr,
+           "multi: CLI names the available providers after rm")
+    subprocess.run(["rm", "-rf", multi_root], check=False)
     subprocess.run(["rm", "-rf", batch_root], check=False)
     config_dir.cleanup()
     return 1 if failures else 0

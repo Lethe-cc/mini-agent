@@ -23,13 +23,17 @@ std::vector<std::string_view> slash_matches(std::string_view prefix);
 // replacement line text, or nullopt when nothing matches / input is not a
 // slash line. Cycles per call so repeated Tab walks the list.
 std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor_state,
-                                              const std::vector<std::string>& session_ids = {});
+                                              const std::vector<std::string>& session_ids = {},
+                                              const std::vector<std::string>& provider_names = {},
+                                              const std::vector<std::string>& model_choices = {});
 // Hint rows shown under the composer while it is a `/`-line, as a vertical
 // list: header row then one row per prefix match Tab cycles through; the
 // no-match notice instead when nothing matches. Empty for non-slash input
 // (2026-11-01 maintainer requests; vertical form per follow-up).
 std::vector<std::string> slash_completion_hint(std::string_view composer,
-                                               const std::vector<std::string>& session_ids = {});
+                                               const std::vector<std::string>& session_ids = {},
+                                               const std::vector<std::string>& provider_names = {},
+                                               const std::vector<std::string>& model_choices = {});
 
 // UTF-8 aware composer editing: append validates/rejects lone surrogates
 // only trivially (we accept opaque bytes); returns bytes appended.
@@ -49,6 +53,10 @@ std::optional<std::string> model_choice(const std::vector<std::string>& models,
 // model (the `current` id tagged `<- current`), and a footer explaining the
 // keys. Empty when the list is empty. Committed to the history area once the
 // fetch completes; the user types a number (or /model <name>) to choose.
+// v6 (design 012): `models` holds display labels -- aggregated multi-profile
+// fetches pass `provider/model`, a single route passes bare ids; `current`
+// is the active combination's label in the same spelling. The helper itself
+// is label-agnostic.
 std::vector<std::string> model_menu_rows(const std::vector<std::string>& models,
                                          std::string_view current);
 // Incremental configuration guidance for batched entry (2026-11-02 request):

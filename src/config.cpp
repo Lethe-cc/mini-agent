@@ -166,6 +166,98 @@ bool McpServerConfig::valid(std::string* error) const {
     return fail("unknown transport '" + transport + "' (stdio|http)");
 }
 
+bool ProviderProfile::valid(std::string* error) const {
+    auto fail = [&](const std::string& m) {
+        if (error)
+            *error = name.empty() ? m : ("provider '" + name + "': " + m);
+        return false;
+    };
+    if (name.empty())
+        return fail("provider entry missing name");
+    if (name.size() > 32)
+        return fail("provider name too long (max 32)");
+    for (char c : name) {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '-'))
+            return fail("provider name must match [A-Za-z0-9_-]+ (shown in menus/logs)");
+    }
+    // A profile may be added before its URL/key are known (/provider add
+    // <name> then /login <name>); only non-empty values are checked. No
+    // loopback-only rule here: profile URLs follow the top-level base_url
+    // policy, unlike MCP http servers.
+    if (!base_url.empty()) {
+        std::string scheme, host;
+        if (!split_url(base_url, &scheme, &host))
+            return fail("base_url must be absolute with http/https scheme");
+        if (scheme != "http" && scheme != "https")
+            return fail("unsupported base_url scheme");
+    }
+    return true;
+}
+
+ProviderProfile* AppConfig::find_provider(std::string_view name) {
+    if (name.empty())
+        return nullptr;
+    for (auto& profile : providers) {
+        if (profile.name == name)
+            return &profile;
+    }
+    return nullptr;
+}
+
+const ProviderProfile* AppConfig::find_provider(std::string_view name) const {
+    if (name.empty())
+        return nullptr;
+    for (const auto& profile : providers) {
+        if (profile.name == name)
+            return &profile;
+    }
+    return nullptr;
+}
+
+bool AppConfig::activate_provider(std::string_view name) {
+    if (name.empty()) {
+        // Return to the unnamed state, KEEPING the current top-level
+        // values (the /provider rm-active rule, 012 section 5.2).
+        active_provider.clear();
+        return true;
+    }
+    ProviderProfile* profile = find_provider(name);
+    if (!profile)
+        return false;
+    active_provider = profile->name;
+    base_url = profile->base_url;
+    api_key = profile->api_key;
+    model = profile->model;
+    // Overwrite, not merge: the previous provider's window/effort must
+    // not leak into the new model (010 config-authoritative rule).
+    context_window = profile->context_window;
+    reasoning_effort = profile->reasoning_effort;
+    return true;
+}
+
+void AppConfig::sync_active_provider() {
+    ProviderProfile* profile = find_provider(active_provider);
+    if (!profile)
+        return; // unnamed state: top-level values stand alone
+    while (ends_with_slash(base_url))
+        base_url.pop_back(); // same normalization as load_config_merged
+    profile->base_url = base_url;
+    profile->api_key = api_key;
+    profile->model = model;
+    profile->context_window = context_window;
+    profile->reasoning_effort = reasoning_effort;
+}
+
+bool split_qualified_model(std::string_view ref, std::string* provider, std::string* model) {
+    const auto slash = ref.find('/');
+    if (slash == std::string_view::npos || slash == 0 || slash + 1 >= ref.size())
+        return false;
+    *provider = std::string(ref.substr(0, slash));
+    *model = std::string(ref.substr(slash + 1));
+    return true;
+}
+
 std::vector<std::string> AppConfig::missing() const {
     std::vector<std::string> out;
     if (base_url.empty())
@@ -271,6 +363,28 @@ std::string config_to_json(const AppConfig& config) {
             root["mcp_servers"][server.name] = std::move(entry);
         }
     }
+    // v6 fields (design 012 section 5.1): written only when profiles
+    // exist, so legacy files stay byte-identical. Top-level base_url/
+    // api_key/model above remain the expansion of the active profile.
+    if (!config.providers.empty()) {
+        root["providers"] = nlohmann::json::object();
+        for (const auto& profile : config.providers) {
+            nlohmann::json entry = nlohmann::json::object();
+            if (!profile.base_url.empty())
+                entry["base_url"] = profile.base_url;
+            if (!profile.api_key.empty())
+                entry["api_key"] = profile.api_key;
+            if (!profile.model.empty())
+                entry["model"] = profile.model;
+            if (profile.context_window > 0)
+                entry["context_window"] = profile.context_window;
+            if (!profile.reasoning_effort.empty())
+                entry["reasoning_effort"] = profile.reasoning_effort;
+            root["providers"][profile.name] = std::move(entry);
+        }
+    }
+    if (!config.active_provider.empty())
+        root["active_provider"] = config.active_provider;
     return root.dump(2);
 }
 
@@ -428,6 +542,67 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
             config.mcp_servers.push_back(std::move(server));
         }
     }
+
+    // v6 provider profiles (design 012 section 5.1). Fail closed on
+    // malformed entries, mirroring the MCP rules; absence keeps the
+    // legacy unnamed behavior untouched.
+    if (auto providers = parsed.find("providers"); providers != parsed.end()) {
+        if (!providers->is_object()) {
+            if (error)
+                *error = "config providers must be an object";
+            return std::nullopt;
+        }
+        for (auto& [name, node] : providers->items()) {
+            // Structured bindings cannot be lambda-captured under
+            // -Wpedantic (C++20 extension): copy to named locals first.
+            const std::string profile_name = name;
+            const nlohmann::json& entry = node;
+            if (!entry.is_object()) {
+                if (error)
+                    *error = "provider '" + profile_name + "' is not an object";
+                return std::nullopt;
+            }
+            auto pget = [&entry](const char* key) -> std::string {
+                if (auto it = entry.find(key); it != entry.end() && it->is_string())
+                    return it->get<std::string>();
+                return {};
+            };
+            ProviderProfile profile;
+            profile.name = profile_name;
+            profile.base_url = pget("base_url");
+            while (ends_with_slash(profile.base_url))
+                profile.base_url.pop_back(); // same rule as top-level
+            profile.api_key = pget("api_key");
+            profile.model = pget("model");
+            profile.reasoning_effort = pget("reasoning_effort");
+            if (auto it = entry.find("context_window"); it != entry.end()) {
+                if (it->is_number_integer() && it->get<int64_t>() > 0) {
+                    profile.context_window = it->get<int64_t>();
+                } else {
+                    if (error)
+                        *error = "provider '" + profile_name +
+                                 "' context_window must be a positive integer";
+                    return std::nullopt;
+                }
+            }
+            std::string valid_error;
+            if (!profile.valid(&valid_error)) {
+                if (error)
+                    *error = valid_error;
+                return std::nullopt;
+            }
+            config.providers.push_back(std::move(profile));
+        }
+    }
+    config.active_provider = get_str("active_provider");
+    if (!config.active_provider.empty() && !config.find_provider(config.active_provider)) {
+        // Fail closed: expanding a dangling selection would silently send
+        // the stored key to whatever top-level URL happens to be present.
+        if (error)
+            *error = "config active_provider '" + config.active_provider +
+                     "' has no matching profile";
+        return std::nullopt;
+    }
     return config;
 }
 
@@ -452,12 +627,28 @@ AppConfig load_config_merged(std::string* file_error) {
         }
     }
     // env overrides file (non-empty only)
+    // v6 (012 section 5.1): a qualified MINI_AGENT_MODEL=provider/model
+    // selects the whole profile group FIRST; the plain env overrides
+    // below still win over the expanded values.
+    const char* env_model = env_nonempty("MINI_AGENT_MODEL");
+    std::string env_model_provider;
+    std::string env_model_id;
+    const bool env_model_qualified =
+        env_model && split_qualified_model(env_model, &env_model_provider, &env_model_id) &&
+        config.find_provider(env_model_provider) != nullptr;
+    if (env_model_qualified)
+        config.activate_provider(env_model_provider);
     if (const char* v = env_nonempty("MINI_AGENT_BASE_URL"))
         config.base_url = v;
     if (const char* v = env_nonempty("MINI_AGENT_API_KEY"))
         config.api_key = v;
-    if (const char* v = env_nonempty("MINI_AGENT_MODEL"))
-        config.model = v;
+    if (env_model)
+        config.model = env_model_qualified ? env_model_id : env_model;
+    // Any endpoint env var in effect pins the session to the overridden
+    // values; profile switches cannot change them until unset + restart.
+    config.env_override_active = env_nonempty("MINI_AGENT_BASE_URL") != nullptr ||
+                                 env_nonempty("MINI_AGENT_API_KEY") != nullptr ||
+                                 env_model != nullptr;
     if (const char* v = env_nonempty("MINI_AGENT_LOG"))
         config.log_file = v;
     if (const char* v = env_nonempty("MINI_AGENT_DEBUG")) {

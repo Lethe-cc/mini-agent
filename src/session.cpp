@@ -180,6 +180,9 @@ std::string session_to_json(const SessionMeta& meta, const Chat& chat) {
     if (meta.workspace) {
         root["meta"]["workspace"] = *meta.workspace;
     }
+    if (meta.provider) {
+        root["meta"]["provider"] = *meta.provider;
+    }
     root["messages"] = std::move(messages);
     return root.dump(2);
 }
@@ -231,6 +234,9 @@ std::optional<Session> session_from_json(std::string_view text, std::string* err
     }
     if (auto it = meta_node.find("workspace"); it != meta_node.end() && it->is_string()) {
         session.meta.workspace = it->get<std::string>();
+    }
+    if (auto it = meta_node.find("provider"); it != meta_node.end() && it->is_string()) {
+        session.meta.provider = it->get<std::string>();
     }
     const auto& messages_node = parsed["messages"];
     if (!messages_node.is_array()) {

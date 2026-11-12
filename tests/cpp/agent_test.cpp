@@ -336,6 +336,160 @@ void test_models_listing() {
     check(!mini_agent::tui::model_choice({}, "1").has_value(), "no models to pick from");
 }
 
+// v6 (design 012 section 5.1): provider profiles. Legacy files must stay
+// byte-identical, the active-expansion invariant must hold across save/
+// load/activate, and malformed profile state fails closed.
+void test_provider_profiles() {
+    std::string error;
+
+    // Legacy byte-identical regression: no profiles -> no new keys.
+    mini_agent::AppConfig legacy;
+    legacy.base_url = "https://legacy.test/v1";
+    legacy.api_key = "secret";
+    legacy.model = "m1";
+    const std::string legacy_text = mini_agent::config_to_json(legacy);
+    check(legacy_text.find("providers") == std::string::npos, "legacy save has no providers key");
+    check(legacy_text.find("active_provider") == std::string::npos,
+          "legacy save has no active_provider key");
+    auto legacy_back = mini_agent::config_from_json(legacy_text, &error);
+    check(legacy_back.has_value() && legacy_back->providers.empty() &&
+              legacy_back->active_provider.empty() && !legacy_back->env_override_active,
+          "legacy round trip keeps unnamed state");
+    check(mini_agent::config_to_json(*legacy_back) == legacy_text,
+          "legacy round trip byte-identical");
+
+    // Two profiles, partial second one (add-before-login is legal).
+    mini_agent::AppConfig cfg;
+    mini_agent::ProviderProfile a;
+    a.name = "alpha";
+    a.base_url = "https://a.test/v1/";
+    a.api_key = "key-a";
+    a.model = "a-model";
+    a.context_window = 100000;
+    a.reasoning_effort = "high";
+    mini_agent::ProviderProfile b;
+    b.name = "beta";
+    cfg.providers = {a, b};
+    check(cfg.activate_provider("alpha"), "activate alpha");
+    check(cfg.base_url == "https://a.test/v1/", "activate expands base_url");
+    check(cfg.api_key == "key-a" && cfg.model == "a-model", "activate expands key/model");
+    check(cfg.context_window == 100000 && cfg.reasoning_effort == "high",
+          "activate expands window/effort");
+    cfg.sync_active_provider();
+    check(cfg.providers[0].base_url == "https://a.test/v1", "sync trims trailing slash");
+
+    // save_config_file writes to MINI_AGENT_CONFIG; route to a temp file.
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("mini_agent_prov_" + mini_agent::generate_session_id());
+    ::setenv("MINI_AGENT_CONFIG", (dir / "config.json").string().c_str(), 1);
+    check(mini_agent::save_config_file(cfg, &error), (std::string("save temp: ") + error).c_str());
+    auto merged = mini_agent::load_config_merged(&error);
+    check(error.empty(), (std::string("load clean: ") + error).c_str());
+    check(merged.providers.size() == 2, "profiles round trip");
+    check(merged.active_provider == "alpha", "active survives round trip");
+    check(merged.base_url == "https://a.test/v1" && merged.api_key == "key-a" &&
+              merged.model == "a-model",
+          "loaded top level is active expansion");
+    check(merged.providers[0].base_url == "https://a.test/v1", "profile url normalized on load");
+    check(merged.providers[1].name == "beta" && merged.providers[1].base_url.empty() &&
+              merged.providers[1].valid(&error),
+          "partial profile legal until first use");
+
+    // Cross-profile switch clears the previous window/effort (no leak).
+    check(merged.activate_provider("beta"), "activate beta");
+    check(merged.context_window == 0 && merged.reasoning_effort.empty(),
+          "unset profile window/effort clear top level");
+    check(merged.base_url.empty() && merged.api_key.empty() && merged.model.empty(),
+          "partial profile expands to empty top level");
+    check(!merged.activate_provider("ghost"), "unknown profile rejected");
+    check(merged.active_provider == "beta", "failed activate keeps selection");
+
+    // Edits through top-level commands fold back into the active profile.
+    merged.base_url = "https://b.test/v1";
+    merged.api_key = "key-b";
+    merged.model = "b-model";
+    merged.context_window = 50000;
+    merged.sync_active_provider();
+    check(merged.providers[1].base_url == "https://b.test/v1" &&
+              merged.providers[1].api_key == "key-b" && merged.providers[1].model == "b-model" &&
+              merged.providers[1].context_window == 50000,
+          "sync folds edits into active profile");
+
+    // rm-active rule: unnamed state keeps the current top-level values.
+    check(merged.activate_provider(""), "empty name returns to unnamed");
+    check(merged.active_provider.empty() && merged.base_url == "https://b.test/v1",
+          "unnamed keeps top-level values");
+    merged.sync_active_provider(); // no-op in unnamed state
+    check(merged.providers[1].model == "b-model", "unnamed sync touches no profile");
+
+    // Fail-closed parsing.
+    check(!mini_agent::config_from_json(R"({"providers":[]})", &error).has_value(),
+          "providers must be an object");
+    check(!mini_agent::config_from_json(R"({"providers":{"a":5}})", &error).has_value(),
+          "profile entry must be an object");
+    check(!mini_agent::config_from_json(R"({"providers":{"bad name":{}}})", &error).has_value(),
+          "profile name charset enforced");
+    check(!mini_agent::config_from_json(R"({"providers":{"x":{"base_url":"not-a-url"}}})", &error)
+               .has_value(),
+          "profile url must be absolute");
+    check(!mini_agent::config_from_json(
+               R"({"providers":{"x":{"base_url":"ftp://h/v1"}}})", &error)
+               .has_value(),
+          "profile url scheme enforced");
+    check(!mini_agent::config_from_json(R"({"providers":{"x":{"context_window":0}}})", &error)
+               .has_value(),
+          "profile window must be positive");
+    check(!mini_agent::config_from_json(R"({"active_provider":"ghost"})", &error).has_value(),
+          "dangling active_provider fails closed");
+    check(error.find("ghost") != std::string::npos, "dangling error names the selection");
+    // Plain http is allowed for profiles (top-level policy, unlike MCP).
+    check(mini_agent::config_from_json(
+               R"({"providers":{"x":{"base_url":"http://remote.test/v1"}}})", &error)
+               .has_value(),
+          "profile http url follows top-level policy");
+
+    // Qualified model references.
+    std::string prov, id;
+    check(mini_agent::split_qualified_model("alpha/m1", &prov, &id) && prov == "alpha" &&
+              id == "m1",
+          "qualified split");
+    check(mini_agent::split_qualified_model("openai/org/model-x", &prov, &id) &&
+              prov == "openai" && id == "org/model-x",
+          "split at first slash only");
+    check(!mini_agent::split_qualified_model("plain", &prov, &id), "unqualified rejected");
+    check(!mini_agent::split_qualified_model("/m", &prov, &id), "empty provider rejected");
+    check(!mini_agent::split_qualified_model("p/", &prov, &id), "empty model rejected");
+
+    // Qualified MINI_AGENT_MODEL activates the profile, plain env still wins.
+    check(mini_agent::save_config_file(cfg, &error), "save for env test");
+    ::setenv("MINI_AGENT_MODEL", "alpha/a-model", 1);
+    auto env_cfg = mini_agent::load_config_merged(&error);
+    check(env_cfg.active_provider == "alpha" && env_cfg.model == "a-model",
+          "qualified env model activates profile");
+    check(env_cfg.base_url == "https://a.test/v1" && env_cfg.api_key == "key-a",
+          "qualified env expands whole profile");
+    check(env_cfg.env_override_active, "env model sets override state");
+    ::setenv("MINI_AGENT_BASE_URL", "https://env.test/v1", 1);
+    env_cfg = mini_agent::load_config_merged(&error);
+    check(env_cfg.base_url == "https://env.test/v1", "plain env url beats profile expansion");
+    ::unsetenv("MINI_AGENT_BASE_URL");
+    ::setenv("MINI_AGENT_MODEL", "literal-model", 1);
+    env_cfg = mini_agent::load_config_merged(&error);
+    check(env_cfg.model == "literal-model" && env_cfg.active_provider == "alpha",
+          "plain env model keeps file selection");
+    ::setenv("MINI_AGENT_MODEL", "ghost/m", 1);
+    env_cfg = mini_agent::load_config_merged(&error);
+    check(env_cfg.model == "ghost/m" && env_cfg.active_provider == "alpha",
+          "unknown env prefix stays a literal model id");
+    ::unsetenv("MINI_AGENT_MODEL");
+    env_cfg = mini_agent::load_config_merged(&error);
+    check(!env_cfg.env_override_active, "no endpoint env -> no override state");
+
+    ::unlink((dir / "config.json").c_str());
+    ::rmdir(dir.c_str());
+    ::unsetenv("MINI_AGENT_CONFIG");
+}
+
 void test_config_batched_hint() {
     // Batched entry (2026-11-02 request): each command saves independently,
     // so the hint must name only the NEXT missing step, never all three.
@@ -2584,6 +2738,54 @@ void test_v410_arg_completion() {
     check(log.size() == 7 && log[1].find("info") != std::string::npos, "/log lists 6 choices");
 }
 
+// v6 (design 012 §5.3): the provider-aware argument tiers. /login cycles
+// profile names before <key>, /provider its subcommands, /model the fetched
+// (possibly qualified) ids before <name>. Exercised through the public
+// Tab/hint wrappers (the choice builder itself has internal linkage).
+void test_v6_provider_arg_completion() {
+    namespace T = mini_agent::tui;
+    const std::vector<std::string> names{"alpha", "beta"};
+    const std::vector<std::string> models{"alpha/mock-large", "beta/mock-large"};
+    // /login: names first, placeholder last; no names keeps the legacy tier.
+    const auto lhint = T::slash_completion_hint("/login ", {}, names);
+    check(lhint.size() == 4 && lhint[0].find("options for /login") != std::string::npos &&
+              lhint[1].find("alpha") != std::string::npos &&
+              lhint[2].find("beta") != std::string::npos &&
+              lhint[3].find("<key>") != std::string::npos,
+          "/login hint lists provider names then <key>");
+    const auto bare_login = T::slash_completion_hint("/login ");
+    check(bare_login.size() == 2 && bare_login[1].find("<key>") != std::string::npos,
+          "/login without profiles: <key> only");
+    int cycle = 0;
+    const auto l1 = T::slash_tab_complete("/login ", cycle, {}, names);
+    check(l1 && *l1 == "/login alpha", "Tab on /login inserts the first profile");
+    const auto l2 = T::slash_tab_complete("/login alpha", cycle, {}, names);
+    check(l2 && *l2 == "/login beta", "full profile name rotates to the next");
+    // /provider: fixed subcommand tier.
+    const auto phint = T::slash_completion_hint("/provider ");
+    check(phint.size() == 5 && phint[1].find("list") != std::string::npos &&
+              phint[2].find("add") != std::string::npos &&
+              phint[3].find("rm") != std::string::npos &&
+              phint[4].find("<url>") != std::string::npos,
+          "/provider hint lists list/add/rm/<url>");
+    const auto padd = T::slash_tab_complete("/provider a", cycle);
+    check(padd && *padd == "/provider add", "/provider a filters to add");
+    // /model: fetched ids (qualified in an aggregate) before the placeholder.
+    const auto mhint = T::slash_completion_hint("/model ", {}, {}, models);
+    check(mhint.size() == 4 && mhint[1].find("alpha/mock-large") != std::string::npos &&
+              mhint[2].find("beta/mock-large") != std::string::npos &&
+              mhint[3].find("<name>") != std::string::npos,
+          "/model hint cycles fetched qualified ids then <name>");
+    int mc = 0;
+    const auto m1 = T::slash_tab_complete("/model ", mc, {}, {}, models);
+    check(m1 && *m1 == "/model alpha/mock-large", "Tab on /model inserts the first fetched id");
+    const auto m2 = T::slash_tab_complete("/model alpha/mock-large", mc, {}, {}, models);
+    check(m2 && *m2 == "/model beta/mock-large", "full id rotates to the next provider's");
+    const auto bare_model = T::slash_completion_hint("/model ");
+    check(bare_model.size() == 2 && bare_model[1].find("<name>") != std::string::npos,
+          "/model without fetch: <name> only");
+}
+
 void test_v43_probe_parse() {
     using K = mini_agent::ProbeLimitKind;
     // vLLM/OpenAI total window: the only shape that IS the denominator.
@@ -2779,6 +2981,7 @@ int main() {
     test_loop_success_and_failure();
     test_loop_failure_leaves_history();
     test_config_round_trip_and_precedence();
+    test_provider_profiles();
     test_models_listing();
     test_config_batched_hint();
     test_login_status();
@@ -2813,6 +3016,7 @@ int main() {
     test_v413_session_prefix();
     test_v415_session_recency();
     test_v410_arg_completion();
+    test_v6_provider_arg_completion();
     test_v411_turn_panel();
     test_v44_debug_log();
     test_v417_turn_bridge();

@@ -36,6 +36,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -146,7 +147,9 @@ std::vector<std::string_view> slash_matches(std::string_view prefix) {
 // Empty `session_ids` keeps the placeholder behaviour (no store, no
 // sessions yet).
 std::vector<std::string> slash_arg_choices(std::string_view command,
-                                           const std::vector<std::string>& session_ids = {}) {
+                                           const std::vector<std::string>& session_ids = {},
+                                           const std::vector<std::string>& provider_names = {},
+                                           const std::vector<std::string>& model_choices = {}) {
     if (command == "/context")
         return {"<tokens>", "probe", "off"};
     if (command == "/log")
@@ -165,11 +168,19 @@ std::vector<std::string> slash_arg_choices(std::string_view command,
     if (command == "/reasoning")
         return {"low", "medium", "high", "off"};
     if (command == "/provider")
-        return {"<url>"};
-    if (command == "/model")
-        return {"<name>"};
-    if (command == "/login")
-        return {"<key>"};
+        return {"list", "add", "rm", "<url>"};
+    if (command == "/model") {
+        // v6: fetched entries cycle before the free-text placeholder; in an
+        // aggregated fetch they carry the qualified provider/model syntax.
+        std::vector<std::string> out = model_choices;
+        out.push_back("<name>");
+        return out;
+    }
+    if (command == "/login") {
+        std::vector<std::string> out = provider_names; // /login <name> [key]
+        out.push_back("<key>");
+        return out;
+    }
     if (command == "/cwd")
         return {"<path>"};
     if (command == "/preview")
@@ -506,7 +517,9 @@ std::string prompt_marker(const ConnState state) noexcept {
 }
 
 std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor_state,
-                                              const std::vector<std::string>& session_ids) {
+                                              const std::vector<std::string>& session_ids,
+                                              const std::vector<std::string>& provider_names,
+                                              const std::vector<std::string>& model_choices) {
     if (line.empty() || line.front() != '/')
         return std::nullopt;
     const auto matches = slash_matches(line);
@@ -516,7 +529,7 @@ std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor
         std::string_view cmd;
         std::string_view rest;
         if (split_composer(line, &cmd, &rest)) {
-            const auto choices = slash_arg_choices(cmd, session_ids);
+            const auto choices = slash_arg_choices(cmd, session_ids, provider_names, model_choices);
             std::vector<std::string_view> hits;
             for (const auto& c : choices)
                 if (c.substr(0, rest.size()) == rest)
@@ -557,7 +570,9 @@ std::optional<std::string> slash_tab_complete(std::string_view line, int& cursor
 }
 
 std::vector<std::string> slash_completion_hint(std::string_view composer,
-                                               const std::vector<std::string>& session_ids) {
+                                               const std::vector<std::string>& session_ids,
+                                               const std::vector<std::string>& provider_names,
+                                               const std::vector<std::string>& model_choices) {
     const bool colors = colors_enabled();
     if (composer.empty() || composer.front() != '/')
         return {};
@@ -570,7 +585,7 @@ std::vector<std::string> slash_completion_hint(std::string_view composer,
         std::string_view cmd;
         std::string_view rest;
         if (split_composer(composer, &cmd, &rest)) {
-            const auto choices = slash_arg_choices(cmd, session_ids);
+            const auto choices = slash_arg_choices(cmd, session_ids, provider_names, model_choices);
             std::vector<std::string_view> hits;
             for (const auto& c : choices)
                 if (c.substr(0, rest.size()) == rest)
@@ -1066,8 +1081,9 @@ class LiveScreen {
                 std::size_t cols, const std::vector<std::string>& extra_rows = {},
                 const std::string& sysinfo = {}, const std::vector<std::string>& session_ids = {},
                 const std::vector<std::string>& sidebar = {},
-                std::size_t sidebar_sel =
-                    static_cast<std::size_t>(-1)) { // NOLINT(bugprone-easily-swappable-parameters)
+                std::size_t sidebar_sel = static_cast<std::size_t>(-1),
+                const std::vector<std::string>& provider_names = {},
+                const std::vector<std::string>& model_choices = {}) { // NOLINT(bugprone-easily-swappable-parameters)
         const std::size_t rows = current_rows();
         // Slash hint (2026-11-01 maintainer request; vertical list per
         // follow-up): while the composer is a slash line, enumerate Tab
@@ -1085,7 +1101,8 @@ class LiveScreen {
             composer_display == last_comp_disp_ && prompt == last_prompt_ &&
             status == last_status_ && extra_rows == last_extra_ && sysinfo == last_sysinfo_ &&
             session_ids == last_session_ids_ && sidebar == last_sidebar_ &&
-            sidebar_sel == last_sidebar_sel_) {
+            sidebar_sel == last_sidebar_sel_ && provider_names == last_provider_names_ &&
+            model_choices == last_model_choices_) {
             return;
         }
         inputs_cached_ = true;
@@ -1103,6 +1120,8 @@ class LiveScreen {
         last_session_ids_ = session_ids;
         last_sidebar_ = sidebar;
         last_sidebar_sel_ = sidebar_sel;
+        last_provider_names_ = provider_names;
+        last_model_choices_ = model_choices;
         // v4.16: one merged footer row (status + right-aligned sysinfo)
         // on top of the cursor row.
         const std::size_t fixed_rows = 2;
@@ -1140,7 +1159,8 @@ class LiveScreen {
         if (!extra_rows.empty()) {
             hint_source = extra_rows; // approval block outranks slash hints
         } else {
-            hint_source = slash_completion_hint(composer, session_ids);
+            hint_source = slash_completion_hint(composer, session_ids, provider_names,
+                                                model_choices);
         }
         for (const auto& line : hint_source) {
             if (hint_rows.size() >= budget)
@@ -1312,6 +1332,8 @@ class LiveScreen {
     std::vector<std::string> last_session_ids_;
     std::vector<std::string> last_sidebar_;
     std::size_t last_sidebar_sel_ = static_cast<std::size_t>(-1);
+    std::vector<std::string> last_provider_names_;
+    std::vector<std::string> last_model_choices_;
 
     static std::string join(const std::vector<std::string>& rows) {
         std::string out;
@@ -1410,12 +1432,32 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         std::string error;
         int http_status = 0; // 0 = no response arrived (auth unverifiable)
         bool network_error = false;
+        // v6 (design 012 §5.2): one sub-result per fetch target. The unnamed
+        // top-level config is the empty-name entry; each named profile gets
+        // its own GET. The fields above hold the ACTIVE profile's sub-result
+        // (legacy single-profile folds read them unchanged).
+        struct Part {
+            std::string name; // "" = unnamed top-level config
+            bool ok = false;
+            std::vector<std::string> ids;
+            std::vector<ModelCapabilities> caps;
+            std::string error;
+            int http_status = 0;
+            bool network_error = false;
+        };
+        std::vector<Part> parts;
     } models_result;
-    AuthProbe auth;                 // latest login/auth verdict, shown by /config too
-    std::string models_fingerprint; // base_url+'\n'+api_key of the last fetch (not a hash)
+    AuthProbe auth; // ACTIVE profile's verdict, shown by /config too
+    // v6: per-profile verdicts survive provider switches ("" = unnamed).
+    // `auth` always mirrors the active profile's map entry.
+    std::map<std::string, AuthProbe> auth_probes;
+    std::string models_fingerprint; // every target's name+url+key, '\n'-joined (not a hash)
     std::chrono::steady_clock::time_point models_start;
     bool model_menu_open = false;
-    std::vector<std::string> model_choices; // ids backing the open menu
+    std::vector<std::string> model_choices; // display labels backing the open menu
+    // v6: selection target for each model_choices row (provider "" = keep
+    // the active profile). Parallel to model_choices, same lifecycle.
+    std::vector<std::pair<std::string, std::string>> model_choice_targets;
     // v4.3 (design 010 §13): one-shot context-window probe worker, same
     // join-then-read discipline as models_worker (screen/logger stay on
     // the main thread).
@@ -1459,6 +1501,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // v4.2: reasoning ACTUALLY observed in responses (status preference).
     bool status_reasoning_seen = false;
     std::string status_reasoning_actual;
+    // v6 (design 012): profile names for /login and /provider completion.
+    auto provider_name_list = [&] {
+        std::vector<std::string> names;
+        names.reserve(config.providers.size());
+        for (const auto& p : config.providers)
+            names.push_back(p.name);
+        return names;
+    };
     // v4.2: cached capability lookup for the current model (empty when the
     // gateway exposed no metadata or the model is not in the list).
     auto caps_for_model = [&]() -> ModelCapabilities {
@@ -1513,6 +1563,15 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         status_reasoning_actual.clear();
         reasoning_menu_open = false;
         reasoning_choices.clear();
+    };
+    // v6 (design 012 §5.4): provider switching. `auth` always mirrors the
+    // active profile's map entry; per-profile verdicts survive the switch.
+    // The capability cache is invalidated (it belongs to the old route) and
+    // every usage reading resets, exactly like a cross-route model change.
+    auto switch_active_profile = [&] {
+        auth = auth_probes[config.active_provider]; // default-constructed on first sight
+        model_caps.clear();
+        reset_usage_readings();
     };
     auto turn_start = steady_now();
     auto last_ctrl_c = std::chrono::steady_clock::time_point{};
@@ -1844,9 +1903,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     };
 
     // Query GET {base_url}/models off-thread (frame loop must not block).
-    // No-op unless base_url+api_key are both set and differ from the last
-    // attempt. Logs only metadata (status/count/elapsed): the api_key never
-    // reaches the log line, the menu, or any ProviderError text.
+    // v6 (design 012 §5.3): ONE aggregate job per fetch. Every complete
+    // profile (url+key set) gets its own sequential GET -- partial profiles
+    // are skipped until /login completes them -- plus the unnamed top-level
+    // values when they are set and not already covered by a profile (the
+    // env-override case). Per-profile failure never blocks the others.
+    // Logs only metadata (status/count/elapsed): api_keys never reach the
+    // log line, the menu, or any ProviderError text.
     auto start_sidebar = [&] {
         if (!show_sidebar)
             return;
@@ -1985,9 +2048,32 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     };
 
     auto start_models_fetch = [&](bool force) {
-        if (models_running || config.base_url.empty() || config.api_key.empty())
+        if (models_running)
             return;
-        const std::string fingerprint = config.base_url + '\n' + config.api_key;
+        // Fetch targets: name -> (base_url, api_key). Empty name = unnamed.
+        std::vector<std::pair<std::string, std::pair<std::string, std::string>>> targets;
+        std::string fingerprint;
+        for (const auto& profile : config.providers) {
+            fingerprint += profile.name + '\n' + profile.base_url + '\n' + profile.api_key + '\n';
+            if (!profile.base_url.empty() && !profile.api_key.empty())
+                targets.emplace_back(profile.name,
+                                     std::make_pair(profile.base_url, profile.api_key));
+        }
+        if (!config.base_url.empty() && !config.api_key.empty()) {
+            // The unnamed values duplicate a profile when some profile has
+            // the same URL (the active expansion always does; only an env
+            // override points somewhere else) -- fetch that route once.
+            bool covered = false;
+            for (const auto& profile : config.providers)
+                if (profile.base_url == config.base_url)
+                    covered = true;
+            fingerprint += '\n' + config.base_url + '\n' + config.api_key + '\n';
+            if (!covered)
+                targets.emplace_back(std::string(),
+                                     std::make_pair(config.base_url, config.api_key));
+        }
+        if (targets.empty())
+            return;
         if (!force && fingerprint == models_fingerprint)
             return;
         if (models_worker.joinable())
@@ -1999,37 +2085,61 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         models_fingerprint = fingerprint;
         models_start = steady_now();
         logger->event("models_list",
-                      {{"status", "start"}, {"base_url", Logger::redact_url(config.base_url)}});
+                      {{"status", "start"},
+                       {"base_url", Logger::redact_url(config.base_url)},
+                       {"providers", std::to_string(targets.size())}});
         const AppConfig snapshot = config; // thread boundary (like start_turn)
         // The worker computes only the result and sets the flag: `logger` and
         // `screen` are main-thread state (/log reassigns logger), so the
-        // completion event and the menu render happen on the main thread.
-        models_worker = std::thread([&, snapshot] {
+        // completion events and the menu render happen on the main thread.
+        models_worker = std::thread([&, snapshot, targets] {
             ModelsResult r;
-            // Bounded wait: a hung /models must not stall the TUI for the
-            // full chat timeout budget (design 007 section 6 timeouts).
-            ProviderConfig pc = snapshot.to_provider();
-            pc.connect_timeout_seconds = 5;
-            pc.total_timeout_seconds =
-                pc.total_timeout_seconds < 15 ? pc.total_timeout_seconds : 15;
-            try {
-                OpenAiProvider provider(pc);
-                // v4.2: one GET carries both the id list and the optional
-                // capability metadata (OpenRouter-style gateways). Gateways
-                // without the fields simply yield empty caps -- ids stay.
-                r.caps = provider.list_model_capabilities();
-                for (const auto& cap : r.caps)
-                    r.ids.push_back(cap.id);
-                r.ok = true;
-            } catch (const ProviderError& e) {
-                // parse_models_meta_json shares parse_models_json's fail-
-                // closed root/data guards, so a Protocol error here would
-                // fail the id-only path identically -- no fallback needed.
-                r.error = e.what();
-                r.http_status = e.http_status();
-                r.network_error = e.kind() == ProviderErrorKind::Network;
-            } catch (const std::exception& e) {
-                r.error = e.what();
+            for (const auto& [name, creds] : targets) {
+                ModelsResult::Part part;
+                part.name = name;
+                // Bounded wait: a hung /models must not stall the TUI for
+                // the full chat timeout budget (design 007 section 6).
+                ProviderConfig pc = snapshot.to_provider();
+                pc.base_url = creds.first;
+                pc.api_key = creds.second;
+                pc.connect_timeout_seconds = 5;
+                pc.total_timeout_seconds =
+                    pc.total_timeout_seconds < 15 ? pc.total_timeout_seconds : 15;
+                try {
+                    // One provider instance per target: the lazy CURL handle
+                    // is NOT thread-safe, and sequential GETs keep the
+                    // failure isolation simple (design 012 §5.3).
+                    OpenAiProvider provider(std::move(pc));
+                    // v4.2: one GET carries both the id list and the optional
+                    // capability metadata (OpenRouter-style gateways).
+                    part.caps = provider.list_model_capabilities();
+                    for (const auto& cap : part.caps)
+                        part.ids.push_back(cap.id);
+                    part.ok = true;
+                } catch (const ProviderError& e) {
+                    // parse_models_meta_json shares parse_models_json's fail-
+                    // closed root/data guards, so a Protocol error here would
+                    // fail the id-only path identically -- no fallback needed.
+                    part.error = e.what();
+                    part.http_status = e.http_status();
+                    part.network_error = e.kind() == ProviderErrorKind::Network;
+                } catch (const std::exception& e) {
+                    part.error = e.what();
+                }
+                r.parts.push_back(std::move(part));
+            }
+            // Legacy fields mirror the ACTIVE target so the existing folds
+            // (menu fallback, auth verdict) keep single-profile semantics.
+            for (const auto& part : r.parts) {
+                if (part.name != snapshot.active_provider)
+                    continue;
+                r.ok = part.ok;
+                r.ids = part.ids;
+                r.caps = part.caps;
+                r.error = part.error;
+                r.http_status = part.http_status;
+                r.network_error = part.network_error;
+                break;
             }
             models_result = std::move(r);
             models_done = true;
@@ -2037,9 +2147,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     };
 
     // Called after /provider or /login mutates config: auto-discover once
-    // both halves are known (the user's stated request).
+    // at least one target has both halves known (the user's stated request).
     auto maybe_autofetch_models = [&] {
-        if (!config.base_url.empty() && !config.api_key.empty()) {
+        bool any_ready = !config.base_url.empty() && !config.api_key.empty();
+        for (const auto& profile : config.providers)
+            if (!profile.base_url.empty() && !profile.api_key.empty())
+                any_ready = true;
+        if (any_ready) {
             screen.commit("[info] listing models from provider...");
             start_models_fetch(false);
         }
@@ -2111,6 +2225,47 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit("  ... truncated (file longer than 500 lines)");
         }
     };
+    // v6 (design 012 §5.2): one selection path for /model and the numbered
+    // menu. Cross-profile picks activate the profile first (atomic
+    // url+key+model switch), same-profile picks keep the legacy behavior
+    // exactly. env overrides stay in effect until the vars are unset and
+    // the process restarts -- say so on a profile pick.
+    auto select_model = [&](const std::string& provider, const std::string& id,
+                            const char* source) {
+        const bool switch_profile = !provider.empty() && provider != config.active_provider;
+        if (switch_profile) {
+            if (!config.activate_provider(provider)) {
+                screen.commit("[error] unknown provider '" + provider + "'");
+                return;
+            }
+            switch_active_profile();
+            logger->event("provider_activate", {{"provider", provider}, {"source", source}});
+        }
+        config.model = id;
+        config.sync_active_provider();
+        session.meta.model = config.model;
+        session.meta.provider =
+            config.active_provider.empty()
+                ? std::optional<std::string>()
+                : std::optional<std::string>(config.active_provider);
+        reset_usage_readings(); // v4: window/counts belong to the old model
+        if (source == std::string_view("menu"))
+            save_and_report(); // menu keeps the legacy quiet save
+        else
+            save_and_report(true);
+        logger->event("model_select",
+                      {{"model", config.model},
+                       {"source", source},
+                       {"provider",
+                        config.active_provider.empty() ? "(unnamed)" : config.active_provider}});
+        screen.commit("model=" + (config.active_provider.empty()
+                                      ? config.model
+                                      : config.active_provider + "/" + config.model));
+        if (switch_profile && config.env_override_active)
+            screen.commit("[warn] MINI_AGENT_* env overrides are active: the profile is "
+                          "saved, but this process keeps the env endpoint/model until "
+                          "the vars are unset and mini-agent restarts");
+    };
     auto handle_slash = [&](std::string_view line) -> bool {
         auto arg_of = [](std::string_view text) -> std::string_view {
             const auto space = text.find(' ');
@@ -2120,6 +2275,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // Short lines on purpose: single-row commands stay intact even
             // on narrow terminals (wrap breaks mid-token at width limit).
             screen.commit("commands: /provider <url> · /login [key] · /model <name>");
+            screen.commit("          /provider list|add <name> [url]|rm <name> (profiles)");
+            screen.commit("          /login <name> [key] · /model <provider>/<name>");
             screen.commit("          /tools (tool registry) · /mcp (servers) · /cwd [path]");
             screen.commit("          /approve ask|allowlist|off (tool gate)");
             screen.commit("          /models (list & pick) · /log <path>|off|default");
@@ -2138,14 +2295,41 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             return true;
         }
         if (line.rfind("/login", 0) == 0) {
+            // v6 (design 012 §5.2): a first token naming a configured
+            // profile targets that profile's key; anything else is the key
+            // itself for the active route (legacy behavior).
             const auto arg = arg_of(line);
-            if (arg.empty()) {
+            std::string target = config.active_provider;
+            std::string_view key = arg;
+            if (!arg.empty()) {
+                const auto space = arg.find(' ');
+                const auto first = space == std::string_view::npos ? arg : arg.substr(0, space);
+                if (config.find_provider(first) != nullptr) {
+                    target = std::string(first);
+                    key = space == std::string_view::npos ? std::string_view() : arg.substr(space);
+                    while (!key.empty() && key.front() == ' ')
+                        key.remove_prefix(1);
+                }
+            }
+            const std::string label = target.empty() ? "" : " (" + target + ")";
+            if (key.empty()) {
                 secret_input = true; // masked composer; next Enter sets key
-                secret_field = "api_key";
-                screen.commit("[input] API key (hidden); Enter confirms, empty Enter cancels");
+                // "" = active route; a profile name pins the target even if
+                // the active profile changes before Enter lands.
+                secret_field = target.empty() ? "api_key" : "api_key:" + target;
+                screen.commit("[input] API key" + label +
+                              " (hidden); Enter confirms, empty Enter cancels");
             } else {
-                config.api_key = std::string(arg);
-                auth = AuthProbe{}; // previous verdict belongs to the old key
+                if (target == config.active_provider) {
+                    config.api_key = std::string(key);
+                    auth = AuthProbe{}; // previous verdict belongs to the old key
+                    auth_probes[target] = auth;
+                    config.sync_active_provider();
+                } else {
+                    auto* profile = config.find_provider(target);
+                    profile->api_key = std::string(key);
+                    auth_probes[target] = AuthProbe{};
+                }
                 save_and_report(true);
                 maybe_autofetch_models();
             }
@@ -2153,7 +2337,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         }
         if (line.rfind("/models", 0) == 0) {
             // Listed before /model so the shared prefix resolves here first.
-            if (config.base_url.empty() || config.api_key.empty()) {
+            // v6: any complete profile (or the unnamed route) can be listed;
+            // the fetch aggregates every ready target.
+            bool any_ready = !config.base_url.empty() && !config.api_key.empty();
+            for (const auto& p : config.providers)
+                any_ready = any_ready || (!p.base_url.empty() && !p.api_key.empty());
+            if (!any_ready) {
                 screen.commit("[error] model listing needs base_url + api_key ·" +
                               config_next_hint(config));
             } else if (models_running) {
@@ -2167,28 +2356,156 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         if (line.rfind("/model", 0) == 0) {
             const auto arg = arg_of(line);
             if (arg.empty()) {
-                screen.commit("model=" + (config.model.empty() ? "(not set)" : config.model) +
-                              "; usage /model <name>" +
+                const std::string shown =
+                    config.active_provider.empty()
+                        ? (config.model.empty() ? "(not set)" : config.model)
+                        : config.active_provider + "/" + config.model;
+                screen.commit("model=" + shown + "; usage /model <name> | <provider>/<name>" +
                               (config.base_url.empty() || config.api_key.empty()
                                    ? std::string()
                                    : " · /models lists what the provider offers"));
             } else {
-                config.model = std::string(arg);
-                session.meta.model = config.model;
-                reset_usage_readings(); // v4: window/counts belong to the old model
-                save_and_report(true);
+                // v6 (design 012 §5.2): qualified -> atomic profile switch;
+                // bare -> active-profile match, then a globally unique id
+                // in the last fetched list; ambiguous names fail closed
+                // (never guess an endpoint).
+                const std::string ref(arg);
+                std::string provider;
+                std::string id;
+                if (split_qualified_model(ref, &provider, &id) &&
+                    config.find_provider(provider) != nullptr) {
+                    select_model(provider, id, "slash");
+                    return true;
+                }
+                std::vector<std::string> owners;
+                for (std::size_t i = 0; i < model_choice_targets.size(); ++i) {
+                    const auto& target = model_choice_targets[i];
+                    if (target.second == ref &&
+                        std::find(owners.begin(), owners.end(), target.first) == owners.end())
+                        owners.push_back(target.first);
+                }
+                if (owners.size() > 1) {
+                    std::string names;
+                    for (const auto& owner : owners)
+                        names += (names.empty() ? "" : ", ") +
+                                 (owner.empty() ? "(unnamed)" : owner);
+                    screen.commit("[error] model '" + ref +
+                                  "' exists on several providers: " + names);
+                    screen.commit("        pick one with /model <provider>/" + ref);
+                } else if (owners.size() == 1) {
+                    select_model(owners.front(), ref, "slash");
+                } else {
+                    // Not in the fetched list: literal set on the active
+                    // route (legacy behavior -- the id may simply not be
+                    // listed).
+                    select_model("", ref, "slash");
+                }
             }
             return true;
         }
         if (line.rfind("/provider", 0) == 0) {
             const auto arg = arg_of(line);
-            if (arg.empty()) {
+            auto show_current = [&] {
                 screen.commit(
                     "base_url=" + (config.base_url.empty() ? "(not set)" : config.base_url) +
-                    "; usage /provider <url>");
+                    " · model=" + (config.model.empty() ? "(not set)" : config.model) +
+                    (config.active_provider.empty() ? " (unnamed)"
+                                                    : " · active=" + config.active_provider));
+            };
+            if (arg.empty() || arg == "list") {
+                // v6 (design 012 §5.2): all profiles, keys masked, active
+                // marked; then the effective values.
+                if (config.providers.empty()) {
+                    screen.commit("providers: none · usage /provider add <name> [url]");
+                } else {
+                    screen.commit("providers (" + std::to_string(config.providers.size()) + "):");
+                    for (const auto& p : config.providers)
+                        screen.commit("  " + p.name + " · " +
+                                      (p.base_url.empty() ? "(url not set)" : p.base_url) +
+                                      " · key=" + (p.api_key.empty() ? "(not set)" : "***set***") +
+                                      (p.name == config.active_provider ? "  <- active" : ""));
+                }
+                show_current();
+                screen.commit("usage /provider <url> · /provider add <name> [url] · "
+                              "/provider rm <name>");
+            } else if (arg.rfind("add", 0) == 0 && (arg.size() == 3 || arg[3] == ' ')) {
+                auto rest = arg.substr(3);
+                while (!rest.empty() && rest.front() == ' ')
+                    rest.remove_prefix(1);
+                const auto space = rest.find(' ');
+                const std::string name(rest.substr(0, space));
+                auto url = space == std::string_view::npos ? std::string_view()
+                                                           : rest.substr(space + 1);
+                while (!url.empty() && url.front() == ' ')
+                    url.remove_prefix(1);
+                ProviderProfile probe;
+                probe.name = name;
+                probe.base_url = std::string(url);
+                std::string err;
+                if (!probe.valid(&err)) {
+                    screen.commit("[error] " + err);
+                    return true;
+                }
+                if (auto* existing = config.find_provider(name)) {
+                    // Upsert (same rule as MCP): URL replaces when given;
+                    // key/model/metadata survive an add without a URL.
+                    if (!url.empty()) {
+                        existing->base_url = std::string(url);
+                        if (name == config.active_provider) {
+                            config.base_url = existing->base_url;
+                            auth = AuthProbe{};
+                            auth_probes[name] = auth;
+                        } else {
+                            auth_probes.erase(name);
+                        }
+                    }
+                    screen.commit("[ok] provider '" + name + "' updated" +
+                                  (url.empty() ? "" : " · " + std::string(url)));
+                } else {
+                    config.providers.push_back(std::move(probe));
+                    screen.commit("[ok] provider '" + name + "' added" +
+                                  (url.empty() ? "" : " · " + std::string(url)));
+                }
+                const auto* added = config.find_provider(name);
+                if (added->base_url.empty())
+                    screen.commit("     next: /provider add " + name +
+                                  " <url> · then /login " + name);
+                else if (added->api_key.empty())
+                    screen.commit("     next: /login " + name + " (key stays hidden)");
+                logger->event("provider_add", {{"provider", name}});
+                save_and_report(true);
+                maybe_autofetch_models();
+            } else if (arg.rfind("rm", 0) == 0 && (arg.size() == 2 || arg[2] == ' ')) {
+                auto rest = arg.substr(2);
+                while (!rest.empty() && rest.front() == ' ')
+                    rest.remove_prefix(1);
+                const std::string name(rest);
+                auto it = std::find_if(config.providers.begin(), config.providers.end(),
+                                       [&](const ProviderProfile& p) { return p.name == name; });
+                if (name.empty() || it == config.providers.end()) {
+                    screen.commit("[error] unknown provider '" + name +
+                                  "' · /provider lists the names");
+                    return true;
+                }
+                const bool was_active = name == config.active_provider;
+                config.providers.erase(it);
+                auth_probes.erase(name);
+                if (was_active) {
+                    // Keep the top-level values: removing the active
+                    // profile must not leave the next turn unconfigured.
+                    config.activate_provider("");
+                    switch_active_profile();
+                    screen.commit("[info] active profile removed; keeping the current "
+                                  "url/key/model as unnamed values");
+                }
+                logger->event("provider_rm", {{"provider", name}});
+                save_and_report(true);
+                screen.commit("[ok] provider '" + name + "' removed");
             } else {
                 config.base_url = std::string(arg);
                 auth = AuthProbe{}; // a different endpoint cannot inherit it
+                auth_probes[config.active_provider] = auth;
+                config.sync_active_provider();
                 save_and_report(true);
                 maybe_autofetch_models();
             }
@@ -2250,6 +2567,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("api_key=" +
                           std::string(config.api_key.empty() ? "(not set)" : "***set***"));
             screen.commit("login=" + std::string(auth_log_token(auth)));
+            // v6 (design 012): profile table size + active selection.
+            screen.commit("providers=" + std::to_string(config.providers.size()) + " active=" +
+                          (config.active_provider.empty() ? "(unnamed)" : config.active_provider) +
+                          (config.env_override_active ? " · env override in effect" : ""));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
             screen.commit(std::string("log_level=") + config.log_level +
                           " (session-only, not saved)");
@@ -2378,6 +2699,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                      ? std::optional<std::string>{}
                                      : std::optional<std::string>(config.workspace);
                 next.meta.workspace = next_workspace;
+                next.meta.provider =
+                    config.active_provider.empty()
+                        ? std::optional<std::string>()
+                        : std::optional<std::string>(config.active_provider);
                 mini_agent::inject_system_prompt(next.chat, config.workspace, config.model,
                                                  config.system_prompt);
             } else {
@@ -2458,6 +2783,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                               (status_usage_reported ? " · provider-reported" : " · estimated"));
             } else if (arg == "off" || arg == "0") {
                 config.context_window = 0;
+                config.sync_active_provider(); // v6: per-profile metadata
                 save_and_report();
                 screen.commit("[ok] context window cleared · status shows tokens, no %");
             } else if (arg == "probe") {
@@ -2508,6 +2834,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     return true;
                 }
                 config.context_window = parsed_window;
+                config.sync_active_provider(); // v6: per-profile metadata
                 save_and_report();
             }
             return true;
@@ -2541,10 +2868,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 }
             } else if (arg == "off") {
                 config.reasoning_effort.clear();
+                config.sync_active_provider(); // v6: per-profile metadata
                 save_and_report();
                 screen.commit("[ok] reasoning effort cleared · requests omit the field");
             } else {
                 config.reasoning_effort = std::string(arg);
+                config.sync_active_provider(); // v6: per-profile metadata
                 save_and_report();
             }
             return true;
@@ -2932,12 +3261,32 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     } else if (secret_input) {
                         secret_input = false;
                         if (!composer.empty()) {
-                            if (secret_field == "api_key")
+                            // v6: `api_key` = active route; `api_key:<name>`
+                            // pins a profile chosen at /login <name> time.
+                            bool ok = true;
+                            if (secret_field == "api_key") {
                                 config.api_key = composer;
-                            auth = AuthProbe{}; // stale the moment it changes
-                            screen.commit("[ok] api_key updated");
-                            save_and_report(true);
-                            maybe_autofetch_models();
+                                config.sync_active_provider();
+                                auth = AuthProbe{}; // stale the moment it changes
+                                auth_probes[config.active_provider] = auth;
+                            } else if (secret_field.rfind("api_key:", 0) == 0) {
+                                const std::string name = secret_field.substr(8);
+                                if (auto* profile = config.find_provider(name)) {
+                                    profile->api_key = composer;
+                                    auth_probes[name] = AuthProbe{};
+                                    if (name == config.active_provider)
+                                        auth = AuthProbe{};
+                                } else {
+                                    ok = false;
+                                    screen.commit("[error] provider '" + name +
+                                                  "' no longer exists; key not saved");
+                                }
+                            }
+                            if (ok) {
+                                screen.commit("[ok] api_key updated");
+                                save_and_report(true);
+                                maybe_autofetch_models();
+                            }
                         } else {
                             screen.commit("[cancel] input cancelled");
                         }
@@ -2956,6 +3305,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             // Same numbered-choice helper as the model menu.
                             if (const auto pick = model_choice(reasoning_choices, line)) {
                                 config.reasoning_effort = *pick;
+                                config.sync_active_provider(); // v6: per-profile
                                 save_and_report();
                                 logger->event(
                                     "reasoning_select",
@@ -2967,13 +3317,18 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         if (model_menu_open) {
                             model_menu_open = false;
                             if (const auto pick = model_choice(model_choices, line)) {
-                                config.model = *pick;
-                                session.meta.model = config.model;
-                                reset_usage_readings(); // v4
-                                save_and_report();
-                                logger->event("model_select",
-                                              {{"model", config.model}, {"source", "menu"}});
-                                screen.commit("model=" + config.model);
+                                // v6: the label's index resolves the owning
+                                // profile; select_model handles the switch.
+                                const auto at =
+                                    std::find(model_choices.begin(), model_choices.end(), *pick);
+                                const std::size_t idx =
+                                    static_cast<std::size_t>(at - model_choices.begin());
+                                if (idx < model_choice_targets.size()) {
+                                    const auto target = model_choice_targets[idx];
+                                    select_model(target.first, target.second, "menu");
+                                } else {
+                                    select_model("", *pick, "menu");
+                                }
                                 line.clear();
                             }
                         }
@@ -3003,8 +3358,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         }
                     }
                 } else if (c == '\t') {
-                    if (const auto completed =
-                            slash_tab_complete(composer, tab_state, session_ids)) {
+                    if (const auto completed = slash_tab_complete(composer, tab_state, session_ids,
+                                                                  provider_name_list(),
+                                                                  model_choices)) {
                         composer = *completed;
                         cursor = composer.size();
                         mark_edited();
@@ -3040,47 +3396,92 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(steady_now() - models_start)
                     .count();
-            if (models_result.ok) {
-                logger->event("models_list", {{"status", "ok"},
-                                              {"count", std::to_string(models_result.ids.size())},
-                                              {"elapsed_ms", std::to_string(ms)}});
-                model_choices = models_result.ids;
-                model_caps = std::move(models_result.caps); // v4.2
-                models_result.caps.clear();
-                model_menu_open = !model_choices.empty();
-                if (model_menu_open) {
-                    for (const auto& row : model_menu_rows(model_choices, config.model))
-                        screen.commit(row);
+            // v6 (design 012 §5.3): fold every target's sub-result. The
+            // credential probe verdict lands in the per-profile map; menu
+            // rows aggregate all successful listings (qualified labels when
+            // more than one target answered, bare ids for the legacy single
+            // route so the existing `models (N)` contract stays intact).
+            const bool aggregate = models_result.parts.size() > 1;
+            model_choices.clear();
+            model_choice_targets.clear();
+            model_caps.clear(); // rebuilt from the ACTIVE target below
+            std::vector<std::string> failures;
+            bool any_ok = false;
+            bool active_probed = false;
+            for (auto& part : models_result.parts) {
+                std::vector<std::pair<std::string, std::string>> list_fields = {
+                    {"provider", part.name.empty() ? "(unnamed)" : part.name},
+                    {"elapsed_ms", std::to_string(ms)},
+                };
+                if (part.ok) {
+                    any_ok = true;
+                    list_fields.emplace_back("status", "ok");
+                    list_fields.emplace_back("count", std::to_string(part.ids.size()));
+                    logger->event("models_list", list_fields);
+                    for (const auto& id : part.ids) {
+                        model_choices.push_back(aggregate && !part.name.empty()
+                                                    ? part.name + "/" + id
+                                                    : id);
+                        model_choice_targets.emplace_back(part.name, id);
+                    }
+                    if (part.name == config.active_provider)
+                        model_caps = std::move(part.caps); // v4.2
+                    part.caps.clear();
                 } else {
-                    screen.commit("[info] provider listed no models; use /model <name>");
+                    list_fields.emplace_back("status", "error");
+                    list_fields.emplace_back("count", "0");
+                    list_fields.emplace_back("error", part.error);
+                    logger->event("models_list", list_fields);
+                    failures.push_back((part.name.empty() ? std::string("(unnamed)") : part.name) +
+                                       ": " + part.error);
                 }
-            } else {
-                logger->event("models_list", {{"status", "error"},
-                                              {"count", "0"},
-                                              {"elapsed_ms", std::to_string(ms)},
-                                              {"error", models_result.error}});
-                screen.commit("[error] model list failed: " + models_result.error);
+                // The request is also the credential probe: a 401 means
+                // re-enter /login, a 200 with an unparseable body still
+                // proves the key is good. Per-profile verdict (design 012).
+                AuthProbe probe;
+                probe.attempted = true;
+                probe.fetch_ok = part.ok;
+                probe.http_status = part.http_status;
+                probe.network_error = part.network_error;
+                probe.model_count = part.ids.size();
+                auth_probes[part.name] = probe;
+                if (part.name == config.active_provider) {
+                    auth = probe;
+                    active_probed = true;
+                }
+                std::vector<std::pair<std::string, std::string>> login_fields = {
+                    {"status", std::string(auth_log_token(probe))},
+                    {"models", std::to_string(probe.model_count)},
+                    {"provider", part.name.empty() ? "(unnamed)" : part.name},
+                };
+                // Only report a status code when one actually arrived: a
+                // success path never raised one, and writing `http_status=0`
+                // there would read like a bogus response rather than "not
+                // applicable".
+                if (probe.http_status != 0)
+                    login_fields.emplace_back("http_status", std::to_string(probe.http_status));
+                logger->event("login", login_fields);
             }
-            // The request we just made is also the credential probe: report
-            // whether the provider accepted the key, separately from whether
-            // the listing itself worked (a 401 means re-enter /login, whereas
-            // a 200 with an unparseable body still proves the key is good).
-            auth.attempted = true;
-            auth.fetch_ok = models_result.ok;
-            auth.http_status = models_result.http_status;
-            auth.network_error = models_result.network_error;
-            auth.model_count = models_result.ids.size();
-            screen.commit(auth_status_line(auth));
-            std::vector<std::pair<std::string, std::string>> login_fields = {
-                {"status", std::string(auth_log_token(auth))},
-                {"models", std::to_string(auth.model_count)},
-            };
-            // Only report a status code when one actually arrived: a success
-            // path never raised one, and writing `http_status=0` there would
-            // read like a bogus response rather than "not applicable".
-            if (auth.http_status != 0)
-                login_fields.emplace_back("http_status", std::to_string(auth.http_status));
-            logger->event("login", login_fields);
+            model_menu_open = !model_choices.empty();
+            if (model_menu_open) {
+                // `<- current` tags the active combination's label.
+                const std::string current_label =
+                    aggregate && !config.active_provider.empty()
+                        ? config.active_provider + "/" + config.model
+                        : config.model;
+                for (const auto& row : model_menu_rows(model_choices, current_label))
+                    screen.commit(row);
+            } else if (!any_ok) {
+                screen.commit("[error] model list failed: " + models_result.error);
+            } else {
+                screen.commit("[info] provider listed no models; use /model <name>");
+            }
+            // Failures never block the successful listings: summarize them
+            // at the menu tail, one row per failed profile.
+            for (const auto& failure : failures)
+                screen.commit("[warn] model list failed for " + failure);
+            if (active_probed)
+                screen.commit(auth_status_line(auth));
         }
 
         // v4.3: window-probe completion (main-thread rendering).
@@ -3099,6 +3500,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 const auto kind = probe_result.outcome.kind;
                 const long long window = probe_result.outcome.value;
                 config.context_window = window;
+                config.sync_active_provider(); // v6: per-profile metadata
                 save_and_report();
                 logger->event("ctx_probe",
                               {{"status", "ok"},
@@ -3228,6 +3630,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 auth.http_status = result.http_status;
                 auth.network_error = result.network_error;
             }
+            // v6: the verdict belongs to the active profile (the route the
+            // turn actually ran on); the map keeps it across switches.
+            auth_probes[config.active_provider] = auth;
             // The prompt marker is the user-facing feedback (2026-11-02: the
             // [auth] history row that used to go with this is deliberate noise
             // on every first reply), so a chat-driven verdict change is only
@@ -3237,6 +3642,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     {"status", std::string(auth_log_token(auth))},
                     {"models", std::to_string(auth.model_count)},
                     {"source", "chat"},
+                    {"provider",
+                     config.active_provider.empty() ? "(unnamed)" : config.active_provider},
                 };
                 // Status code only when one actually arrived (same rule as the
                 // model-list event: `http_status=0` reads like a bogus reply).
@@ -3423,7 +3830,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                         ? sidebar_sel + 1 // +1: header row shifts every entry
                                         : static_cast<std::size_t>(-1);
             screen.render(tail, last_user, raw_for_hint, composer_display, prompt, status,
-                          streaming, cols, extra_rows, sysinfo, session_ids, sidebar_rows, sel);
+                          streaming, cols, extra_rows, sysinfo, session_ids, sidebar_rows, sel,
+                          provider_name_list(), model_choices);
         }
     }
 

@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "mini_agent/provider.hpp"
@@ -22,6 +23,23 @@ struct McpServerConfig {
     std::string url;
     std::string bearer_token; // never logged or echoed (like api_key)
     bool allow_insecure_http = false;
+
+    bool valid(std::string* error) const;
+};
+
+// One named OpenAI-compatible provider profile (design 012 section 5.1).
+// Names follow the MCP rule ([A-Za-z0-9_-]+, max 32) because they appear
+// in menus and log lines. `model` remembers the last model selected for
+// this profile (empty = never selected). A freshly added profile may
+// still await its URL/key: valid() only checks non-empty values, so
+// partial profiles are legal until first use.
+struct ProviderProfile {
+    std::string name;
+    std::string base_url;
+    std::string api_key; // never log or echo
+    std::string model;   // last selected model for this profile
+    long long context_window = 0;
+    std::string reasoning_effort;
 
     bool valid(std::string* error) const;
 };
@@ -88,6 +106,36 @@ struct AppConfig {
     std::size_t tool_timeout_seconds = 30;
     std::vector<McpServerConfig> mcp_servers;
 
+    // v6 (design 012): named provider profiles plus the active selection.
+    // base_url/api_key/model above are ALWAYS the expansion of the active
+    // profile (empty active_provider = unnamed legacy/env values). The
+    // invariant is maintained by activate_provider()/sync_active_provider()
+    // and enforced at load; files without these fields behave exactly as
+    // before.
+    std::vector<ProviderProfile> providers;
+    std::string active_provider; // "" = unnamed top-level values
+    // Session-scoped, never persisted: any of MINI_AGENT_BASE_URL/_API_KEY/
+    // _MODEL is in effect, so profile switching cannot change the effective
+    // endpoint until the vars are unset and the process restarts. The TUI
+    // keeps listing profiles but annotates picks with the override.
+    bool env_override_active = false;
+
+    // Profile lookup by name; nullptr for the unnamed state or an unknown
+    // name (a dangling active_provider is rejected at load).
+    ProviderProfile* find_provider(std::string_view name);
+    const ProviderProfile* find_provider(std::string_view name) const;
+    // Switch the active profile: expand base_url/api_key/model and
+    // OVERWRITE context_window/reasoning_effort with the profile's values
+    // (unset -> cleared, so the previous provider's window never leaks
+    // into the new model; design 010 config-authoritative rule). Empty
+    // name returns to the unnamed state keeping the current top-level
+    // values (the /provider rm-active rule). False on unknown name.
+    bool activate_provider(std::string_view name);
+    // Fold the current top-level values back into the active profile so
+    // edits through /provider <url>, /login, /model, /context, /reasoning
+    // stay in sync (no-op in the unnamed state).
+    void sync_active_provider();
+
     bool complete() const noexcept {
         return !base_url.empty() && !api_key.empty() && !model.empty();
     }
@@ -114,6 +162,13 @@ bool parse_mcp_cli_spec(std::string_view flag_value, McpServerConfig* out, std::
 
 // Apply one parsed server to config: same name replaces, else appends.
 void upsert_mcp_server(AppConfig* config, const McpServerConfig& server);
+
+// Split a qualified model reference "provider/model" at the FIRST '/'
+// (model ids themselves may contain '/', e.g. openrouter ids). Returns
+// false when there is no separator or either side is empty. Callers must
+// still check that the provider part names a configured profile; an
+// unknown prefix means the whole reference is a literal model id.
+bool split_qualified_model(std::string_view ref, std::string* provider, std::string* model);
 
 // Loads file config (absent file is fine -> empty AppConfig), then applies
 // env overrides (MINI_AGENT_BASE_URL / _API_KEY / _MODEL, non-empty only).

@@ -28,6 +28,10 @@ struct SessionMeta {
     // with; absent = use the launching config/--cwd value. Optional field:
     // old files parse unchanged.
     std::optional<std::string> workspace;
+    // v6 (design 012 §5.4): provider profile the recorded model belonged
+    // to; absent = unnamed (old sessions, legacy single-route state).
+    // History only -- restoring a session never changes the live config.
+    std::optional<std::string> provider;
 };
 
 struct Session {

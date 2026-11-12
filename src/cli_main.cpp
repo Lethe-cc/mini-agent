@@ -99,6 +99,8 @@ void print_usage(std::ostream& out) {
            "  mini-agent ask [--tools M] --cwd PATH -   read question from stdin\n"
            "      --tools off|ask|allowlist|auto  (default off: non-interactive contract)\n"
            "          allowlist: only tool_allowlist names execute (script-safe, v3)\n"
+           "      --provider NAME  use a named provider profile (v6; this session only)\n"
+           "      --model NAME     model override; provider/model picks the profile too\n"
            "      --debug  alias of --log-level=debug (dump raw chat traffic)\n"
            "      --log-level info|debug|trace  traffic capture ladder (v4.8):\n"
            "          debug: raw chat request/response -> <log path>.debug\n"
@@ -107,6 +109,7 @@ void print_usage(std::ostream& out) {
            "      session (TUI; v1 line-mode). Default reuses the most recently\n"
            "      updated session (v4.15); --new forces a fresh one; --temp opens a\n"
            "      fresh session that is never saved and is discarded on exit\n"
+           "      --provider NAME / --model NAME  same overrides as ask (v6)\n"
            "  mini-agent                     bare == run: open the TUI directly (v4.9)\n"
            "      in-TUI session switch: /session <id|prefix> | /session new\n"
            "  mini-agent session list|rm ID  manage sessions\n"
@@ -120,7 +123,7 @@ void print_usage(std::ostream& out) {
            "\nenvironment:\n"
            "  MINI_AGENT_BASE_URL  e.g. https://api.openai.com/v1\n"
            "  MINI_AGENT_API_KEY   never printed\n"
-           "  MINI_AGENT_MODEL     model name\n";
+           "  MINI_AGENT_MODEL     model name, or provider/model to pick a profile\n";
 }
 
 bool read_stdin(std::string* out) {
@@ -202,6 +205,60 @@ bool apply_mcp_flags(int argc, char** argv, mini_agent::AppConfig* config, std::
     return true;
 }
 
+// Apply --provider NAME / --model NAME session overrides (design 012
+// section 5.2) on the merged config, BEFORE the completeness gate so a
+// stored profile can supply the values env/file leave empty.
+// --provider expands a named profile; --model then wins for the model
+// field and may itself be qualified (provider/model activates that
+// profile first). Changes are session-scoped: nothing is written back.
+bool apply_provider_flags(int argc, char** argv, mini_agent::AppConfig* config,
+                          std::string* error) {
+    std::string provider_flag;
+    std::string model_flag;
+    for (int i = 0; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--provider") == 0 && i + 1 < argc) {
+            provider_flag = argv[++i];
+        } else if (std::strncmp(argv[i], "--provider=", 11) == 0) {
+            provider_flag = argv[i] + 11;
+        } else if (std::strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
+            model_flag = argv[++i];
+        } else if (std::strncmp(argv[i], "--model=", 8) == 0) {
+            model_flag = argv[i] + 8;
+        }
+    }
+    auto available = [&]() {
+        std::string names;
+        for (const auto& profile : config->providers) {
+            if (!names.empty())
+                names += ", ";
+            names += profile.name;
+        }
+        return names.empty() ? std::string("(none; add one via /provider add <name>)") : names;
+    };
+    if (!provider_flag.empty() && !config->activate_provider(provider_flag)) {
+        *error = "unknown provider '" + provider_flag + "' (available: " + available() + ")";
+        return false;
+    }
+    if (!model_flag.empty()) {
+        std::string provider_part;
+        std::string model_part;
+        if (mini_agent::split_qualified_model(model_flag, &provider_part, &model_part) &&
+            config->find_provider(provider_part)) {
+            if (!config->activate_provider(provider_part)) {
+                *error = "unknown provider '" + provider_part + "'";
+                return false;
+            }
+            config->model = model_part;
+        } else {
+            // Unknown or absent prefix: a literal model id (ids may
+            // contain '/', e.g. openrouter names).
+            config->model = model_flag;
+        }
+        config->sync_active_provider();
+    }
+    return true;
+}
+
 // mcp list: print configured servers after merged file/env config, with
 // --mcp flags upserted on top (same precedence ask/run use). Secrets are
 // always redacted: bearer shows "set" only, URLs go through redact_url.
@@ -247,7 +304,15 @@ int cmd_mcp(int argc, char** argv) {
 int cmd_ask(int argc, char** argv) {
     mini_agent::AppConfig config;
     std::string config_error;
-    if (!load_app_config(&config, &config_error)) {
+    const bool configured = load_app_config(&config, &config_error);
+    std::string provider_error;
+    if (!apply_provider_flags(argc, argv, &config, &provider_error)) {
+        std::cerr << "error: " << provider_error << '\n';
+        return kConfigError;
+    }
+    // v6 (012): the flags may complete an otherwise partial config (a
+    // stored profile supplies url/key); re-gate after applying them.
+    if (!configured && !config.complete()) {
         std::cerr << config_error << '\n';
         return kConfigError;
     }
@@ -274,6 +339,14 @@ int cmd_ask(int argc, char** argv) {
         }
         if (std::strncmp(argv[i], "--mcp=", 6) == 0)
             continue; // handled by apply_mcp_flags
+        if ((std::strcmp(argv[i], "--provider") == 0 || std::strcmp(argv[i], "--model") == 0) &&
+            i + 1 < argc) {
+            ++i; // handled by apply_provider_flags
+            continue;
+        }
+        if (std::strncmp(argv[i], "--provider=", 11) == 0 ||
+            std::strncmp(argv[i], "--model=", 8) == 0)
+            continue; // handled by apply_provider_flags
         if (std::strcmp(argv[i], "--cwd") == 0 && i + 1 < argc) {
             config.workspace = argv[++i]; // v3 workspace override (009 5.4)
             continue;
@@ -497,6 +570,13 @@ int cmd_run(int argc, char** argv) {
             ++i; // consumed by apply_mcp_flags below
         } else if (std::strncmp(argv[i], "--mcp=", 6) == 0) {
             // consumed by apply_mcp_flags below
+        } else if ((std::strcmp(argv[i], "--provider") == 0 ||
+                    std::strcmp(argv[i], "--model") == 0) &&
+                   i + 1 < argc) {
+            ++i; // consumed by apply_provider_flags below
+        } else if (std::strncmp(argv[i], "--provider=", 11) == 0 ||
+                   std::strncmp(argv[i], "--model=", 8) == 0) {
+            // consumed by apply_provider_flags below
         } else if (std::strcmp(argv[i], "--cwd") == 0 && i + 1 < argc) {
             workspace_flag = argv[++i]; // v3: session workspace override
         } else if (std::strncmp(argv[i], "--cwd=", 6) == 0) {
@@ -515,8 +595,8 @@ int cmd_run(int argc, char** argv) {
             debug_level = argv[++i];
         } else {
             std::cerr << "usage: mini-agent run [--session ID|PREFIX] [--new] [--temp] "
-                         "[--cwd PATH] [--mcp NAME=SPEC] [--debug|=all] "
-                         "[--log-level info|debug|trace]\n";
+                         "[--cwd PATH] [--mcp NAME=SPEC] [--provider NAME] [--model NAME] "
+                         "[--debug|=all] [--log-level info|debug|trace]\n";
             return kConfigError;
         }
     }
@@ -532,6 +612,11 @@ int cmd_run(int argc, char** argv) {
     mini_agent::AppConfig config;
     std::string config_error;
     const bool configured = load_app_config(&config, &config_error);
+    std::string provider_flag_error;
+    if (!apply_provider_flags(argc, argv, &config, &provider_flag_error)) {
+        std::cerr << "error: " << provider_flag_error << '\n';
+        return kConfigError;
+    }
     if (!workspace_flag.empty())
         config.workspace = workspace_flag; // CLI flag beats file/env (v3 009 5.4)
     if (debug_flag) {
@@ -548,7 +633,7 @@ int cmd_run(int argc, char** argv) {
         return kConfigError;
     }
     const bool tty = ::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO);
-    if (!configured && !tty) {
+    if (!configured && !config.complete() && !tty) {
         std::cerr << config_error << '\n'; // non-TTY cannot /login
         return kConfigError;
     }
@@ -625,6 +710,11 @@ int cmd_run(int argc, char** argv) {
         session.meta.workspace = config.workspace.empty()
                                      ? std::optional<std::string>{}
                                      : std::optional<std::string>(config.workspace);
+        // v6 (design 012 §5.4): record which profile the model belongs to
+        // (absent = unnamed route); history only, never re-applied on load.
+        session.meta.provider = config.active_provider.empty()
+                                    ? std::optional<std::string>{}
+                                    : std::optional<std::string>(config.active_provider);
         mini_agent::inject_system_prompt(session.chat, config.workspace, config.model,
                                          config.system_prompt);
     } else if (!reused) {

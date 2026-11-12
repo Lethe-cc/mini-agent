@@ -2,10 +2,10 @@
 
 ## 文档状态
 
-- 状态：草案（未实现；待维护者确认开放问题后开工）。
+- 状态：已实现（2026-11-13 完成 M1–M4 与验证门禁；2026-11-12 维护者接受 Q1–Q4 本稿默认方案，见"开放问题"）。
 - 关联任务：维护者 2026-11-12 提问"只考虑 OpenAI 兼容 provider，能否同时登录多个 provider，并通过 model 选项切换它们提供的所有模型"。
 - 核对日期：2026-11-12，基于 main `70344aa`。
-- 人工评审记录：无。
+- 人工评审记录：2026-11-12 维护者通过批复表单接受 Q1–Q4 推荐默认值（未提出修改），批准按 §7 里程碑开工；非逐条书面评审。
 
 ## 1. 背景与目标
 
@@ -100,7 +100,7 @@ schema 采用可选字段而非 bump（沿用 009 D6 / 008 §5.3 先例），不
 
 ## 5. 详细设计
 
-以下全部为规划内容（未实现）。
+以下为设计定稿；已按 §7 里程碑全部实现（2026-11-13），与实现的增量差异见 §9，验证证据见 §8。
 
 ### 5.1 配置 schema 与合并
 
@@ -192,33 +192,45 @@ schema 采用可选字段而非 bump（沿用 009 D6 / 008 §5.3 先例），不
 
 | 验收项 | 测试位置或证据 | 实际执行命令 | 结果 | 限制 |
 | --- | --- | --- | --- | --- |
-| 旧配置回归（无 providers 行为不变） | tests/cpp/agent_test.cpp config 组（计划扩展） | 未执行 | 未执行 | 设计草案 |
-| schema 读写/校验/activate 不变量 | agent_test 新增用例（计划） | 未执行 | 未执行 | 同上 |
-| 限定名解析（唯一/歧义/env 覆盖） | agent_test 新增用例（计划） | 未执行 | 未执行 | 同上 |
-| 聚合菜单交互（数字选择/Esc/穿透不回归） | tests/pty_tui_smoke.py（计划扩展） | 未执行 | 未执行 | 同上 |
-| 双 provider 登录→聚合→跨档案切换→聊天 | tests/mock_openai_server.py 双实例 E2E（计划） | 未执行 | 未执行 | 同上 |
-| 密钥红线（菜单/日志/config 掩码） | pty smoke 既有断言 + 新档案面扩展（计划） | 未执行 | 未执行 | 同上 |
-| GCC/Clang 双 preset + tidy + ASan | scripts/cpp_check.py | 未执行 | 未执行 | 同上 |
+| 旧配置回归（无 providers 行为不变） | agent_test `test_config_round_trip_and_precedence` + `test_provider_profiles` 旧文件字节不变断言 | `python3 scripts/cpp_check.py`（gcc-debug）及 `--preset linux-clang-debug` / `linux-gcc-release` / `linux-clang-release` | 通过（2026-11-13，四 preset ctest 各 3/3） | — |
+| schema 读写/校验/activate 不变量 | agent_test `test_provider_profiles`（往返/展开/清窗/sync/fail-closed） | 同上 | 通过（2026-11-13） | — |
+| 限定名解析（唯一/歧义/env 覆盖） | agent_test `test_provider_profiles`（split + env 限定名 + `env_override_active`）+ `test_v6_provider_arg_completion`（补全/hint 公共入口）；pty smoke `multi:` 段（`/model` 裸名歧义 fail-closed、限定名原子切换、无 env 时 `/config` 不标 override） | 同上 + `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent` | 通过（2026-11-13） | env 覆盖生效时切换的 `[warn]` 分支仅配置层验证（env_override_active），未做带 LLM env 的 pty 场景 |
+| 聚合菜单交互（数字选择/Esc/穿透不回归） | tests/pty_tui_smoke.py `multi:` 段（聚合菜单限定前缀/排序/`<- current`/序号原子切换/Esc 收起）+ 既有单档案菜单/流式段回归 | `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent` | 通过（2026-11-13，150 PASS） | 全脚本另有 3 项 HEAD 既有失败（状态行队列深度、80 列超限、auto-tools 常驻标记），与本期无关、改动前即失败 |
+| 双 provider 登录→聚合→跨档案切换→聊天 | tests/pty_tui_smoke.py `multi:` 段：两个独立 mock server 实例（8939/8941 双端口、各自的 key），登录→聚合→跨档案切换→聊天→rm 全链路 | 同上 | 通过（2026-11-13） | mock 为本机 HTTP（loopback），未覆盖真实公网服务的鉴权细节 |
+| 密钥红线（菜单/日志/config 掩码） | pty smoke 既有断言 + `multi:` 段（两把 key 均不入屏/日志；`/provider list` 掩码；日志逐 provider 记录） | 同上 | 通过（2026-11-13） | — |
+| GCC/Clang 双 preset + tidy + ASan | scripts/cpp_check.py | `python3 scripts/cpp_check.py` × 四 preset + `--tidy` + `--sanitizers` | 通过（2026-11-13，四 preset ctest 3/3；tidy 无告警；ASan/UBSan 3/3） | tidy 用系统 clang-tidy（默认检查集） |
 
 ## 9. 实现偏差与已知限制
 
-尚未实现，无偏差可记。已知限制（设计内接受）：
+实现偏差（相对 §5 规划，均为增量、不改既有语义）：
+
+- `--model` 是新增 CLI 旗标：此前只有 `MINI_AGENT_MODEL` env，没有同名旗标；本期与 `--provider` 一并加入
+  ask/run（会话级覆盖，不写回文件）。`--model` 同样接受 `provider/model` 限定名。
+- `ProviderProfile` 增加可选 `model` 字段（该档案最近选中的模型，Codewhale 先例）：`--provider <name>` /
+  env 限定名 / `/model <provider>/<name>` 激活档案时一并展开其 model；空 = 从未选择。
+- 实现辅助：`AppConfig::sync_active_provider()` 把顶层编辑折回活动档案（/provider /login /model
+  /context /reasoning 共用）；`split_qualified_model()` 按首个 `/` 切分（模型 id 自身可含 `/`，
+  未知前缀按字面模型名处理）。
+
+已知限制（设计内接受）：
 
 - 多开进程间配置不同步（last-writer-wins），与现状一致；档案并发编辑可能互相覆盖，文档注明。
 - 档案数无硬上限，聚合拉取耗时随档案数线性增长（顺序模式）；并行模式线程数 = 档案数，建议文档劝 ≤ 5。
 - env override 态下菜单选档案不生效（需 unset env），是"env 优先"约束的直接推论。
 
-## 开放问题（待维护者批复）
+## 开放问题（已批复，2026-11-12）
 
-- Q1 命令面：`/provider add|rm|list` + `/login <name> [key]` 的语法是否认可？（备选：`/providers` 独立命令族）
-- Q2 `/model` 裸名歧义策略：报错列候选（本稿）还是"活动档案优先、其余列出提示"？本稿取 fail-closed 报错。
-- Q3 env override 态的菜单行为：本稿取"提示不生效"；是否需要"会话内临时压过 env"的更强语义？
-- Q4 是否要求本期同时交付 CLI `--provider` 旗标，还是 TUI 先行？
+维护者通过批复表单接受本稿默认值，未提出修改。逐项记录：
+
+- Q1 命令面：采用 `/provider add|rm|list` + `/login <name> [key]`（不引入 `/providers` 独立命令族）。
+- Q2 `/model` 裸名歧义策略：fail-closed 报错并列候选（不静默选端点）。
+- Q3 env override 态的菜单行为：提示"env 覆盖中，选中不生效"；不做会话内压过 env 的更强语义。
+- Q4 CLI `--provider` 旗标：本期一并交付（TUI 与 CLI 同步）。
 
 ## 最终核对
 
 - [x] 接口、配置、路径与当前代码一致（§1 现状核对自 `70344aa`）。
-- [x] 已实现与规划内容清楚区分（§5 起全部标注规划）。
+- [x] 已实现与规划内容清楚区分（已实现，增量偏差见 §9）。
 - [x] 外部来源、版本和实际采用内容可追溯（§3）。
-- [x] 验证结果有证据，未执行事项如实标明（§8 全部未执行）。
-- [x] 索引与架构总览按需更新（design/README.md 已登记；architecture.md 待实现时更新）。
+- [x] 验证结果有证据，未执行事项如实标明（§8 已全部执行，2026-11-13）。
+- [x] 索引与架构总览按需更新（design/README.md 已登记；architecture.md 已更新 v6 三段；parameters.md §2/§3/§4.4/§5.1 已更新）。

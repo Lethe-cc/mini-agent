@@ -1,6 +1,6 @@
 # mini-agent 参数使用大纲
 
-> **文档性质**：使用者参数参考（大纲式索引）。所有条目按当前源码核对（v0.1.0，v1–v5 命令面）；日常快速查看以 `mini-agent --help` 为准，本文补充语义、默认值、持久化范围与出处。
+> **文档性质**：使用者参数参考（大纲式索引）。所有条目按当前源码核对（v0.1.0，v1–v6 命令面）；日常快速查看以 `mini-agent --help` 为准，本文补充语义、默认值、持久化范围与出处。
 >
 > **来源**：[cli_main.cpp](../src/cli_main.cpp)、[config.hpp](../include/mini_agent/config.hpp)、[config.cpp](../src/config.cpp)、[tui.cpp](../src/tui.cpp)、[tools.cpp](../src/tools.cpp)、[session.cpp](../src/session.cpp)、[log.cpp](../src/log.cpp)。设计与取舍见文末[参考](#7-参考)。
 
@@ -38,12 +38,13 @@ CLI 旗标（--cwd/--tools/--mcp/--log-level…，仅本次进程）
 
 - TUI 内的修改直接写 config.json 或仅存于进程内（[§5](#5-tui-斜杠命令与按键) 逐项标注）；环境变量覆盖仍然优先于文件，所以被 env 盖住的字段在 TUI 里改了也可能"看不见效果"——排障时先 `env | grep MINI_AGENT`。
 - 少数键**只有 env 入口**（`MINI_AGENT_CONFIG`、`MINI_AGENT_SESSION_DIR`、`MINI_AGENT_TIMEOUT_SECONDS`），没有对应的文件字段或 CLI 旗标。
+- **v6 多档案（[§4.4](#44-多-provider-档案providers--active_provider)）**：config 可并存多组命名档案（`providers`），`active_provider` 指定哪组展开到顶层三件套。`MINI_AGENT_MODEL=provider/model` 限定名与 CLI `--provider NAME` / `--model NAME`（[§2.2](#22-ask--一次性问答)）在合并后选档案，CLI 旗标按上述链条最后生效；三个既有 LLM env 的非空覆盖仍优先于**文件值**——env 覆盖生效期间 **TUI 内**切档案只写盘、本进程不生效（`/config` 显示 `env override in effect`，切档案时另有 `[warn]`；unset 后重启恢复）。
 
 ### 1.3 "持久化"与"仅本次会话"
 
 | 范围 | 含义 | 例子 |
 | --- | --- | --- |
-| 持久化 | 写入 config.json（0600，原子替换），下次启动仍生效 | `/provider` `/login` `/model` `/approve` `/context` `/reasoning`、`/log <路径/off/default>` |
+| 持久化 | 写入 config.json（0600，原子替换），下次启动仍生效 | `/provider`（含 `add/rm/list`） `/login` `/model` `/approve` `/context` `/reasoning`、`/log <路径/off/default>` |
 | 仅本次会话 | 只改当前进程，退出即失，不写文件 | `/log info\|debug\|trace`、`/debug`、`/sidebar` `/sysinfo`、审批按键 `a`、`--mcp`、全部 CLI 旗标与 env |
 
 ### 1.4 安全红线（所有入口共同）
@@ -77,6 +78,8 @@ mini-agent --help | --version
 | `--mcp` | `NAME=SPEC` | 无 | 会话级注入 MCP server，可重复（[§2.7](#27---mcp-namespec-注入)） |
 | `--debug` / `--debug=all` | — | — | `--log-level debug/trace` 的别名（[§3.2](#32-日志与抓包)） |
 | `--log-level` | `info / debug / trace` | `info`（可被 env 改） | 流量抓包阶梯 |
+| `--provider` | 档案名 | 无（config `active_provider`） | v6：展开命名档案（[§4.4](#44-多-provider-档案providers--active_provider)）；未知名字退出 2 并列可用档案；仅本次进程，不写文件 |
+| `--model` | 模型 id 或 `provider/model` | 无 | v6：模型覆盖，后于 `--provider` 生效；限定名前缀命中已配置档案时先激活该档案再取其模型，未知前缀按字面 id（模型名本身可含 `/`）；仅本次进程 |
 | 位置参数 | `"问题"` 或 `-` | 必填，恰好 1 个 | `-` 从 stdin 读整个问题；空 stdin 报错退出 1 |
 
 - 旗标支持空格与 `=` 两种写法（`--tools ask` ≡ `--tools=ask`），顺序任意，但必须在位置参数之前。
@@ -103,6 +106,7 @@ mini-agent --help | --version
 | `--new` | — | — | 跳过默认复用，强制新会话 |
 | `--temp` | — | — | 临时会话：隐含 `--new`，全程不落盘；与 `--session` 互斥（退出 2） |
 | `--cwd` | 目录路径 | 见下 | workspace；恢复会话时显式 `--cwd` 会重绑并写回会话戳 |
+| `--provider` / `--model` | 同 `ask` | — | v6 档案/模型覆盖，仅本次进程（[§2.2](#22-ask--一次性问答)） |
 | `--mcp` / `--debug` / `--log-level` | 同 `ask` | — | — |
 
 - **默认复用（v4.15）**：不带 `--session/--new/--temp` 时，扫描最近 ≤12 个会话，取第一个 workspace 戳匹配且未被锁定的复用；没有匹配才新建。损坏/不可读的会话跳过。
@@ -162,7 +166,7 @@ mini-agent --help | --version
 | --- | --- | --- | --- |
 | `MINI_AGENT_BASE_URL` | URL | 无 | OpenAI 兼容端点（如 `https://api.deepseek.com/v1`）；末尾单个 `/` 自动去除 |
 | `MINI_AGENT_API_KEY` | 字符串 | 无 | LLM API 密钥（请求 Authorization 头）；红线见 [§1.4](#14-安全红线所有入口共同) |
-| `MINI_AGENT_MODEL` | 字符串 | 无 | 模型 id；三者齐备才算配置完整 |
+| `MINI_AGENT_MODEL` | 字符串 | 无 | 模型 id；三者齐备才算配置完整。v6：`provider/model` 限定名且前缀命中已配置档案时先激活该档案（URL/key 取档案值，仍可被另两个 env 覆盖），模型取 `/` 后部分 |
 | `MINI_AGENT_CONFIG` | 文件路径 | `$XDG_CONFIG_HOME/mini-agent/config.json`（回落 `~/.config/…`） | 配置文件位置 |
 | `MINI_AGENT_WORKSPACE` | 目录路径 | config `workspace`，否则进程 cwd | v3 文件/git 工具根目录（`--cwd` 可再覆盖） |
 | `MINI_AGENT_TOOL_APPROVAL` | `ask / allowlist / off` | config `tool_approval`（默认 `ask`） | TUI 审批档位；非法值忽略、保留文件值。对 `ask` 子命令无效（那边由 `--tools` 决定） |
@@ -218,6 +222,8 @@ mini-agent --help | --version
 | `log_file` | string | 空（=默认 /tmp 路径） | ⚠ 类型错→空 | 元数据日志路径；`"off"` 关闭 |
 | `log_level` | — | — | 忽略 | **会话级字段**：文件里写了也不生效、下次保存丢弃（同旧字段 `debug_log`/`debug_log_aux`） |
 | `mcp_servers` | object | `{}` | ❌ 条目非法拒绝；⚠ 整体非 object 跳过 | server 名 → 条目，见 [§4.3](#43-mcp_servers-条目) |
+| `providers` | object | `{}`（缺省=旧单档案态） | ❌ 非 object 或任一档案非法拒绝 | v6 档案名 → 档案条目，见 [§4.4](#44-多-provider-档案providers--active_provider) |
+| `active_provider` | string | 空（=未命名态） | ❌ 指向不存在的档案拒绝（fail-closed） | v6 活动档案名；其值展开到顶层 `base_url/api_key/model` 等字段 |
 
 ### 4.3 `mcp_servers` 条目
 
@@ -233,20 +239,56 @@ mini-agent --help | --version
 
 server 名限 `[A-Za-z0-9_-]{1,32}`，工具以 `server__tool` 双下划线前缀进入注册表。完整示例与排障见 [mcp-usage.md](mcp-usage.md)。
 
+### 4.4 多 provider 档案（`providers` / `active_provider`）
+
+v6（[设计 012](design/012-multi-provider.md)）：同一份 config 可并存多组已登录的 OpenAI 兼容端点，`/models` 聚合所有档案的模型为一个菜单，选中即同时切换 URL、key 与模型。
+
+- **档案条目字段**（全部可选，非空才校验）：`base_url`（同顶层规则：http/https 绝对 URL，末尾 `/` 自动去除；无 MCP 那条 loopback 限制）、`api_key`（红线同 [§1.4](#14-安全红线所有入口共同)）、`model`（该档案最近选中的模型）、`context_window`（❌ 存在但非正整数拒绝）、`reasoning_effort`（原样透传）。
+- **档案名**限 `[A-Za-z0-9_-]{1,32}`（菜单/日志展示用）。`/provider add <name>` 允许先建空档案再补 URL/key。
+- **展开语义**：激活档案 = 把它的五个字段**整体覆盖**到顶层（不合并——上一个模型的窗口/effort 不残留）；顶层编辑（`/provider <url>`、`/login`、`/model`、`/context`、`/reasoning`）保存时折回活动档案。未命名态（无 `active_provider`）顶层值独立存在，即 v1–v5 旧行为。
+- **写盘形态**：只有存在档案时才写 `providers`/`active_provider` 两键；顶层三件套始终是活动档案（或未命名值）的展开，旧二进制读新文件仍能正常聊天（forward-read 忽略新键），但**旧版下一次保存会丢档案表**——混用旧版前备份 config.json。`schema_version` 不 bump。
+- **回滚**：删掉这两个键即回到单档案态。
+- 多开进程间配置不同步（last-writer-wins），档案并发编辑可能互相覆盖；档案数无硬上限，聚合拉取顺序执行、耗时随档案数线性增长（建议 ≤5 个）。
+
+示例（key 为占位符）：
+
+```json
+{
+  "schema_version": 1,
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key": "<deepseek-key>",
+  "model": "deepseek-chat",
+  "providers": {
+    "deepseek": { "base_url": "https://api.deepseek.com/v1", "api_key": "<deepseek-key>", "model": "deepseek-chat" },
+    "moonshot": { "base_url": "https://api.moonshot.cn/v1", "api_key": "<moonshot-key>", "model": "kimi-k2-0905-preview", "context_window": 262144 }
+  },
+  "active_provider": "deepseek"
+}
+```
+
 ## 5. TUI 斜杠命令与按键
 
 TTY 下 `run` 进入 TUI。输入 `/` 触发补全（Tab 循环候选，含参数档位提示）；`/help` 列出摘要。以下"持久化"列对应 [§1.3](#13-持久化与仅本次会话)。
 
 ### 5.1 连接与模型
 
+v6 起支持多 provider 档案（[§4.4](#44-多-provider-档案providers--active_provider)）：`/provider add` 建档 → `/login <name>` 登录 → `/models` 聚合菜单 → 序号或 `/model <provider>/<model>` 一步切换端点+key+模型。单 provider 旧用法全部保留。
+
 | 命令 | 参数 | 持久化 | 说明 |
 | --- | --- | --- | --- |
-| `/provider` | `<url>` | ✅ | LLM 端点；不带参数显示当前值与用法 |
-| `/login` | `[key]` | ✅ | 不带参数进入掩码输入（Enter 确认，空取消）；保存后重置鉴权探测、可能自动拉取模型列表 |
-| `/model` | `<name>` | ✅ | 设置模型并写入会话元数据；重置用量读数 |
-| `/models` | — | — | 强制重新拉取模型列表（需 base_url+key），数字选择器：Enter 选定、Esc 收起 |
+| `/provider` | （无参数）\| `list` | — | 列出全部档案（key 只显 `***set***`，活动档案标 `<- active`）与当前生效值、用法 |
+| `/provider` | `<url>` | ✅ | 旧用法：设置顶层 LLM 端点（活动档案时同步折回该档案）；重置鉴权探测 |
+| `/provider` | `add <name> [url]` | ✅ | 新建/更新档案（url 覆盖、已存 key/model 保留），提示下一步 `/login <name>`；名字限 `[A-Za-z0-9_-]{1,32}` |
+| `/provider` | `rm <name>` | ✅ | 删除档案；删除的是活动档案时当前生效值保留为未命名配置（`[info]` 提示），连接不中断 |
+| `/login` | `[key]` | ✅ | 旧用法：给当前生效配置设置 key；不带参数进入掩码输入（Enter 确认，空取消）；保存后重置鉴权探测、可能自动拉取模型列表 |
+| `/login` | `<name> [key]` | ✅ | 首 token 命中档案名时登录该档案（掩码输入标注档案名）；key 只进该档案，不改当前连接，除非它正是活动档案 |
+| `/model` | `<name>` | ✅ | 旧用法：按字面模型 id 设置；若最近一次 `/models` 结果中该 id 恰属一个档案则自动切换过去，属多个档案则报错并列出候选（fail-closed，不猜） |
+| `/model` | `<provider>/<model>` | ✅ | 限定名且档案存在：原子切换 URL+key+model，写会话元数据 `meta.provider`；前缀未知则按字面 id（模型名可含 `/`）。切换均重置用量读数；env 覆盖生效时只写盘并 `[warn]` 本进程不生效 |
+| `/models` | — | — | 聚合拉取所有配置齐全档案（含未命名配置）的 `GET /models`：顺序执行、每档案连接 5s/总 15s 上限，同 URL+key 去重；多来源时菜单项带 `provider/` 前缀，`<- current` 标当前。数字选择器：Enter 选定（同时切档案）、Esc 收起；各档案鉴权探测独立更新提示符 |
 | `/reasoning` | `[值\|off]` | ✅ | 原样透传 `reasoning_effort`；不带参数打开缓存档位选择器（low/medium/high/off 为常见提示）；服务端 400 时提示、不自动回退 |
 | `/context` | `[tokens\|off\|0\|probe]` | ✅（probe 除外） | 设置/清除 `context_window`；不带参数显示当前值或目录建议值；`probe` 显式发一次超大请求探测上限（需配置齐全，≤30s，绝不自动触发） |
+
+Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定）模型 id，`/provider ` 补 `add/rm/list`。`/config` 会显示 `providers=N active=…`，env 覆盖生效时附 `env override in effect`。
 
 ### 5.2 会话与工作区
 
@@ -358,6 +400,7 @@ TTY 下 `run` 进入 TUI。输入 `/` 触发补全（Tab 循环候选，含参�
 | [设计 009：coding v3](design/009-coding-v3.md) | workspace、文件/git 工具、allowlist 脚本档 |
 | [设计 010：模型元数据](design/010-model-metadata.md) | context_window、reasoning_effort、/models、日志阶梯 |
 | [设计 011：预览与 TUI 集成](design/011-preview-tui-integration.md) | preview_file、diff 预览、Ctrl-C 协作取消 |
+| [设计 012：多 provider](design/012-multi-provider.md) | providers/active_provider、`/provider add/rm/list`、`/login <name>`、聚合 `/models`、限定名切换（v6） |
 | [ADR 005](decisions/005-mcp-transport-abstraction.md) / [ADR 006](decisions/006-tool-approval-policy.md) / [ADR 007](decisions/007-file-tools-workspace.md) / [ADR 008](decisions/008-git-tool-policy.md) | 传输抽象、审批策略、workspace 边界、git 工具边界 |
 | [../.env.example](../.env.example) | 环境变量可复制模板 |
 | [development.md](development.md) | 构建依赖与质量门禁 |
