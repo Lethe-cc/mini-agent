@@ -1,6 +1,6 @@
 # mini-agent v2 工具与 MCP 使用指南
 
-本文是 v2 工具层（工具调用循环、命令执行、MCP 客户端）的**使用者文档**：配置、命令、交互与安全边界。设计与实现依据见 [008：v2 技术方案](design/008-mcp-tools.md)（已实现、待人工评审），取舍记录见 [ADR 005](decisions/005-mcp-transport-abstraction.md)、[ADR 006](decisions/006-tool-approval-policy.md)（均为提议）。
+本文是 v2 工具层（工具调用循环、命令执行、MCP 客户端）的**使用者文档**：配置、命令、交互与安全边界。设计与实现依据见 [008：v2 技术方案](design/008-mcp-tools.md)（已实现、待人工评审），取舍记录见 [ADR 005](decisions/005-mcp-transport-abstraction.md)、[ADR 006](decisions/006-tool-approval-policy.md)（均为提议）。全量参数面（CLI/环境变量/config.json/TUI，含 v3–v5 新增）另见[参数使用大纲](parameters.md)。
 
 ## 1. 能力总览
 

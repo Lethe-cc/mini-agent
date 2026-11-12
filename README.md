@@ -20,7 +20,7 @@
 
 其中 v2–v5 均已实现但**待人工评审**；ADR 005（MCP 传输抽象）与 ADR 006（工具审批策略）状态仍为**提议**，实现先于批复落地，取舍见 [决策索引](docs/decisions/README.md)。
 
-工具与 MCP 的配置、审批交互、`--mcp`/`mcp list` 与安全边界见 [MCP 与工具使用指南](docs/mcp-usage.md)（该文档覆盖 v2 工具层，v3–v5 的新增命令面以 `mini-agent --help` 与设计文档为准）。
+工具与 MCP 的配置、审批交互、`--mcp`/`mcp list` 与安全边界见 [MCP 与工具使用指南](docs/mcp-usage.md)（该文档覆盖 v2 工具层）；CLI 旗标、环境变量、config.json 字段与 TUI 命令的完整参数说明见 [参数使用大纲](docs/parameters.md)（快速查看仍以 `mini-agent --help` 为准）。
 
 ```plantuml
 @startuml mini-agent-overview
