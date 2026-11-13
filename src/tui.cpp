@@ -423,17 +423,17 @@ std::string style_history_line(std::string_view line, bool colors) {
 }
 
 std::string config_next_hint(const AppConfig& config) {
-    const int set = (config.base_url.empty() ? 0 : 1) + (config.api_key.empty() ? 0 : 1) +
-                    (config.model.empty() ? 0 : 1);
+    const int set = (config.current.base_url.empty() ? 0 : 1) + (config.current.api_key.empty() ? 0 : 1) +
+                    (config.current.model.empty() ? 0 : 1);
     // Only the next step, in provider -> key -> model order: each command is
     // independently saved, so any of them can be supplied in its own sitting
     // (or from a different process) and this line reflects what is left.
     std::string next;
-    if (config.base_url.empty())
+    if (config.current.base_url.empty())
         next = "/provider <url>";
-    else if (config.api_key.empty())
+    else if (config.current.api_key.empty())
         next = "/login <key>";
-    else if (config.model.empty())
+    else if (config.current.model.empty())
         next = "/models (list & pick) or /model <name>";
     const std::string progress = "config " + std::to_string(set) + "/3";
     if (next.empty())
@@ -478,7 +478,7 @@ ConnState connection_state(const AppConfig& config, const AuthProbe& probe, bool
     // Pure derivation: no request is ever made here. The verdict comes from the
     // model-list probe that /provider and /login already fire (rule 9), so the
     // prompt costs nothing and never probes at startup (cold-start budget).
-    if (config.base_url.empty() || config.api_key.empty())
+    if (config.current.base_url.empty() || config.current.api_key.empty())
         return ConnState::Unconfigured;
     if (listing)
         return ConnState::Checking;
@@ -1415,8 +1415,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     bool temp_mode = options.temp;
     logger->event("session_open", {{"mode", "tui"},
                                    {"id", active_session_id},
-                                   {"model", config.model},
+                                   {"model", config.current.model},
                                    {"log", logger->enabled() ? "on" : "off"}});
+    // v7 (design 013 §5.2): one metadata event when a v1 file was migrated
+    // in memory; the file itself is rewritten on the next save.
+    if (config.migrated_from_v1)
+        logger->event("config_migrate", {{"from", "1"}, {"to", "2"},
+                                         {"profiles", std::to_string(config.providers.size())}});
     bool secret_input = false; // /login: mask composer echo
     std::string secret_field;  // target key when secret_input
     // Model discovery (2026-11-02 request): a separate short-lived worker
@@ -1513,13 +1518,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // gateway exposed no metadata or the model is not in the list).
     auto caps_for_model = [&]() -> ModelCapabilities {
         for (const auto& cap : model_caps)
-            if (cap.id == config.model)
+            if (cap.id == config.current.model)
                 return cap;
         return {};
     };
     auto context_reading = [&]() -> StatusInputs {
         StatusInputs inputs;
-        inputs.context_window = config.context_window;
+        inputs.context_window = config.current.context_window;
         // v4.2.1: config stays authoritative, but an unset window falls
         // back to the gateway's advertised context_length (cached caps)
         // so the ctx reading gets its /max denominator without extra
@@ -1531,10 +1536,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         // a denominator when base_url+model match a models.dev row. The
         // catalog never overwrites config: it only fills the display gap.
         if (inputs.context_window <= 0) {
-            if (const auto limits = lookup_models_dev(config.base_url, config.model))
+            if (const auto limits = lookup_models_dev(config.current.base_url, config.current.model))
                 inputs.context_window = limits->context;
         }
-        inputs.reasoning_effort = config.reasoning_effort;
+        inputs.reasoning_effort = config.current.reasoning_effort;
         inputs.completion_tokens = status_completion_tokens;
         inputs.reasoning_seen = status_reasoning_seen;
         inputs.reasoning_actual = status_reasoning_actual;
@@ -1569,14 +1574,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // The capability cache is invalidated (it belongs to the old route) and
     // every usage reading resets, exactly like a cross-route model change.
     auto switch_active_profile = [&] {
-        auth = auth_probes[config.active_provider]; // default-constructed on first sight
+        auth = auth_probes[config.current.name]; // default-constructed on first sight
         model_caps.clear();
         reset_usage_readings();
     };
     auto turn_start = steady_now();
     auto last_ctrl_c = std::chrono::steady_clock::time_point{};
 
-    const auto banner_model = config.model.empty() ? std::string("(no model)") : config.model;
+    const auto banner_model = config.current.model.empty() ? std::string("(no model)") : config.current.model;
     // v4.15: tag the id with how it was chosen (temp | resumed | new).
     const char* session_tag = temp_mode ? "temp" : (options.resumed ? "resumed" : "new");
     screen.commit("mini-agent · model=" + banner_model + " · session=" + active_session_id + " (" +
@@ -2050,7 +2055,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     auto start_models_fetch = [&](bool force) {
         if (models_running)
             return;
-        // Fetch targets: name -> (base_url, api_key). Empty name = unnamed.
+        // Fetch targets: profile name -> (base_url, api_key). With no
+        // profiles (env-only state) fetch the current values once, unnamed
+        // (design 013 §5.4); env overrides on top of profiles are annotated
+        // in the menu, not fetched as a separate route.
         std::vector<std::pair<std::string, std::pair<std::string, std::string>>> targets;
         std::string fingerprint;
         for (const auto& profile : config.providers) {
@@ -2059,18 +2067,24 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 targets.emplace_back(profile.name,
                                      std::make_pair(profile.base_url, profile.api_key));
         }
-        if (!config.base_url.empty() && !config.api_key.empty()) {
-            // The unnamed values duplicate a profile when some profile has
-            // the same URL (the active expansion always does; only an env
-            // override points somewhere else) -- fetch that route once.
+        // v7 (design 013 §5.4): with no profiles (env-only state) fetch the
+        // current values once. Under env override the effective route may
+        // differ from every stored profile, so fetch it too -- named after
+        // current.name so the auth verdict lands on the effective profile.
+        if (!config.current.base_url.empty() && !config.current.api_key.empty() &&
+            (config.providers.empty() || config.env_override_active)) {
+            fingerprint += '\n' + config.current.base_url + '\n' + config.current.api_key + '\n';
             bool covered = false;
-            for (const auto& profile : config.providers)
-                if (profile.base_url == config.base_url)
+            for (auto& [name, creds] : targets) {
+                if (name == config.current.name) {
+                    // Same profile, env values win over its stored ones.
+                    creds = std::make_pair(config.current.base_url, config.current.api_key);
                     covered = true;
-            fingerprint += '\n' + config.base_url + '\n' + config.api_key + '\n';
+                }
+            }
             if (!covered)
-                targets.emplace_back(std::string(),
-                                     std::make_pair(config.base_url, config.api_key));
+                targets.emplace_back(config.current.name,
+                                     std::make_pair(config.current.base_url, config.current.api_key));
         }
         if (targets.empty())
             return;
@@ -2086,7 +2100,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         models_start = steady_now();
         logger->event("models_list",
                       {{"status", "start"},
-                       {"base_url", Logger::redact_url(config.base_url)},
+                       {"base_url", Logger::redact_url(config.current.base_url)},
                        {"providers", std::to_string(targets.size())}});
         const AppConfig snapshot = config; // thread boundary (like start_turn)
         // The worker computes only the result and sets the flag: `logger` and
@@ -2128,10 +2142,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 }
                 r.parts.push_back(std::move(part));
             }
-            // Legacy fields mirror the ACTIVE target so the existing folds
-            // (menu fallback, auth verdict) keep single-profile semantics.
+            // Legacy fields mirror the EFFECTIVE target (current.name, which
+            // env may pin to another profile) so the existing folds keep
+            // single-profile semantics.
             for (const auto& part : r.parts) {
-                if (part.name != snapshot.active_provider)
+                if (part.name != snapshot.current.name)
                     continue;
                 r.ok = part.ok;
                 r.ids = part.ids;
@@ -2149,7 +2164,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // Called after /provider or /login mutates config: auto-discover once
     // at least one target has both halves known (the user's stated request).
     auto maybe_autofetch_models = [&] {
-        bool any_ready = !config.base_url.empty() && !config.api_key.empty();
+        bool any_ready = !config.current.base_url.empty() && !config.current.api_key.empty();
         for (const auto& profile : config.providers)
             if (!profile.base_url.empty() && !profile.api_key.empty())
                 any_ready = true;
@@ -2225,11 +2240,28 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit("  ... truncated (file longer than 500 lines)");
         }
     };
+    // v7 (design 013 §5.4): any persisting command auto-creates the default
+    // profile when none exists, keeping first-run friction at zero. The
+    // caller edits the profile and then refreshes current.
+    auto ensure_default_profile = [&] {
+        if (!config.providers.empty())
+            return;
+        ProviderProfile profile;
+        profile.name = "default";
+        config.providers.push_back(std::move(profile));
+        config.active_provider = "default";
+    };
+    // Persisting edits target the active profile (auto-default first); the
+    // caller refreshes current afterwards.
+    auto active_profile_for_edit = [&] {
+        ensure_default_profile();
+        return config.find_provider(config.active_provider);
+    };
     // v6 (design 012 §5.2): one selection path for /model and the numbered
     // menu. Cross-profile picks activate the profile first (atomic
-    // url+key+model switch), same-profile picks keep the legacy behavior
-    // exactly. env overrides stay in effect until the vars are unset and
-    // the process restarts -- say so on a profile pick.
+    // url+key+model switch). v7: the model id is written into the active
+    // profile and current is re-derived; env overrides keep winning on
+    // every derivation until the vars are unset and the process restarts.
     auto select_model = [&](const std::string& provider, const std::string& id,
                             const char* source) {
         const bool switch_profile = !provider.empty() && provider != config.active_provider;
@@ -2241,27 +2273,29 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             switch_active_profile();
             logger->event("provider_activate", {{"provider", provider}, {"source", source}});
         }
-        config.model = id;
-        config.sync_active_provider();
-        session.meta.model = config.model;
+        ensure_default_profile();
+        if (auto* active = config.find_provider(config.active_provider))
+            active->model = id;
+        config.refresh_current();
+        session.meta.model = config.current.model;
         session.meta.provider =
-            config.active_provider.empty()
+            config.current.name.empty()
                 ? std::optional<std::string>()
-                : std::optional<std::string>(config.active_provider);
+                : std::optional<std::string>(config.current.name);
         reset_usage_readings(); // v4: window/counts belong to the old model
         if (source == std::string_view("menu"))
             save_and_report(); // menu keeps the legacy quiet save
         else
             save_and_report(true);
         logger->event("model_select",
-                      {{"model", config.model},
+                      {{"model", config.current.model},
                        {"source", source},
                        {"provider",
-                        config.active_provider.empty() ? "(unnamed)" : config.active_provider}});
-        screen.commit("model=" + (config.active_provider.empty()
-                                      ? config.model
-                                      : config.active_provider + "/" + config.model));
-        if (switch_profile && config.env_override_active)
+                        config.current.name.empty() ? "(none)" : config.current.name}});
+        screen.commit("model=" + (config.current.name.empty()
+                                      ? config.current.model
+                                      : config.current.name + "/" + config.current.model));
+        if (config.env_override_active)
             screen.commit("[warn] MINI_AGENT_* env overrides are active: the profile is "
                           "saved, but this process keeps the env endpoint/model until "
                           "the vars are unset and mini-agent restarts");
@@ -2297,8 +2331,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         if (line.rfind("/login", 0) == 0) {
             // v6 (design 012 §5.2): a first token naming a configured
             // profile targets that profile's key; anything else is the key
-            // itself for the active route (legacy behavior).
+            // itself for the active profile. v7: with no profiles the
+            // command auto-creates default (design 013 §5.4).
             const auto arg = arg_of(line);
+            ensure_default_profile();
             std::string target = config.active_provider;
             std::string_view key = arg;
             if (!arg.empty()) {
@@ -2311,25 +2347,21 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         key.remove_prefix(1);
                 }
             }
-            const std::string label = target.empty() ? "" : " (" + target + ")";
+            const std::string label = " (" + target + ")";
             if (key.empty()) {
                 secret_input = true; // masked composer; next Enter sets key
-                // "" = active route; a profile name pins the target even if
-                // the active profile changes before Enter lands.
-                secret_field = target.empty() ? "api_key" : "api_key:" + target;
+                // The profile name pins the target even if the active
+                // profile changes before Enter lands.
+                secret_field = "api_key:" + target;
                 screen.commit("[input] API key" + label +
                               " (hidden); Enter confirms, empty Enter cancels");
             } else {
-                if (target == config.active_provider) {
-                    config.api_key = std::string(key);
-                    auth = AuthProbe{}; // previous verdict belongs to the old key
-                    auth_probes[target] = auth;
-                    config.sync_active_provider();
-                } else {
-                    auto* profile = config.find_provider(target);
-                    profile->api_key = std::string(key);
-                    auth_probes[target] = AuthProbe{};
-                }
+                auto* profile = config.find_provider(target);
+                profile->api_key = std::string(key);
+                auth_probes[target] = AuthProbe{}; // verdict belongs to the old key
+                if (target == config.current.name)
+                    auth = AuthProbe{};
+                config.refresh_current();
                 save_and_report(true);
                 maybe_autofetch_models();
             }
@@ -2339,7 +2371,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // Listed before /model so the shared prefix resolves here first.
             // v6: any complete profile (or the unnamed route) can be listed;
             // the fetch aggregates every ready target.
-            bool any_ready = !config.base_url.empty() && !config.api_key.empty();
+            bool any_ready = !config.current.base_url.empty() && !config.current.api_key.empty();
             for (const auto& p : config.providers)
                 any_ready = any_ready || (!p.base_url.empty() && !p.api_key.empty());
             if (!any_ready) {
@@ -2357,11 +2389,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto arg = arg_of(line);
             if (arg.empty()) {
                 const std::string shown =
-                    config.active_provider.empty()
-                        ? (config.model.empty() ? "(not set)" : config.model)
-                        : config.active_provider + "/" + config.model;
+                    config.current.name.empty()
+                        ? (config.current.model.empty() ? "(not set)" : config.current.model)
+                        : config.current.name + "/" + config.current.model;
                 screen.commit("model=" + shown + "; usage /model <name> | <provider>/<name>" +
-                              (config.base_url.empty() || config.api_key.empty()
+                              (config.current.base_url.empty() || config.current.api_key.empty()
                                    ? std::string()
                                    : " · /models lists what the provider offers"));
             } else {
@@ -2388,7 +2420,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     std::string names;
                     for (const auto& owner : owners)
                         names += (names.empty() ? "" : ", ") +
-                                 (owner.empty() ? "(unnamed)" : owner);
+                                 (owner.empty() ? "(none)" : owner);
                     screen.commit("[error] model '" + ref +
                                   "' exists on several providers: " + names);
                     screen.commit("        pick one with /model <provider>/" + ref);
@@ -2405,21 +2437,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         }
         if (line.rfind("/provider", 0) == 0) {
             const auto arg = arg_of(line);
-            auto show_current = [&] {
-                // Unnamed state only: with an active profile the "<- active"
-                // table row already carries the same values (/config for the
-                // full effective view).
-                if (!config.active_provider.empty())
-                    return;
-                screen.commit(
-                    "base_url=" + (config.base_url.empty() ? "(not set)" : config.base_url) +
-                    " · model=" + (config.model.empty() ? "(not set)" : config.model) +
-                    " (unnamed)");
-            };
             if (arg.empty() || arg == "list") {
                 // v6 (design 012 §5.2): all profiles, keys masked, active
-                // marked; unnamed top-level values shown only when no
-                // profile is active (the active row already repeats them).
+                // marked. v7: no unnamed row -- /config shows the effective
+                // values when env overrides them.
                 if (config.providers.empty()) {
                     screen.commit("providers: none · usage /provider add <name> [url]");
                 } else {
@@ -2430,7 +2451,6 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                       " · key=" + (p.api_key.empty() ? "(not set)" : "***set***") +
                                       (p.name == config.active_provider ? "  <- active" : ""));
                 }
-                show_current();
                 screen.commit("usage /provider <url> · /provider add <name> [url] · "
                               "/provider rm <name>");
             } else if (arg.rfind("add", 0) == 0 && (arg.size() == 3 || arg[3] == ' ')) {
@@ -2456,18 +2476,23 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     // key/model/metadata survive an add without a URL.
                     if (!url.empty()) {
                         existing->base_url = std::string(url);
-                        if (name == config.active_provider) {
-                            config.base_url = existing->base_url;
+                        auth_probes.erase(name);
+                        if (name == config.current.name) {
                             auth = AuthProbe{};
-                            auth_probes[name] = auth;
-                        } else {
-                            auth_probes.erase(name);
+                            config.refresh_current();
                         }
                     }
                     screen.commit("[ok] provider '" + name + "' updated" +
                                   (url.empty() ? "" : " · " + std::string(url)));
                 } else {
                     config.providers.push_back(std::move(probe));
+                    // v7 (design 013 §5.4): the first profile auto-activates
+                    // so the table never exists without a selection.
+                    if (config.providers.size() == 1) {
+                        config.active_provider = name;
+                        config.refresh_current();
+                        switch_active_profile();
+                    }
                     screen.commit("[ok] provider '" + name + "' added" +
                                   (url.empty() ? "" : " · " + std::string(url)));
                 }
@@ -2496,21 +2521,44 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 config.providers.erase(it);
                 auth_probes.erase(name);
                 if (was_active) {
-                    // Keep the top-level values: removing the active
-                    // profile must not leave the next turn unconfigured.
-                    config.activate_provider("");
+                    // v7 (design 013 §5.4, Q2): fall back to the first
+                    // remaining profile; with none left the setup state
+                    // returns. The removed profile's credentials go with it.
+                    if (!config.providers.empty())
+                        config.activate_provider(config.providers.front().name);
+                    else
+                        config.active_provider.clear();
+                    config.refresh_current();
                     switch_active_profile();
-                    screen.commit("[info] active profile removed; keeping the current "
-                                  "url/key/model as unnamed values");
+                    screen.commit(config.providers.empty()
+                                      ? "[info] active profile removed; no profiles left · "
+                                        "/provider add <name> or /login to start over"
+                                      : "[info] active profile removed; switched to '" +
+                                            config.active_provider + "'");
                 }
                 logger->event("provider_rm", {{"provider", name}});
                 save_and_report(true);
                 screen.commit("[ok] provider '" + name + "' removed");
             } else {
-                config.base_url = std::string(arg);
-                auth = AuthProbe{}; // a different endpoint cannot inherit it
-                auth_probes[config.active_provider] = auth;
-                config.sync_active_provider();
+                // /provider <url>: edit the active profile's URL (v7: no
+                // unnamed top level; auto-default when no profile exists).
+                ensure_default_profile();
+                ProviderProfile probe;
+                probe.name = config.active_provider;
+                probe.base_url = std::string(arg);
+                std::string err;
+                if (!probe.valid(&err)) {
+                    screen.commit("[error] " + err);
+                    return true;
+                }
+                auto* active = config.find_provider(config.active_provider);
+                active->base_url = probe.base_url;
+                while (!active->base_url.empty() && active->base_url.back() == '/')
+                    active->base_url.pop_back();
+                auth_probes.erase(active->name);
+                if (active->name == config.current.name)
+                    auth = AuthProbe{}; // a different endpoint cannot inherit it
+                config.refresh_current();
                 save_and_report(true);
                 maybe_autofetch_models();
             }
@@ -2567,27 +2615,27 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             return true;
         }
         if (line == "/config") {
-            screen.commit("base_url=" + (config.base_url.empty() ? "(not set)" : config.base_url));
-            screen.commit("model=" + (config.model.empty() ? "(not set)" : config.model));
+            screen.commit("base_url=" + (config.current.base_url.empty() ? "(not set)" : config.current.base_url));
+            screen.commit("model=" + (config.current.model.empty() ? "(not set)" : config.current.model));
             screen.commit("api_key=" +
-                          std::string(config.api_key.empty() ? "(not set)" : "***set***"));
+                          std::string(config.current.api_key.empty() ? "(not set)" : "***set***"));
             screen.commit("login=" + std::string(auth_log_token(auth)));
             // v6 (design 012): profile table size + active selection.
             screen.commit("providers=" + std::to_string(config.providers.size()) + " active=" +
-                          (config.active_provider.empty() ? "(unnamed)" : config.active_provider) +
+                          (config.active_provider.empty() ? "(no provider)" : config.active_provider) +
                           (config.env_override_active ? " · env override in effect" : ""));
             screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
             screen.commit(std::string("log_level=") + config.log_level +
                           " (session-only, not saved)");
             // v4 fields (design 010).
             screen.commit("context_window=" +
-                          (config.context_window > 0
-                               ? format_token_count(config.context_window) + " (" +
-                                     std::to_string(config.context_window) + ")"
+                          (config.current.context_window > 0
+                               ? format_token_count(config.current.context_window) + " (" +
+                                     std::to_string(config.current.context_window) + ")"
                                : std::string("(not set)")));
-            screen.commit("reasoning_effort=" + (config.reasoning_effort.empty()
+            screen.commit("reasoning_effort=" + (config.current.reasoning_effort.empty()
                                                      ? std::string("(not set)")
-                                                     : config.reasoning_effort));
+                                                     : config.current.reasoning_effort));
             screen.commit("config file: " + default_config_path().string() +
                           " (env overrides file)");
             return true;
@@ -2699,16 +2747,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             std::optional<std::string> next_workspace;
             if (fresh) {
                 next.meta.id = target_id;
-                next.meta.model = config.model;
+                next.meta.model = config.current.model;
                 next_workspace = config.workspace.empty()
                                      ? std::optional<std::string>{}
                                      : std::optional<std::string>(config.workspace);
                 next.meta.workspace = next_workspace;
                 next.meta.provider =
-                    config.active_provider.empty()
+                    config.current.name.empty()
                         ? std::optional<std::string>()
-                        : std::optional<std::string>(config.active_provider);
-                mini_agent::inject_system_prompt(next.chat, config.workspace, config.model,
+                        : std::optional<std::string>(config.current.name);
+                mini_agent::inject_system_prompt(next.chat, config.workspace, config.current.model,
                                                  config.system_prompt);
             } else {
                 auto loaded = store.load(target_id, &err);
@@ -2760,14 +2808,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto arg = arg_of(line);
             if (arg.empty()) {
                 const auto inputs = context_reading();
-                std::string shown = config.context_window > 0
-                                        ? format_token_count(config.context_window) + " (" +
-                                              std::to_string(config.context_window) + ")"
+                std::string shown = config.current.context_window > 0
+                                        ? format_token_count(config.current.context_window) + " (" +
+                                              std::to_string(config.current.context_window) + ")"
                                         : std::string("(not set)");
                 // v4.7: when unset, surface the catalog reading (the same
                 // value the status bar silently uses) so the user can see
                 // and confirm it before it becomes config-authoritative.
-                if (config.context_window <= 0 && inputs.context_window > 0)
+                if (config.current.context_window <= 0 && inputs.context_window > 0)
                     shown += " · catalog: " + format_token_count(inputs.context_window) + " (" +
                              std::to_string(inputs.context_window) + ") · set it: /context " +
                              std::to_string(inputs.context_window);
@@ -2787,8 +2835,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                    : std::string("(no data yet)")) +
                               (status_usage_reported ? " · provider-reported" : " · estimated"));
             } else if (arg == "off" || arg == "0") {
-                config.context_window = 0;
-                config.sync_active_provider(); // v6: per-profile metadata
+                active_profile_for_edit()->context_window = 0;
+                config.refresh_current(); // v7: per-profile metadata
                 save_and_report();
                 screen.commit("[ok] context window cleared · status shows tokens, no %");
             } else if (arg == "probe") {
@@ -2801,7 +2849,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     screen.commit("[info] probe already in flight, wait for the result");
                     return true;
                 }
-                if (config.base_url.empty() || config.api_key.empty() || config.model.empty()) {
+                if (config.current.base_url.empty() || config.current.api_key.empty() || config.current.model.empty()) {
                     screen.commit("[error] probe needs base_url + api_key + model ·" +
                                   config_next_hint(config));
                     return true;
@@ -2812,8 +2860,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 probe_done = false;
                 probe_result = ProbeResult{};
                 logger->event("ctx_probe", {{"status", "start"},
-                                            {"base_url", Logger::redact_url(config.base_url)},
-                                            {"model", config.model}});
+                                            {"base_url", Logger::redact_url(config.current.base_url)},
+                                            {"model", config.current.model}});
                 const AppConfig snapshot = config; // thread boundary
                 probe_worker = std::thread([&, snapshot] {
                     ProbeResult r;
@@ -2838,8 +2886,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     screen.commit("[error] /context expects a positive token count");
                     return true;
                 }
-                config.context_window = parsed_window;
-                config.sync_active_provider(); // v6: per-profile metadata
+                active_profile_for_edit()->context_window = parsed_window;
+                config.refresh_current(); // v7: per-profile metadata
                 save_and_report();
             }
             return true;
@@ -2852,8 +2900,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const auto arg = arg_of(line);
             if (arg.empty()) {
                 screen.commit("reasoning_effort=" +
-                              (config.reasoning_effort.empty() ? std::string("(not set)")
-                                                               : config.reasoning_effort) +
+                              (config.current.reasoning_effort.empty() ? std::string("(not set)")
+                                                               : config.current.reasoning_effort) +
                               "; usage /reasoning <level> or /reasoning off");
                 // v4.2 (§11): cached capabilities for the current model ->
                 // numbered picker over the gateway's supported levels (the
@@ -2864,7 +2912,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     reasoning_choices = caps.reasoning_efforts;
                     reasoning_menu_open = true;
                     for (const auto& row : reasoning_menu_rows(
-                             reasoning_choices, config.reasoning_effort,
+                             reasoning_choices, config.current.reasoning_effort,
                              caps.reasoning_default_effort, caps.reasoning_mandatory))
                         screen.commit(row);
                 } else if (caps.supports_reasoning) {
@@ -2872,13 +2920,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                   "but lists no levels; set one explicitly");
                 }
             } else if (arg == "off") {
-                config.reasoning_effort.clear();
-                config.sync_active_provider(); // v6: per-profile metadata
+                active_profile_for_edit()->reasoning_effort.clear();
+                config.refresh_current(); // v7: per-profile metadata
                 save_and_report();
                 screen.commit("[ok] reasoning effort cleared · requests omit the field");
             } else {
-                config.reasoning_effort = std::string(arg);
-                config.sync_active_provider(); // v6: per-profile metadata
+                active_profile_for_edit()->reasoning_effort = std::string(arg);
+                config.refresh_current(); // v7: per-profile metadata
                 save_and_report();
             }
             return true;
@@ -3266,21 +3314,18 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     } else if (secret_input) {
                         secret_input = false;
                         if (!composer.empty()) {
-                            // v6: `api_key` = active route; `api_key:<name>`
-                            // pins a profile chosen at /login <name> time.
+                            // v7: `api_key:<name>` pins the profile chosen at
+                            // /login time (there is no unnamed route anymore).
                             bool ok = true;
-                            if (secret_field == "api_key") {
-                                config.api_key = composer;
-                                config.sync_active_provider();
-                                auth = AuthProbe{}; // stale the moment it changes
-                                auth_probes[config.active_provider] = auth;
-                            } else if (secret_field.rfind("api_key:", 0) == 0) {
+                            if (secret_field.rfind("api_key:", 0) == 0) {
                                 const std::string name = secret_field.substr(8);
                                 if (auto* profile = config.find_provider(name)) {
                                     profile->api_key = composer;
                                     auth_probes[name] = AuthProbe{};
-                                    if (name == config.active_provider)
-                                        auth = AuthProbe{};
+                                    if (name == config.current.name) {
+                                        auth = AuthProbe{}; // stale the moment it changes
+                                        config.refresh_current();
+                                    }
                                 } else {
                                     ok = false;
                                     screen.commit("[error] provider '" + name +
@@ -3309,13 +3354,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             reasoning_menu_open = false;
                             // Same numbered-choice helper as the model menu.
                             if (const auto pick = model_choice(reasoning_choices, line)) {
-                                config.reasoning_effort = *pick;
-                                config.sync_active_provider(); // v6: per-profile
+                                active_profile_for_edit()->reasoning_effort = *pick;
+                                config.refresh_current(); // v7: per-profile
                                 save_and_report();
                                 logger->event(
                                     "reasoning_select",
-                                    {{"level", config.reasoning_effort}, {"source", "menu"}});
-                                screen.commit("reasoning_effort=" + config.reasoning_effort);
+                                    {{"level", config.current.reasoning_effort}, {"source", "menu"}});
+                                screen.commit("reasoning_effort=" + config.current.reasoning_effort);
                                 line.clear();
                             }
                         }
@@ -3415,7 +3460,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             bool active_probed = false;
             for (auto& part : models_result.parts) {
                 std::vector<std::pair<std::string, std::string>> list_fields = {
-                    {"provider", part.name.empty() ? "(unnamed)" : part.name},
+                    {"provider", part.name.empty() ? "(none)" : part.name},
                     {"elapsed_ms", std::to_string(ms)},
                 };
                 if (part.ok) {
@@ -3429,7 +3474,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                                     : id);
                         model_choice_targets.emplace_back(part.name, id);
                     }
-                    if (part.name == config.active_provider)
+                    if (part.name == config.current.name)
                         model_caps = std::move(part.caps); // v4.2
                     part.caps.clear();
                 } else {
@@ -3437,7 +3482,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     list_fields.emplace_back("count", "0");
                     list_fields.emplace_back("error", part.error);
                     logger->event("models_list", list_fields);
-                    failures.push_back((part.name.empty() ? std::string("(unnamed)") : part.name) +
+                    failures.push_back((part.name.empty() ? std::string("(none)") : part.name) +
                                        ": " + part.error);
                 }
                 // The request is also the credential probe: a 401 means
@@ -3450,14 +3495,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 probe.network_error = part.network_error;
                 probe.model_count = part.ids.size();
                 auth_probes[part.name] = probe;
-                if (part.name == config.active_provider) {
+                if (part.name == config.current.name) {
                     auth = probe;
                     active_probed = true;
                 }
                 std::vector<std::pair<std::string, std::string>> login_fields = {
                     {"status", std::string(auth_log_token(probe))},
                     {"models", std::to_string(probe.model_count)},
-                    {"provider", part.name.empty() ? "(unnamed)" : part.name},
+                    {"provider", part.name.empty() ? "(none)" : part.name},
                 };
                 // Only report a status code when one actually arrived: a
                 // success path never raised one, and writing `http_status=0`
@@ -3471,9 +3516,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             if (model_menu_open) {
                 // `<- current` tags the active combination's label.
                 const std::string current_label =
-                    aggregate && !config.active_provider.empty()
-                        ? config.active_provider + "/" + config.model
-                        : config.model;
+                    aggregate && !config.current.name.empty()
+                        ? config.current.name + "/" + config.current.model
+                        : config.current.model;
                 for (const auto& row : model_menu_rows(model_choices, current_label))
                     screen.commit(row);
             } else if (!any_ok) {
@@ -3504,9 +3549,15 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 // the ctx denominator (the prompt side of the reading).
                 const auto kind = probe_result.outcome.kind;
                 const long long window = probe_result.outcome.value;
-                config.context_window = window;
-                config.sync_active_provider(); // v6: per-profile metadata
-                save_and_report();
+                // v7: the reading belongs to the probed (effective) profile;
+                // env-only state keeps it session-only (no profile to save).
+                if (auto* probed = config.find_provider(config.current.name)) {
+                    probed->context_window = window;
+                    config.refresh_current();
+                    save_and_report();
+                } else {
+                    config.current.context_window = window;
+                }
                 logger->event("ctx_probe",
                               {{"status", "ok"},
                                {"window", std::to_string(window)},
@@ -3609,7 +3660,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 // v4: a 400 right after we started sending reasoning_effort
                 // is most likely the gateway rejecting the field -- name the
                 // probable cause and the fix instead of leaving the raw error.
-                if (result.http_status == 400 && !config.reasoning_effort.empty())
+                if (result.http_status == 400 && !config.current.reasoning_effort.empty())
                     screen.commit("[hint] if this gateway does not support reasoning_effort, "
                                   "clear it with /reasoning off (config value is otherwise "
                                   "kept verbatim)");
@@ -3635,9 +3686,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 auth.http_status = result.http_status;
                 auth.network_error = result.network_error;
             }
-            // v6: the verdict belongs to the active profile (the route the
-            // turn actually ran on); the map keeps it across switches.
-            auth_probes[config.active_provider] = auth;
+            // v7: the verdict belongs to the effective profile (the route
+            // the turn actually ran on); the map keeps it across switches.
+            auth_probes[config.current.name] = auth;
             // The prompt marker is the user-facing feedback (2026-11-02: the
             // [auth] history row that used to go with this is deliberate noise
             // on every first reply), so a chat-driven verdict change is only
@@ -3648,7 +3699,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     {"models", std::to_string(auth.model_count)},
                     {"source", "chat"},
                     {"provider",
-                     config.active_provider.empty() ? "(unnamed)" : config.active_provider},
+                     config.current.name.empty() ? "(none)" : config.current.name},
                 };
                 // Status code only when one actually arrived (same rule as the
                 // model-list event: `http_status=0` reads like a bogus reply).
@@ -3746,7 +3797,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // carries the temp tag; was options.session_id (launch snapshot).
             std::string status = tint(
                 sc, "2",
-                "model=" + (config.model.empty() ? std::string("(not set)") : config.model) +
+                "model=" + (config.current.model.empty() ? std::string("(not set)") : config.current.model) +
                     " · session=" + active_session_id + (temp_mode ? " (temp)" : std::string()));
             if (models_running) {
                 status += tint(sc, "36", " · listing models...");

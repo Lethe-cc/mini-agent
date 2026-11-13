@@ -216,37 +216,48 @@ const ProviderProfile* AppConfig::find_provider(std::string_view name) const {
 }
 
 bool AppConfig::activate_provider(std::string_view name) {
-    if (name.empty()) {
-        // Return to the unnamed state, KEEPING the current top-level
-        // values (the /provider rm-active rule, 012 section 5.2).
-        active_provider.clear();
-        return true;
-    }
     ProviderProfile* profile = find_provider(name);
     if (!profile)
-        return false;
+        return false; // empty name rejected: no unnamed state (design 013)
     active_provider = profile->name;
-    base_url = profile->base_url;
-    api_key = profile->api_key;
-    model = profile->model;
-    // Overwrite, not merge: the previous provider's window/effort must
-    // not leak into the new model (010 config-authoritative rule).
-    context_window = profile->context_window;
-    reasoning_effort = profile->reasoning_effort;
+    refresh_current();
     return true;
 }
 
-void AppConfig::sync_active_provider() {
-    ProviderProfile* profile = find_provider(active_provider);
-    if (!profile)
-        return; // unnamed state: top-level values stand alone
-    while (ends_with_slash(base_url))
-        base_url.pop_back(); // same normalization as load_config_merged
-    profile->base_url = base_url;
-    profile->api_key = api_key;
-    profile->model = model;
-    profile->context_window = context_window;
-    profile->reasoning_effort = reasoning_effort;
+void AppConfig::refresh_current() {
+    // A qualified MINI_AGENT_MODEL pins the effective profile for the whole
+    // process (env wins on every derivation, design 013 §5.3); the persisted
+    // active_provider selection is untouched by env.
+    std::string selected = active_provider;
+    const char* env_model = env_nonempty("MINI_AGENT_MODEL");
+    std::string env_provider;
+    std::string env_model_id;
+    const bool env_qualified =
+        env_model && split_qualified_model(env_model, &env_provider, &env_model_id) &&
+        find_provider(env_provider) != nullptr;
+    if (env_qualified)
+        selected = env_provider;
+    ProviderProfile effective;
+    if (const ProviderProfile* profile = find_provider(selected))
+        effective = *profile;
+    if (const char* v = env_nonempty("MINI_AGENT_BASE_URL"))
+        effective.base_url = v;
+    if (const char* v = env_nonempty("MINI_AGENT_API_KEY"))
+        effective.api_key = v;
+    if (env_model)
+        effective.model = env_qualified ? env_model_id : std::string(env_model);
+    if (const char* v = env_nonempty("MINI_AGENT_CONTEXT_WINDOW")) {
+        const long long parsed = std::strtoll(v, nullptr, 10);
+        if (parsed > 0)
+            effective.context_window = parsed; // invalid keeps profile value
+    }
+    if (const char* v = env_nonempty("MINI_AGENT_REASONING_EFFORT"))
+        effective.reasoning_effort = v;
+    if (!session_model.empty())
+        effective.model = session_model; // CLI --model wins over env (session)
+    while (ends_with_slash(effective.base_url))
+        effective.base_url.pop_back();
+    current = std::move(effective);
 }
 
 bool split_qualified_model(std::string_view ref, std::string* provider, std::string* model) {
@@ -260,21 +271,21 @@ bool split_qualified_model(std::string_view ref, std::string* provider, std::str
 
 std::vector<std::string> AppConfig::missing() const {
     std::vector<std::string> out;
-    if (base_url.empty())
+    if (current.base_url.empty())
         out.push_back("base_url");
-    if (api_key.empty())
+    if (current.api_key.empty())
         out.push_back("api_key");
-    if (model.empty())
+    if (current.model.empty())
         out.push_back("model");
     return out;
 }
 
 ProviderConfig AppConfig::to_provider() const {
     ProviderConfig p;
-    p.base_url = base_url;
-    p.api_key = api_key;
-    p.model = model;
-    p.reasoning_effort = reasoning_effort; // v4: empty == field omitted
+    p.base_url = current.base_url;
+    p.api_key = current.api_key;
+    p.model = current.model;
+    p.reasoning_effort = current.reasoning_effort; // v4: empty == field omitted
     if (capture_chat()) {
         // v4.4/v4.8: raw chat traffic goes next to the diagnostics log
         // path. config.log_file already carries the env override (merged
@@ -311,9 +322,8 @@ std::filesystem::path default_config_path() {
 std::string config_to_json(const AppConfig& config) {
     nlohmann::json root;
     root["schema_version"] = config.schema_version;
-    root["base_url"] = config.base_url;
-    root["api_key"] = config.api_key;
-    root["model"] = config.model;
+    // v7 (design 013): no top-level LLM fields; providers + active_provider
+    // below are the only persisted LLM state.
     if (!config.log_file.empty()) {
         root["log_file"] = config.log_file;
     }
@@ -324,11 +334,6 @@ std::string config_to_json(const AppConfig& config) {
         // "" (explicit disable) is written; absent = built-in default.
         root["system_prompt"] = *config.system_prompt;
     }
-    // v4 fields (design 010): written only when set.
-    if (config.context_window > 0)
-        root["context_window"] = config.context_window;
-    if (!config.reasoning_effort.empty())
-        root["reasoning_effort"] = config.reasoning_effort;
     // v2 fields (design 008 section 5.3): written only when they differ
     // from defaults, keeping v1-era files compact and diff-clean.
     if (config.tool_approval != "ask")
@@ -363,9 +368,8 @@ std::string config_to_json(const AppConfig& config) {
             root["mcp_servers"][server.name] = std::move(entry);
         }
     }
-    // v6 fields (design 012 section 5.1): written only when profiles
-    // exist, so legacy files stay byte-identical. Top-level base_url/
-    // api_key/model above remain the expansion of the active profile.
+    // v7 (design 013 section 5.1): written only when profiles exist, keeping
+    // fresh/env-only files compact. current is runtime-only, never written.
     if (!config.providers.empty()) {
         root["providers"] = nlohmann::json::object();
         for (const auto& profile : config.providers) {
@@ -397,11 +401,15 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
     }
     auto version_it = parsed.find("schema_version");
     if (version_it != parsed.end() && version_it->is_number_integer() &&
-        version_it->get<int>() > 1) {
+        version_it->get<int>() > 2) {
         if (error)
-            *error = "config schema_version newer than supported (max 1)";
+            *error = "config schema_version newer than supported (max 2)";
         return std::nullopt;
     }
+    // v7 (design 013 section 5.2): absent/1 files are migrated in memory to
+    // the v2 shape; the file itself is only rewritten on the next save.
+    const int file_version =
+        (version_it != parsed.end() && version_it->is_number_integer()) ? version_it->get<int>() : 1;
     AppConfig config;
     auto get_str = [&parsed](const char* key) {
         if (auto it = parsed.find(key); it != parsed.end() && it->is_string()) {
@@ -409,9 +417,6 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
         }
         return std::string();
     };
-    config.base_url = get_str("base_url");
-    config.api_key = get_str("api_key");
-    config.model = get_str("model");
     config.log_file = get_str("log_file");
     // v4.8.1 (010 §19): the capture level is SESSION-SCOPED and never
     // persisted. log_level (and the retired v4.4/v4.6 debug_log/
@@ -433,20 +438,31 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
         }
     }
 
-    // v4 optional fields (design 010). context_window must be a positive
-    // integer when present; a non-positive or non-integer value fails
-    // closed (config is authoritative -- a silently-dropped window would
-    // make the status bar lie).
-    if (auto it = parsed.find("context_window"); it != parsed.end()) {
-        if (it->is_number_integer() && it->get<int64_t>() > 0) {
-            config.context_window = it->get<int64_t>();
-        } else {
-            if (error)
-                *error = "config context_window must be a positive integer";
-            return std::nullopt;
+    // v1 legacy top-level LLM fields: read only for the one-shot migration
+    // (design 013 §5.2); in v2 files they are unknown fields and ignored.
+    // context_window keeps its fail-closed validation (config is
+    // authoritative -- a silently-dropped window would make the status bar
+    // lie, design 010).
+    std::string legacy_url;
+    std::string legacy_key;
+    std::string legacy_model;
+    long long legacy_window = 0;
+    std::string legacy_effort;
+    if (file_version <= 1) {
+        legacy_url = get_str("base_url");
+        legacy_key = get_str("api_key");
+        legacy_model = get_str("model");
+        legacy_effort = get_str("reasoning_effort");
+        if (auto it = parsed.find("context_window"); it != parsed.end()) {
+            if (it->is_number_integer() && it->get<int64_t>() > 0) {
+                legacy_window = it->get<int64_t>();
+            } else {
+                if (error)
+                    *error = "config context_window must be a positive integer";
+                return std::nullopt;
+            }
         }
     }
-    config.reasoning_effort = get_str("reasoning_effort");
 
     // v2 optional fields; unknown/absent -> defaults (forward-read rule).
     if (auto approval = get_str("tool_approval"); !approval.empty()) {
@@ -595,14 +611,48 @@ std::optional<AppConfig> config_from_json(std::string_view text, std::string* er
         }
     }
     config.active_provider = get_str("active_provider");
+
+    if (file_version <= 1) {
+        // One-shot v1 -> v2 migration (design 013 §5.2). A named selection
+        // already expands the top-level values: drop them. An unnamed file
+        // with top-level values folds them into a `default` profile
+        // (deterministic suffix on name collision).
+        const bool has_legacy = !legacy_url.empty() || !legacy_key.empty() ||
+                                !legacy_model.empty() || legacy_window > 0 ||
+                                !legacy_effort.empty();
+        if (config.active_provider.empty() && has_legacy) {
+            std::string name = "default";
+            for (int suffix = 2; config.find_provider(name); ++suffix)
+                name = "default-" + std::to_string(suffix);
+            ProviderProfile migrated;
+            migrated.name = name;
+            migrated.base_url = legacy_url;
+            while (ends_with_slash(migrated.base_url))
+                migrated.base_url.pop_back();
+            migrated.api_key = legacy_key;
+            migrated.model = legacy_model;
+            migrated.context_window = legacy_window;
+            migrated.reasoning_effort = legacy_effort;
+            config.providers.push_back(std::move(migrated));
+            config.active_provider = name;
+        }
+        config.migrated_from_v1 = has_legacy || !config.providers.empty();
+    } else if (!config.providers.empty() && config.active_provider.empty()) {
+        // v2 invariant: a profile table without a named selection would
+        // leave the effective endpoint ambiguous (design 013 §5.1).
+        if (error)
+            *error = "config active_provider is required when providers exist";
+        return std::nullopt;
+    }
     if (!config.active_provider.empty() && !config.find_provider(config.active_provider)) {
-        // Fail closed: expanding a dangling selection would silently send
-        // the stored key to whatever top-level URL happens to be present.
+        // Fail closed: a dangling selection would silently pick the wrong
+        // endpoint for the stored key.
         if (error)
             *error = "config active_provider '" + config.active_provider +
                      "' has no matching profile";
         return std::nullopt;
     }
+    config.refresh_current();
     return config;
 }
 
@@ -626,29 +676,13 @@ AppConfig load_config_merged(std::string* file_error) {
             }
         }
     }
-    // env overrides file (non-empty only)
-    // v6 (012 section 5.1): a qualified MINI_AGENT_MODEL=provider/model
-    // selects the whole profile group FIRST; the plain env overrides
-    // below still win over the expanded values.
-    const char* env_model = env_nonempty("MINI_AGENT_MODEL");
-    std::string env_model_provider;
-    std::string env_model_id;
-    const bool env_model_qualified =
-        env_model && split_qualified_model(env_model, &env_model_provider, &env_model_id) &&
-        config.find_provider(env_model_provider) != nullptr;
-    if (env_model_qualified)
-        config.activate_provider(env_model_provider);
-    if (const char* v = env_nonempty("MINI_AGENT_BASE_URL"))
-        config.base_url = v;
-    if (const char* v = env_nonempty("MINI_AGENT_API_KEY"))
-        config.api_key = v;
-    if (env_model)
-        config.model = env_model_qualified ? env_model_id : env_model;
-    // Any endpoint env var in effect pins the session to the overridden
-    // values; profile switches cannot change them until unset + restart.
+    // v7 (design 013 §5.3): the LLM env overlay (BASE_URL/API_KEY/MODEL/
+    // CONTEXT_WINDOW/REASONING_EFFORT, incl. qualified provider/model) is
+    // applied inside refresh_current() on every derivation, so env wins
+    // even across profile switches. Only the override flag is set here.
     config.env_override_active = env_nonempty("MINI_AGENT_BASE_URL") != nullptr ||
                                  env_nonempty("MINI_AGENT_API_KEY") != nullptr ||
-                                 env_model != nullptr;
+                                 env_nonempty("MINI_AGENT_MODEL") != nullptr;
     if (const char* v = env_nonempty("MINI_AGENT_LOG"))
         config.log_file = v;
     if (const char* v = env_nonempty("MINI_AGENT_DEBUG")) {
@@ -664,13 +698,6 @@ AppConfig load_config_merged(std::string* file_error) {
     }
     if (const char* v = env_nonempty("MINI_AGENT_WORKSPACE"))
         config.workspace = v; // v3: scripts pin the boundary per invocation
-    if (const char* v = env_nonempty("MINI_AGENT_CONTEXT_WINDOW")) {
-        const long long parsed_window = std::strtoll(v, nullptr, 10);
-        if (parsed_window > 0)
-            config.context_window = parsed_window; // v4: invalid keeps file config
-    }
-    if (const char* v = env_nonempty("MINI_AGENT_REASONING_EFFORT"))
-        config.reasoning_effort = v; // v4: verbatim passthrough value
     if (const char* v = env_nonempty("MINI_AGENT_TOOL_APPROVAL"); v && *v) {
         const std::string approval = v;
         if (approval == "ask" || approval == "allowlist" || approval == "off")
@@ -678,9 +705,7 @@ AppConfig load_config_merged(std::string* file_error) {
     }
     if (env_nonempty("MINI_AGENT_NO_MCP"))
         config.mcp_servers.clear(); // tri-state debug switch (008 5.3)
-    if (!config.base_url.empty() && ends_with_slash(config.base_url)) {
-        config.base_url.pop_back(); // tolerate trailing slash in file
-    }
+    config.refresh_current();
     return config;
 }
 

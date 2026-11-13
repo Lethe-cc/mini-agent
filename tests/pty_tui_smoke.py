@@ -368,17 +368,23 @@ def main():
 
     os.write(fd, b"1\r")
     picked = read_all(fd, 1.5)
-    expect("model=mock-large" in picked, "typing a number selects that model")
+    # v7 (design 013): env keeps winning on every derivation -- the pick is
+    # saved into the auto-created default profile, but the effective model
+    # stays the env one until the vars are unset and the process restarts.
+    expect("model=default/smoke" in picked and "env overrides are active" in picked,
+           "number pick saves the profile; env keeps the effective model")
 
-    # /models re-lists on demand and marks the current model; lone Esc then
-    # dismisses the menu without sending anything.
+    # /models re-lists on demand; lone Esc then dismisses the menu without
+    # sending anything. Under env the effective model (smoke) is not in the
+    # list, so no row carries the <- current marker.
     os.write(fd, b"/models\r")
     relisted = ""
     for _ in range(12):
         relisted += read_all(fd, 0.5)
-        if "<- current" in relisted:
+        if "1. mock-large" in relisted:
             break
-    expect("1. mock-large  <- current" in relisted, "re-list marks the current model")
+    expect("1. mock-large" in relisted and "<- current" not in relisted,
+           "re-list renders the menu; env model outside the list is not marked")
     os.write(fd, b"\x1b")
     dismissed = read_all(fd, 1.0)
     expect("dismissed" in dismissed, "lone Esc dismisses the model menu")
@@ -391,33 +397,19 @@ def main():
     expect("login verified" in listed and "2 model(s) reachable" in listed,
            "after /provider + /login the login state shows verified")
 
+    # v7 (design 013): under env override /login saves the profile key, but
+    # the effective key stays the env one on every derivation -- the verdict
+    # remains verified. The rejected-key path is covered by the dedicated
+    # no-env session below (and by multi's per-profile 401).
     os.write(fd, b"/login wrong-key\r")
     bad = ""
     for _ in range(12):
         bad += read_all(fd, 0.5)
-        if "REJECTED" in bad:
+        if "login verified" in bad:
             break
-    expect("login REJECTED" in bad and "HTTP 401" in bad,
-           "a bad key reports rejected, not merely list-failed")
-    expect("wrong-key" not in bad, "the rejected line never echoes the key")
-    expect("\x1b[1;31m!\x1b[0m" in bad,
-           "prompt marker keeps the red rejected state after the menu closes")
-
-    expect("login=rejected" in strip_csi(read_after(fd, b"/config\r", 1.2)),
-           "/config exposes the login state")
-
-    os.write(fd, b"/login pty-smoke-key\r")
-    back = ""
-    for _ in range(12):
-        back += read_all(fd, 0.5)
-        if "login verified" in back:
-            break
-    expect("login verified" in back, "re-entering the good key returns to verified")
-
-    # Restore the short model name: the status row is width-clipped, and the
-    # later "queued N" assertion needs the original headroom back.
-    os.write(fd, b"/model smoke\r")
-    read_all(fd, 1.0)
+    expect("wrong-key" not in bad, "the saved key value never echoes")
+    expect("login verified" in bad and "login REJECTED" not in bad,
+           "env keeps the effective key: a profile-only edit cannot reject it")
 
     # Pi-style steering: Enter while streaming queues the input and it
     # auto-sends after the current turn commits (design 007 5.6 v1.x #1).
@@ -534,10 +526,10 @@ def main():
     expect("models_list status=start" in log_written
            and re.search(r"models_list .*status=ok", log_written),
            "log records the model listing start and outcome")
-    expect("model_select model=mock-large source=menu" in log_written,
-           "log records the model chosen from the menu")
-    expect("login status=verified" in log_written and "login status=rejected" in log_written,
-           "log records login status for both accepted and refused keys")
+    expect("model_select model=smoke source=menu provider=default" in log_written,
+           "log records the menu selection (effective env model, saved profile)")
+    expect("login status=verified" in log_written,
+           "log records the accepted-key login status")
     expect("login status=verified models=0 source=chat" in log_written,
            "log records the chat turn that verified the key")
     expect("wrong-key" not in log_written, "the rejected key value never reaches the log")
@@ -786,10 +778,65 @@ def main():
     expect("You: hi" in strip_csi(out3), "batched: chat works after split entry")
 
     batched_cfg = json.load(open(batch_env["MINI_AGENT_CONFIG"]))
-    expect(batched_cfg.get("base_url", "").endswith("/v1")
-           and batched_cfg.get("api_key") == "batch-key"
-           and batched_cfg.get("model") == "mock-large",
-           "batched: all three pieces accumulated in one config file")
+    # v7 (design 013): the three pieces accumulate in the auto-created
+    # default profile; no top-level LLM fields exist anymore.
+    batched_default = batched_cfg.get("providers", {}).get("default", {})
+    expect(batched_default.get("base_url", "").endswith("/v1")
+           and batched_default.get("api_key") == "batch-key"
+           and batched_default.get("model") == "mock-large"
+           and batched_cfg.get("active_provider") == "default"
+           and "base_url" not in batched_cfg,
+           "batched: all three pieces accumulated in the default profile")
+
+    # v7 (design 013): the rejected-key verdict needs a process WITHOUT env
+    # overrides (env keeps winning over profile edits). One short no-env
+    # session: auto-default profile + a bad key -> 401 -> red marker, then
+    # the good key restores verified.
+    rej_root = "/tmp/mini_agent_pty_smoke_rej"
+    subprocess.run(["rm", "-rf", rej_root], check=False)
+    os.makedirs(rej_root + "/cfg", 0o700)
+    rej_env = dict(batch_env,
+                   MINI_AGENT_CONFIG=rej_root + "/cfg/config.json",
+                   MINI_AGENT_SESSION_DIR=rej_root + "/sess",
+                   MINI_AGENT_LOG=rej_root + "/agent.log")
+    rpid, rfd = pty.fork()
+    if rpid == 0:
+        os.execve(binary, [binary, "run", "--new"], rej_env)
+    set_pty_size(rfd, 24, 80)
+    read_all(rfd, 0.8)
+    os.write(rfd, f"/provider http://127.0.0.1:{PORT}/v1\r".encode())
+    read_all(rfd, 0.8)
+    os.write(rfd, b"/login wrong-key\r")
+    bad = ""
+    for _ in range(12):
+        bad += read_all(rfd, 0.5)
+        if "REJECTED" in bad:
+            break
+    expect("login REJECTED" in bad and "HTTP 401" in bad,
+           "a bad key reports rejected, not merely list-failed")
+    expect("wrong-key" not in bad, "the rejected line never echoes the key")
+    expect("\x1b[1;31m!\x1b[0m" in bad,
+           "prompt marker keeps the red rejected state after the menu closes")
+    expect("login=rejected" in strip_csi(read_after(rfd, b"/config\r", 1.2)),
+           "/config exposes the login state")
+    os.write(rfd, b"/login pty-smoke-key\r")
+    back = ""
+    for _ in range(12):
+        back += read_all(rfd, 0.5)
+        if "login verified" in back:
+            break
+    expect("login verified" in back, "re-entering the good key returns to verified")
+    os.write(rfd, b"\x03\x03")
+    time.sleep(0.4)
+    try:
+        os.waitpid(rpid, 0)
+    except ChildProcessError:
+        pass
+    os.close(rfd)
+    rej_log = open(rej_env["MINI_AGENT_LOG"]).read()
+    expect("login status=rejected" in rej_log and "wrong-key" not in rej_log,
+           "rejected verdict logged without the key value")
+    subprocess.run(["rm", "-rf", rej_root], check=False)
 
     # v6 multi-provider end-to-end (design 012 §8 M4): two mock endpoints
     # demanding DIFFERENT keys, one long-lived TUI process. Proves profiles
@@ -832,8 +879,8 @@ def main():
            "multi: /provider add alpha")
     expect("next: /login alpha (key stays hidden)" in added_a,
            "multi: add with url hints /login <name>")
-    expect("config 0/3" in strip_csi(added_a),
-           "multi: profiles alone leave the top-level progress at 0/3")
+    expect("config 1/3" in strip_csi(added_a),
+           "multi: the first profile auto-activates, its url counts toward 1/3")
     added_b = multi_send(f"/provider add beta http://127.0.0.1:{BETA_PORT}/v1\r".encode(),
                          "provider 'beta' added")
     expect("[ok] provider 'beta' added" in added_b, "multi: /provider add beta")
@@ -906,8 +953,9 @@ def main():
            and mid_cfg["providers"]["alpha"].get("api_key") == "pty-smoke-key"
            and mid_cfg["providers"]["beta"].get("api_key") == "pty-beta-key"
            and mid_cfg.get("active_provider") == "beta"
-           and mid_cfg.get("model") == "mock-large",
-           "multi: config file stores both profiles, keys, active, model")
+           and mid_cfg["providers"]["beta"].get("model") == "mock-large"
+           and "model" not in mid_cfg,
+           "multi: config file stores both profiles, keys, active, per-profile model")
 
     tabbed = multi_send(b"/login \t", "options for /login")
     expect("options for /login (cycle with Tab):" in strip_csi(tabbed),
@@ -919,25 +967,28 @@ def main():
            "multi: single Ctrl-C clears the composer, does not quit")
 
     removed = multi_send(b"/provider rm beta\r", "provider 'beta' removed")
-    # The full info line wraps at 80 cols; assert only the short prefix.
-    expect("[info] active profile removed" in removed,
-           "multi: removing the active profile keeps unnamed values")
+    # v7 (design 013 Q2): rm of the active profile falls back to the first
+    # remaining profile; beta's credentials are gone with it.
+    expect("[info] active profile removed; switched to 'alpha'" in removed,
+           "multi: removing the active profile switches to the remaining one")
     expect("[ok] provider 'beta' removed" in removed, "multi: /provider rm beta")
-    after_rm = multi_send(b"/config\r", "providers=1 active=(unnamed)")
-    expect("providers=1 active=(unnamed)" in after_rm,
-           "multi: after rm one profile remains, active is unnamed")
-    plist_unnamed = multi_send(b"/provider list\r", "usage /provider")
-    expect("base_url=http://127.0.0.1:8941/v1" in plist_unnamed
-           and "(unnamed)" in plist_unnamed,
-           "multi: /provider list keeps the unnamed effective-value row")
+    after_rm = multi_send(b"/config\r", "providers=1 active=alpha")
+    expect("providers=1 active=alpha" in after_rm,
+           "multi: after rm one profile remains and is active")
+    plist_after = multi_send(b"/provider list\r", "usage /provider")
+    expect("alpha · http://127.0.0.1:8939/v1 · key=***set***  <- active" in plist_after
+           and "(unnamed)" not in plist_after and "base_url=" not in plist_after,
+           "multi: /provider list shows only the remaining profile, no unnamed row")
 
-    # Sessions persist after a turn (not on exit), so run one through the
-    # kept unnamed route (beta's url/key/model). This proves rm left a
-    # working configuration AND gives the meta.provider assertion a file.
-    # "You: hello" is committed at fold time, just before store.save().
+    # alpha never had a model selected; pick one explicitly, then run a
+    # turn through it. Sessions persist at turn commit, so this also gives
+    # the meta.provider assertion a file.
+    picked_a = multi_send(b"/model alpha/mock-large\r", "model=alpha/mock-large")
+    expect("model=alpha/mock-large" in picked_a,
+           "multi: qualified /model reconfigures the remaining profile")
     turn = multi_send(b"hello\r", "You: hello", tries=24)
     expect("tok0" in turn and "You: hello" in turn,
-           "multi: a turn works on the unnamed values kept by rm")
+           "multi: a turn works on the remaining profile after rm")
     read_all(mfd, 0.8) # let the post-turn save land before /exit
 
     os.write(mfd, b"/exit\r")
@@ -952,14 +1003,16 @@ def main():
     expect(len(mfiles) == 1, "multi: one session persisted")
     if mfiles:
         mdata = json.load(open(mfiles[0]))
-        expect(mdata["meta"].get("provider") == "beta"
+        expect(mdata["meta"].get("provider") == "alpha"
                and mdata["meta"].get("model") == "mock-large",
                "multi: session meta records the last selected provider/model")
     final_cfg = json.load(open(multi_env["MINI_AGENT_CONFIG"]))
     expect(set(final_cfg.get("providers", {})) == {"alpha"}
-           and "active_provider" not in final_cfg
-           and final_cfg.get("api_key") == "pty-beta-key",
-           "multi: final config keeps alpha + unnamed values, drops beta")
+           and final_cfg.get("active_provider") == "alpha"
+           and final_cfg["providers"]["alpha"].get("api_key") == "pty-smoke-key"
+           and final_cfg["providers"]["alpha"].get("model") == "mock-large"
+           and "api_key" not in final_cfg,
+           "multi: final config keeps only alpha, beta's credentials dropped")
 
     mlog = open(multi_env["MINI_AGENT_LOG"]).read()
     expect(mlog.count("provider_add ") == 2, "multi: log records both provider_add events")

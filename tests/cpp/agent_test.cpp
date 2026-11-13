@@ -231,9 +231,13 @@ void test_config_round_trip_and_precedence() {
     std::string error;
     // incomplete by default
     mini_agent::AppConfig full;
-    full.base_url = "https://example.test/v1";
-    full.api_key = "secret";
-    full.model = "m1";
+    mini_agent::ProviderProfile profile;
+    profile.name = "default";
+    profile.base_url = "https://example.test/v1";
+    profile.api_key = "secret";
+    profile.model = "m1";
+    full.providers = {profile};
+    full.activate_provider("default");
     check(full.missing().empty(), "complete config reports nothing missing");
     check(mini_agent::save_config_file(full, &error),
           (std::string("save config: ") + error).c_str());
@@ -244,18 +248,22 @@ void test_config_round_trip_and_precedence() {
     // env overrides file
     ::setenv("MINI_AGENT_MODEL", "env-model", 1);
     auto merged = mini_agent::load_config_merged(&error);
-    check(merged.base_url == "https://example.test/v1", "file base_url kept");
-    check(merged.api_key == "secret", "file key kept");
-    check(merged.model == "env-model", "env overrides file model");
+    check(merged.current.base_url == "https://example.test/v1", "file base_url kept");
+    check(merged.current.api_key == "secret", "file key kept");
+    check(merged.current.model == "env-model", "env overrides file model");
     ::unsetenv("MINI_AGENT_MODEL");
     // trailing slash tolerated
     mini_agent::AppConfig slashed;
-    slashed.base_url = "https://trail.test/v1/";
-    slashed.api_key = "k";
-    slashed.model = "m";
+    mini_agent::ProviderProfile slash_profile;
+    slash_profile.name = "default";
+    slash_profile.base_url = "https://trail.test/v1/";
+    slash_profile.api_key = "k";
+    slash_profile.model = "m";
+    slashed.providers = {slash_profile};
+    slashed.activate_provider("default");
     check(mini_agent::save_config_file(slashed, &error), "save slashed");
     auto reloaded = mini_agent::load_config_merged(&error);
-    check(reloaded.base_url == "https://trail.test/v1", "trailing slash trimmed");
+    check(reloaded.current.base_url == "https://trail.test/v1", "trailing slash trimmed");
     // json schema guard
     check(!mini_agent::config_from_json(R"({"schema_version":9})", &error).has_value(),
           "future schema rejected");
@@ -336,27 +344,11 @@ void test_models_listing() {
     check(!mini_agent::tui::model_choice({}, "1").has_value(), "no models to pick from");
 }
 
-// v6 (design 012 section 5.1): provider profiles. Legacy files must stay
-// byte-identical, the active-expansion invariant must hold across save/
-// load/activate, and malformed profile state fails closed.
+// v7 (design 013): named profiles are the only persisted LLM state;
+// current is derived one-way (active profile + env overlay), v1 files
+// migrate once at load, and malformed profile state fails closed.
 void test_provider_profiles() {
     std::string error;
-
-    // Legacy byte-identical regression: no profiles -> no new keys.
-    mini_agent::AppConfig legacy;
-    legacy.base_url = "https://legacy.test/v1";
-    legacy.api_key = "secret";
-    legacy.model = "m1";
-    const std::string legacy_text = mini_agent::config_to_json(legacy);
-    check(legacy_text.find("providers") == std::string::npos, "legacy save has no providers key");
-    check(legacy_text.find("active_provider") == std::string::npos,
-          "legacy save has no active_provider key");
-    auto legacy_back = mini_agent::config_from_json(legacy_text, &error);
-    check(legacy_back.has_value() && legacy_back->providers.empty() &&
-              legacy_back->active_provider.empty() && !legacy_back->env_override_active,
-          "legacy round trip keeps unnamed state");
-    check(mini_agent::config_to_json(*legacy_back) == legacy_text,
-          "legacy round trip byte-identical");
 
     // Two profiles, partial second one (add-before-login is legal).
     mini_agent::AppConfig cfg;
@@ -371,12 +363,21 @@ void test_provider_profiles() {
     b.name = "beta";
     cfg.providers = {a, b};
     check(cfg.activate_provider("alpha"), "activate alpha");
-    check(cfg.base_url == "https://a.test/v1/", "activate expands base_url");
-    check(cfg.api_key == "key-a" && cfg.model == "a-model", "activate expands key/model");
-    check(cfg.context_window == 100000 && cfg.reasoning_effort == "high",
-          "activate expands window/effort");
-    cfg.sync_active_provider();
-    check(cfg.providers[0].base_url == "https://a.test/v1", "sync trims trailing slash");
+    check(cfg.current.base_url == "https://a.test/v1", "current derives normalized url");
+    check(cfg.current.api_key == "key-a" && cfg.current.model == "a-model",
+          "current derives key/model");
+    check(cfg.current.context_window == 100000 && cfg.current.reasoning_effort == "high",
+          "current derives window/effort");
+    check(cfg.current.name == "alpha", "current carries the profile name");
+
+    // v2 save: schema 2, no top-level LLM keys (dump(2): top-level keys are
+    // indented two spaces, profile fields four).
+    const std::string v2_text = mini_agent::config_to_json(cfg);
+    check(v2_text.find("\"schema_version\": 2") != std::string::npos, "schema 2 written");
+    check(v2_text.find("\n  \"base_url\"") == std::string::npos &&
+              v2_text.find("\n  \"api_key\"") == std::string::npos &&
+              v2_text.find("\n  \"model\"") == std::string::npos,
+          "v2 save has no top-level LLM keys");
 
     // save_config_file writes to MINI_AGENT_CONFIG; route to a temp file.
     const auto dir = std::filesystem::temp_directory_path() /
@@ -387,40 +388,90 @@ void test_provider_profiles() {
     check(error.empty(), (std::string("load clean: ") + error).c_str());
     check(merged.providers.size() == 2, "profiles round trip");
     check(merged.active_provider == "alpha", "active survives round trip");
-    check(merged.base_url == "https://a.test/v1" && merged.api_key == "key-a" &&
-              merged.model == "a-model",
-          "loaded top level is active expansion");
+    check(merged.current.base_url == "https://a.test/v1" && merged.current.api_key == "key-a" &&
+              merged.current.model == "a-model",
+          "loaded current is the active profile");
     check(merged.providers[0].base_url == "https://a.test/v1", "profile url normalized on load");
     check(merged.providers[1].name == "beta" && merged.providers[1].base_url.empty() &&
               merged.providers[1].valid(&error),
           "partial profile legal until first use");
+    check(!merged.migrated_from_v1, "v2 file not flagged as migrated");
 
     // Cross-profile switch clears the previous window/effort (no leak).
     check(merged.activate_provider("beta"), "activate beta");
-    check(merged.context_window == 0 && merged.reasoning_effort.empty(),
-          "unset profile window/effort clear top level");
-    check(merged.base_url.empty() && merged.api_key.empty() && merged.model.empty(),
-          "partial profile expands to empty top level");
+    check(merged.current.context_window == 0 && merged.current.reasoning_effort.empty(),
+          "unset profile window/effort clear current");
+    check(merged.current.base_url.empty() && merged.current.api_key.empty() &&
+              merged.current.model.empty(),
+          "partial profile derives empty current");
     check(!merged.activate_provider("ghost"), "unknown profile rejected");
+    check(!merged.activate_provider(""), "empty name rejected (no unnamed state)");
     check(merged.active_provider == "beta", "failed activate keeps selection");
 
-    // Edits through top-level commands fold back into the active profile.
-    merged.base_url = "https://b.test/v1";
-    merged.api_key = "key-b";
-    merged.model = "b-model";
-    merged.context_window = 50000;
-    merged.sync_active_provider();
-    check(merged.providers[1].base_url == "https://b.test/v1" &&
-              merged.providers[1].api_key == "key-b" && merged.providers[1].model == "b-model" &&
-              merged.providers[1].context_window == 50000,
-          "sync folds edits into active profile");
+    // Edits go to the profile first, then re-derive (no write-back sync).
+    auto* pb = merged.find_provider("beta");
+    pb->base_url = "https://b.test/v1";
+    pb->api_key = "key-b";
+    pb->model = "b-model";
+    pb->context_window = 50000;
+    merged.refresh_current();
+    check(merged.current.base_url == "https://b.test/v1" && merged.current.model == "b-model" &&
+              merged.current.context_window == 50000,
+          "refresh derives profile edits");
 
-    // rm-active rule: unnamed state keeps the current top-level values.
-    check(merged.activate_provider(""), "empty name returns to unnamed");
-    check(merged.active_provider.empty() && merged.base_url == "https://b.test/v1",
-          "unnamed keeps top-level values");
-    merged.sync_active_provider(); // no-op in unnamed state
-    check(merged.providers[1].model == "b-model", "unnamed sync touches no profile");
+    // v1 migration: unnamed top-level folds into a default profile.
+    const auto v1 = mini_agent::config_from_json(
+        R"({"schema_version":1,"base_url":"https://old.test/v1/","api_key":"old-key",)"
+        R"("model":"old-m","context_window":64000,"reasoning_effort":"low"})",
+        &error);
+    check(v1.has_value(), (std::string("v1 migration parses: ") + error).c_str());
+    check(v1->providers.size() == 1 && v1->active_provider == "default",
+          "unnamed v1 folds into default");
+    check(v1->current.base_url == "https://old.test/v1" && v1->current.api_key == "old-key" &&
+              v1->current.model == "old-m",
+          "migrated values derive into current");
+    check(v1->current.context_window == 64000 && v1->current.reasoning_effort == "low",
+          "migrated metadata kept");
+    check(v1->migrated_from_v1, "migration flagged for the log event");
+    const std::string v1_saved = mini_agent::config_to_json(*v1);
+    check(v1_saved.find("\n  \"base_url\"") == std::string::npos,
+          "migrated save drops top-level url");
+
+    // v1 with a named selection: top-level expansion dropped, table kept.
+    const auto v1named = mini_agent::config_from_json(
+        R"({"schema_version":1,"base_url":"https://stale.test","api_key":"stale",)"
+        R"("model":"stale","active_provider":"alpha",)"
+        R"("providers":{"alpha":{"base_url":"https://a.test/v1","api_key":"key-a","model":"a-model"}}})",
+        &error);
+    check(v1named.has_value() && v1named->providers.size() == 1 &&
+              v1named->current.model == "a-model" && v1named->current.api_key == "key-a",
+          "named v1 keeps the profile, drops stale top level");
+
+    // Name collision: existing default -> deterministic default-2.
+    const auto collide = mini_agent::config_from_json(
+        R"({"base_url":"https://new.test/v1",)"
+        R"("providers":{"default":{"base_url":"https://kept.test/v1"}}})",
+        &error);
+    check(collide.has_value() && collide->providers.size() == 2 &&
+              collide->active_provider == "default-2",
+          "collision folds into default-2");
+    check(collide->current.base_url == "https://new.test/v1", "collision keeps legacy values");
+
+    // Empty v1 file: nothing to migrate.
+    const auto empty_v1 = mini_agent::config_from_json(R"({"schema_version":1})", &error);
+    check(empty_v1.has_value() && empty_v1->providers.empty() && !empty_v1->migrated_from_v1,
+          "empty v1 stays empty");
+
+    // v2 invariants: a table requires a selection; top-level LLM fields are
+    // unknown fields and ignored.
+    check(!mini_agent::config_from_json(R"({"schema_version":2,"providers":{"x":{}}})", &error)
+               .has_value(),
+          "v2 table without active fails closed");
+    const auto v2ignore = mini_agent::config_from_json(
+        R"({"schema_version":2,"base_url":"https://ignored.test","api_key":"k","model":"m"})",
+        &error);
+    check(v2ignore.has_value() && v2ignore->providers.empty() && v2ignore->current.base_url.empty(),
+          "v2 ignores top-level LLM fields");
 
     // Fail-closed parsing.
     check(!mini_agent::config_from_json(R"({"providers":[]})", &error).has_value(),
@@ -460,27 +511,39 @@ void test_provider_profiles() {
     check(!mini_agent::split_qualified_model("/m", &prov, &id), "empty provider rejected");
     check(!mini_agent::split_qualified_model("p/", &prov, &id), "empty model rejected");
 
-    // Qualified MINI_AGENT_MODEL activates the profile, plain env still wins.
+    // Qualified MINI_AGENT_MODEL derives from that profile without touching
+    // the persisted selection; plain env still wins.
     check(mini_agent::save_config_file(cfg, &error), "save for env test");
     ::setenv("MINI_AGENT_MODEL", "alpha/a-model", 1);
     auto env_cfg = mini_agent::load_config_merged(&error);
-    check(env_cfg.active_provider == "alpha" && env_cfg.model == "a-model",
-          "qualified env model activates profile");
-    check(env_cfg.base_url == "https://a.test/v1" && env_cfg.api_key == "key-a",
-          "qualified env expands whole profile");
+    check(env_cfg.current.model == "a-model" && env_cfg.current.base_url == "https://a.test/v1" &&
+              env_cfg.current.api_key == "key-a",
+          "qualified env derives the whole profile");
+    check(env_cfg.active_provider == "alpha", "env does not rewrite the file selection");
     check(env_cfg.env_override_active, "env model sets override state");
+    // env pins the effective profile across switches (design 013 §5.3).
+    check(env_cfg.activate_provider("beta"), "switch under env");
+    check(env_cfg.current.model == "a-model" && env_cfg.current.base_url == "https://a.test/v1",
+          "env keeps winning after a profile switch");
+    check(env_cfg.active_provider == "beta", "selection still switches for the next save");
     ::setenv("MINI_AGENT_BASE_URL", "https://env.test/v1", 1);
     env_cfg = mini_agent::load_config_merged(&error);
-    check(env_cfg.base_url == "https://env.test/v1", "plain env url beats profile expansion");
+    check(env_cfg.current.base_url == "https://env.test/v1", "plain env url beats profile");
     ::unsetenv("MINI_AGENT_BASE_URL");
     ::setenv("MINI_AGENT_MODEL", "literal-model", 1);
     env_cfg = mini_agent::load_config_merged(&error);
-    check(env_cfg.model == "literal-model" && env_cfg.active_provider == "alpha",
+    check(env_cfg.current.model == "literal-model" && env_cfg.active_provider == "alpha",
           "plain env model keeps file selection");
     ::setenv("MINI_AGENT_MODEL", "ghost/m", 1);
     env_cfg = mini_agent::load_config_merged(&error);
-    check(env_cfg.model == "ghost/m" && env_cfg.active_provider == "alpha",
-          "unknown env prefix stays a literal model id");
+    check(env_cfg.current.model == "ghost/m", "unknown env prefix stays a literal model id");
+    // CLI --model session overlay wins over env, never persisted.
+    env_cfg.session_model = "cli-model";
+    env_cfg.refresh_current();
+    check(env_cfg.current.model == "cli-model", "session model overlay beats env");
+    check(mini_agent::config_to_json(env_cfg).find("cli-model") == std::string::npos,
+          "session overlay never written");
+    env_cfg.session_model.clear();
     ::unsetenv("MINI_AGENT_MODEL");
     env_cfg = mini_agent::load_config_merged(&error);
     check(!env_cfg.env_override_active, "no endpoint env -> no override state");
@@ -498,38 +561,38 @@ void test_config_batched_hint() {
           "nothing set points at /provider only");
 
     mini_agent::AppConfig has_url;
-    has_url.base_url = "https://x.test/v1";
+    has_url.current.base_url = "https://x.test/v1";
     check(mini_agent::tui::config_next_hint(has_url) == "config 1/3 · next: /login <key>",
           "url set points at /login only");
 
     // Order independence: a key without a url must still ask for the url.
     mini_agent::AppConfig has_key;
-    has_key.api_key = "k";
+    has_key.current.api_key = "k";
     check(mini_agent::tui::config_next_hint(has_key) == "config 1/3 · next: /provider <url>",
           "key-only still points at /provider first");
 
     mini_agent::AppConfig url_and_key;
-    url_and_key.base_url = "https://x.test/v1";
-    url_and_key.api_key = "k";
+    url_and_key.current.base_url = "https://x.test/v1";
+    url_and_key.current.api_key = "k";
     check(mini_agent::tui::config_next_hint(url_and_key) ==
               "config 2/3 · next: /models (list & pick) or /model <name>",
           "url+key points at model discovery");
 
     mini_agent::AppConfig model_only;
-    model_only.model = "m";
+    model_only.current.model = "m";
     check(mini_agent::tui::config_next_hint(model_only) == "config 1/3 · next: /provider <url>",
           "model-only points at /provider");
 
     mini_agent::AppConfig full;
-    full.base_url = "https://x.test/v1";
-    full.api_key = "k";
-    full.model = "m";
+    full.current.base_url = "https://x.test/v1";
+    full.current.api_key = "k";
+    full.current.model = "m";
     check(mini_agent::tui::config_next_hint(full) == "config 3/3 · ready", "complete says ready");
     check(full.complete(), "hint agrees with complete()");
 
     // A hint line must never carry the key value itself.
     mini_agent::AppConfig secrety;
-    secrety.api_key = "do-not-leak-this";
+    secrety.current.api_key = "do-not-leak-this";
     check(mini_agent::tui::config_next_hint(secrety).find("do-not-leak-this") == std::string::npos,
           "hint reports presence, never the key value");
 }
@@ -619,14 +682,14 @@ void test_connection_prompt() {
           "no config reads as unconfigured");
 
     mini_agent::AppConfig url_only;
-    url_only.base_url = "https://api.test/v1";
+    url_only.current.base_url = "https://api.test/v1";
     check(mini_agent::tui::connection_state(url_only, AuthProbe{}, false) ==
               ConnState::Unconfigured,
           "an endpoint without a key is not connectable");
 
     mini_agent::AppConfig cfg;
-    cfg.base_url = "https://api.test/v1";
-    cfg.api_key = "do-not-leak-this";
+    cfg.current.base_url = "https://api.test/v1";
+    cfg.current.api_key = "do-not-leak-this";
     const AuthProbe untouched;
     check(mini_agent::tui::connection_state(cfg, untouched, false) == ConnState::Unverified,
           "configured but unprobed never reads as healthy");
@@ -724,9 +787,9 @@ void test_logger() {
     // default is ON at /tmp/mini-agent-<uid>.log (maintainer 2026-11-01);
     // the literal "off" disables.
     mini_agent::AppConfig plain;
-    plain.base_url = "https://x.test/v1";
-    plain.api_key = "sekret123";
-    plain.model = "m";
+    plain.current.base_url = "https://x.test/v1";
+    plain.current.api_key = "sekret123";
+    plain.current.model = "m";
     const auto default_path = mini_agent::Logger::resolve_path(plain);
     check(default_path.has_value(), "logging on by default");
     if (default_path) {
@@ -2017,9 +2080,9 @@ void test_v3_config_and_prompt() {
     using namespace mini_agent;
     // config round-trip: workspace + system_prompt presence semantics.
     AppConfig config;
-    config.base_url = "https://x.test/v1";
-    config.api_key = "k";
-    config.model = "m";
+    config.current.base_url = "https://x.test/v1";
+    config.current.api_key = "k";
+    config.current.model = "m";
     config.workspace = "/tmp/somewhere";
     std::string error;
     const auto json = config_to_json(config);
@@ -2260,12 +2323,13 @@ class FakeUsageProvider final : public mini_agent::Provider {
 
 void test_v4_config_fields() {
     std::string error;
-    // context_window round-trips through JSON; reasoning_effort too.
+    // v1 inputs migrate into the default profile; metadata derives into
+    // current and round-trips through the profile table.
     const auto parsed = mini_agent::config_from_json(
         R"({"model":"m","context_window":128000,"reasoning_effort":"high"})", &error);
     check(parsed.has_value(), "v4 fields parse");
-    check(parsed->context_window == 128000, "context_window parsed");
-    check(parsed->reasoning_effort == "high", "reasoning_effort parsed");
+    check(parsed->current.context_window == 128000, "context_window parsed");
+    check(parsed->current.reasoning_effort == "high", "reasoning_effort parsed");
     const auto text = mini_agent::config_to_json(*parsed);
     check(text.find("128000") != std::string::npos, "context_window written");
     check(text.find("reasoning_effort") != std::string::npos, "reasoning written");
@@ -2280,17 +2344,18 @@ void test_v4_config_fields() {
 
     // defaults: absent fields stay unset and are omitted from output.
     const auto bare = mini_agent::config_from_json(R"({"model":"m"})", &error);
-    check(bare.has_value() && bare->context_window == 0 && bare->reasoning_effort.empty(),
+    check(bare.has_value() && bare->current.context_window == 0 &&
+              bare->current.reasoning_effort.empty(),
           "v4 defaults unset");
     check(mini_agent::config_to_json(*bare).find("context_window") == std::string::npos,
           "unset window omitted from output");
 
     // to_provider carries reasoning_effort (empty == omitted in the body).
     mini_agent::AppConfig cfg;
-    cfg.base_url = "https://x.test/v1";
-    cfg.api_key = "k";
-    cfg.model = "m";
-    cfg.reasoning_effort = "medium";
+    cfg.current.base_url = "https://x.test/v1";
+    cfg.current.api_key = "k";
+    cfg.current.model = "m";
+    cfg.current.reasoning_effort = "medium";
     check(cfg.to_provider().reasoning_effort == "medium", "provider carries reasoning effort");
 }
 
@@ -2836,9 +2901,9 @@ void test_v44_debug_log() {
     check(mini_agent::config_to_json(*legacy).find("debug_log") == std::string::npos,
           "saving drops legacy debug_log fields");
     mini_agent::AppConfig lvl;
-    lvl.base_url = "https://x.test/v1";
-    lvl.api_key = "k";
-    lvl.model = "m";
+    lvl.current.base_url = "https://x.test/v1";
+    lvl.current.api_key = "k";
+    lvl.current.model = "m";
     lvl.log_level = "trace";
     check(mini_agent::config_to_json(lvl).find("log_level") == std::string::npos,
           "raised level never written to file");
@@ -2852,9 +2917,9 @@ void test_v44_debug_log() {
     // gates + path derivation: <log_file>.debug; "off"/empty fall back to
     // default base; info -> no path at all.
     mini_agent::AppConfig cfg;
-    cfg.base_url = "https://x.test/v1";
-    cfg.api_key = "k";
-    cfg.model = "m";
+    cfg.current.base_url = "https://x.test/v1";
+    cfg.current.api_key = "k";
+    cfg.current.model = "m";
     cfg.log_level = "debug";
     cfg.log_file = "/var/tmp/my.log";
     check(cfg.to_provider().debug_log_path == "/var/tmp/my.log.debug", "debug path from log_file");

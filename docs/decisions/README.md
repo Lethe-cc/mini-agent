@@ -12,6 +12,7 @@
 | [006：工具审批策略](006-tool-approval-policy.md) | **提议**（2026-11-02，未获批） | 命令执行默认逐次人工确认（ask），allowlist/off 需显式配置 |
 | [007：文件工具与工作区边界](007-file-tools-workspace.md) | 已实现（2026-11-05 随 009 落地，GCC/Clang/tidy/pty 验证见 009 §8；待人工评审） | edit_file 精确唯一替换 + write_file/read_file 等五工具；session 级 workspace 根软边界；自写行级 LCS diff 进审批块 |
 | [008：git 工具策略](008-git-tool-policy.md) | **已接受**（2026-11-05 维护者批复"commit 可自动，push 人工"） | 只读三件套 + add/commit 随审批档位（含 diff 预览与历史区可见性）；永不提供 push/remote 类工具；AGENTS.md 红线同步改"不自动推送" |
+| [009：provider 强制命名与配置 schema v2](009-named-providers-schema-v2.md) | **已接受**（2026-11-14 维护者批复"全部默认，开始实现"） | 废弃顶层 LLM 五字段，`providers`+`active_provider` 单一事实来源 + 运行时 `current` 单向派生；v1 一次性迁移；破坏性变更，推翻 012 §4 兼容性取舍；关联 [design 013](../design/013-named-providers.md) |
 
 使用 [ADR 模板](../../templates/adr.md) 新增决策，按 `001-decision-name.md` 命名并在上表登记标题、状态和关联设计。
 

@@ -52,11 +52,14 @@ struct ProviderProfile {
 // action (/login). This is a conscious trade-off recorded in design 007
 // section 6: without it, per-process login would be impossible in TUI.
 // The file path honors MINI_AGENT_CONFIG for tests and custom locations.
+//
+// v7 (design 013, ADR 009): the ONLY persisted LLM state is the named
+// profile table `providers` plus `active_provider` (schema_version 2).
+// Effective values live in `current`, derived one-way from the active
+// profile + env overlay; there is no unnamed persisted state and no
+// write-back sync.
 struct AppConfig {
-    int schema_version = 1;
-    std::string base_url;
-    std::string api_key; // never log or echo
-    std::string model;
+    int schema_version = 2;
     std::string log_file; // optional diagnostics path (design 007 §7)
     // v4.8 (design 010 §19): unified traffic-capture log level, replacing
     // the v4.4/v4.6 debug_log/debug_log_aux bools. "info" (default):
@@ -87,17 +90,6 @@ struct AppConfig {
     // (design 009 section 5.5).
     std::optional<std::string> system_prompt;
 
-    // v4 (design 010): model metadata the gateway cannot be trusted to
-    // provide. Config is the authoritative source -- no probing, no
-    // override by server replies.
-    // context_window: divisor for the status-bar ctx% reading; 0 = unset
-    // (status bar then shows token counts without a percentage).
-    long long context_window = 0;
-    // reasoning_effort: verbatim passthrough into the request body when
-    // non-empty ("low"|"medium"|"high"|provider-specific); empty = field
-    // omitted == pre-v4 byte-identical request.
-    std::string reasoning_effort;
-
     // v2 tool layer (design 008 §5.3). Approval policy: "ask" (default,
     // human-in-the-loop per ADR 006), "allowlist", "off".
     std::string tool_approval = "ask";
@@ -106,38 +98,45 @@ struct AppConfig {
     std::size_t tool_timeout_seconds = 30;
     std::vector<McpServerConfig> mcp_servers;
 
-    // v6 (design 012): named provider profiles plus the active selection.
-    // base_url/api_key/model above are ALWAYS the expansion of the active
-    // profile (empty active_provider = unnamed legacy/env values). The
-    // invariant is maintained by activate_provider()/sync_active_provider()
-    // and enforced at load; files without these fields behave exactly as
-    // before.
+    // v7 (design 013): named provider profiles are the only persisted LLM
+    // state. active_provider must name an existing profile whenever
+    // providers is non-empty (enforced at load, fail-closed).
     std::vector<ProviderProfile> providers;
-    std::string active_provider; // "" = unnamed top-level values
+    std::string active_provider;
+    // Runtime effective values = active profile + non-empty env overlay +
+    // session_model, rebuilt by refresh_current(). NEVER persisted.
+    // name is empty only in the no-profile/env-only state. Model metadata
+    // (context_window/reasoning_effort) is config-authoritative per profile
+    // (design 010); switching profiles overwrites, never merges.
+    ProviderProfile current;
     // Session-scoped, never persisted: any of MINI_AGENT_BASE_URL/_API_KEY/
     // _MODEL is in effect, so profile switching cannot change the effective
     // endpoint until the vars are unset and the process restarts. The TUI
     // keeps listing profiles but annotates picks with the override.
     bool env_override_active = false;
+    // CLI --model session overlay, applied last in refresh_current();
+    // never written to a profile or to disk (design 013 §5.3).
+    std::string session_model;
+    // Set when config_from_json migrated a schema<=1 file; callers log one
+    // config_migrate metadata event. Runtime only, never persisted.
+    bool migrated_from_v1 = false;
 
-    // Profile lookup by name; nullptr for the unnamed state or an unknown
-    // name (a dangling active_provider is rejected at load).
+    // Profile lookup by name; nullptr for an empty or unknown name (a
+    // dangling active_provider is rejected at load).
     ProviderProfile* find_provider(std::string_view name);
     const ProviderProfile* find_provider(std::string_view name) const;
-    // Switch the active profile: expand base_url/api_key/model and
-    // OVERWRITE context_window/reasoning_effort with the profile's values
-    // (unset -> cleared, so the previous provider's window never leaks
-    // into the new model; design 010 config-authoritative rule). Empty
-    // name returns to the unnamed state keeping the current top-level
-    // values (the /provider rm-active rule). False on unknown name.
+    // Switch the active profile and re-derive current. Empty/unknown names
+    // are rejected: the unnamed state no longer exists (design 013).
     bool activate_provider(std::string_view name);
-    // Fold the current top-level values back into the active profile so
-    // edits through /provider <url>, /login, /model, /context, /reasoning
-    // stay in sync (no-op in the unnamed state).
-    void sync_active_provider();
+    // Rebuild current from the active profile (or the env-qualified profile
+    // when MINI_AGENT_MODEL=provider/model names one) plus the non-empty
+    // env overlay and session_model. Called at load, after activation, and
+    // after every profile edit. Env is immutable within a process, so
+    // re-reading getenv here has no side effects.
+    void refresh_current();
 
     bool complete() const noexcept {
-        return !base_url.empty() && !api_key.empty() && !model.empty();
+        return !current.base_url.empty() && !current.api_key.empty() && !current.model.empty();
     }
     // Names of missing fields, for user-facing hints.
     std::vector<std::string> missing() const;

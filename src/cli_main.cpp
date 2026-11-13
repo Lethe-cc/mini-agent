@@ -206,11 +206,11 @@ bool apply_mcp_flags(int argc, char** argv, mini_agent::AppConfig* config, std::
 }
 
 // Apply --provider NAME / --model NAME session overrides (design 012
-// section 5.2) on the merged config, BEFORE the completeness gate so a
-// stored profile can supply the values env/file leave empty.
-// --provider expands a named profile; --model then wins for the model
-// field and may itself be qualified (provider/model activates that
-// profile first). Changes are session-scoped: nothing is written back.
+// section 5.2, v7 semantics per design 013 §5.3) on the merged config,
+// BEFORE the completeness gate so a stored profile can supply the values
+// env/file leave empty. --provider selects a named profile; --model is a
+// session overlay on current (never written to a profile or to disk) and
+// may itself be qualified (provider/model selects that profile first).
 bool apply_provider_flags(int argc, char** argv, mini_agent::AppConfig* config,
                           std::string* error) {
     std::string provider_flag;
@@ -248,13 +248,13 @@ bool apply_provider_flags(int argc, char** argv, mini_agent::AppConfig* config,
                 *error = "unknown provider '" + provider_part + "'";
                 return false;
             }
-            config->model = model_part;
+            config->session_model = model_part;
         } else {
             // Unknown or absent prefix: a literal model id (ids may
             // contain '/', e.g. openrouter names).
-            config->model = model_flag;
+            config->session_model = model_flag;
         }
-        config->sync_active_provider();
+        config->refresh_current();
     }
     return true;
 }
@@ -407,6 +407,9 @@ int cmd_ask(int argc, char** argv) {
     mini_agent::OpenAiProvider provider(config.to_provider());
     mini_agent::Logger logger(
         mini_agent::Logger::resolve_path(config).value_or(std::filesystem::path{}));
+    if (config.migrated_from_v1)
+        logger.event("config_migrate", {{"from", "1"}, {"to", "2"},
+                                        {"profiles", std::to_string(config.providers.size())}});
     mini_agent::Chat chat;
 
     // Tool wiring for --tools ask|auto (008 5.4). off (default) keeps the
@@ -695,7 +698,7 @@ int cmd_run(int argc, char** argv) {
     }
     if (!reused && (session_id.empty() || fresh)) {
         session.meta.id = mini_agent::generate_session_id();
-        session.meta.model = config.model;
+        session.meta.model = config.current.model;
         // v3 (design 009 5.4/5.5): resolve + validate the workspace now so
         // a bad --cwd fails before the lock, and stamp it into the session.
         if (!config.workspace.empty()) {
@@ -711,11 +714,11 @@ int cmd_run(int argc, char** argv) {
                                      ? std::optional<std::string>{}
                                      : std::optional<std::string>(config.workspace);
         // v6 (design 012 §5.4): record which profile the model belongs to
-        // (absent = unnamed route); history only, never re-applied on load.
-        session.meta.provider = config.active_provider.empty()
+        // (absent = env-only route); history only, never re-applied on load.
+        session.meta.provider = config.current.name.empty()
                                     ? std::optional<std::string>{}
-                                    : std::optional<std::string>(config.active_provider);
-        mini_agent::inject_system_prompt(session.chat, config.workspace, config.model,
+                                    : std::optional<std::string>(config.current.name);
+        mini_agent::inject_system_prompt(session.chat, config.workspace, config.current.model,
                                          config.system_prompt);
     } else if (!reused) {
         if (!mini_agent::session_id_is_safe(session_id)) {
@@ -768,7 +771,7 @@ int cmd_run(int argc, char** argv) {
 
     if (tty) {
         mini_agent::tui::TuiOptions tui_options;
-        tui_options.model = config.model;
+        tui_options.model = config.current.model;
         tui_options.session_id = session.meta.id;
         tui_options.resumed = reused || !session_id.empty(); // v4.15: banner tag
         tui_options.temp = temp;
@@ -783,9 +786,12 @@ int cmd_run(int argc, char** argv) {
     mini_agent::OpenAiProvider provider(config.to_provider());
     mini_agent::Logger logger(
         mini_agent::Logger::resolve_path(config).value_or(std::filesystem::path{}));
+    if (config.migrated_from_v1)
+        logger.event("config_migrate", {{"from", "1"}, {"to", "2"},
+                                        {"profiles", std::to_string(config.providers.size())}});
     logger.event("session_open",
-                 {{"mode", "line"}, {"id", session.meta.id}, {"model", config.model}});
-    std::cout << "session " << session.meta.id << " (model " << config.model << ")\n"
+                 {{"mode", "line"}, {"id", session.meta.id}, {"model", config.current.model}});
+    std::cout << "session " << session.meta.id << " (model " << config.current.model << ")\n"
               << "type a line to chat; /exit or EOF (Ctrl-D) exits\n";
     std::string line;
     for (;;) {
