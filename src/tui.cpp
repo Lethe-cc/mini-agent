@@ -2406,15 +2406,20 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         if (line.rfind("/provider", 0) == 0) {
             const auto arg = arg_of(line);
             auto show_current = [&] {
+                // Unnamed state only: with an active profile the "<- active"
+                // table row already carries the same values (/config for the
+                // full effective view).
+                if (!config.active_provider.empty())
+                    return;
                 screen.commit(
                     "base_url=" + (config.base_url.empty() ? "(not set)" : config.base_url) +
                     " · model=" + (config.model.empty() ? "(not set)" : config.model) +
-                    (config.active_provider.empty() ? " (unnamed)"
-                                                    : " · active=" + config.active_provider));
+                    " (unnamed)");
             };
             if (arg.empty() || arg == "list") {
                 // v6 (design 012 §5.2): all profiles, keys masked, active
-                // marked; then the effective values.
+                // marked; unnamed top-level values shown only when no
+                // profile is active (the active row already repeats them).
                 if (config.providers.empty()) {
                     screen.commit("providers: none · usage /provider add <name> [url]");
                 } else {

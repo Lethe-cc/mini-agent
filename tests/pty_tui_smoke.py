@@ -892,6 +892,8 @@ def main():
            "multi: /provider list masks keys")
     expect("beta · http://127.0.0.1:8941/v1 · key=***set***  <- active" in plist,
            "multi: /provider list marks the active profile")
+    expect("base_url=" not in plist and "(unnamed)" not in plist,
+           "multi: /provider list hides the redundant effective-value row when active")
     cfg_view = multi_send(b"/config\r", "providers=2 active=beta")
     expect("providers=2 active=beta" in cfg_view, "multi: /config shows profile count + active")
     # The trailing "config file: ... (env overrides file)" help line always
@@ -924,6 +926,10 @@ def main():
     after_rm = multi_send(b"/config\r", "providers=1 active=(unnamed)")
     expect("providers=1 active=(unnamed)" in after_rm,
            "multi: after rm one profile remains, active is unnamed")
+    plist_unnamed = multi_send(b"/provider list\r", "usage /provider")
+    expect("base_url=http://127.0.0.1:8941/v1" in plist_unnamed
+           and "(unnamed)" in plist_unnamed,
+           "multi: /provider list keeps the unnamed effective-value row")
 
     # Sessions persist after a turn (not on exit), so run one through the
     # kept unnamed route (beta's url/key/model). This proves rm left a
