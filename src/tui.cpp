@@ -118,14 +118,6 @@ namespace {
 
 // Local copies of the tui_render.cpp anonymous helpers (kept private to
 // each TU; the render file owns the canonical versions).
-bool color_env_disabled() noexcept {
-    const char* no_color = std::getenv("NO_COLOR"); // https://no-color.org
-    if (no_color != nullptr && *no_color != '\0')
-        return true;
-    const char* term = std::getenv("TERM");
-    return term != nullptr && std::strcmp(term, "dumb") == 0;
-}
-
 bool starts_with(std::string_view line, std::string_view prefix) noexcept {
     return line.size() >= prefix.size() && line.compare(0, prefix.size(), prefix) == 0;
 }

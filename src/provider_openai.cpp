@@ -158,8 +158,15 @@ void debug_dump(const std::string& path, std::string_view tag, std::string_view 
     const auto secs = static_cast<std::time_t>(now_ms / 1000);
     std::tm tm{};
     ::localtime_r(&secs, &tm);
-    char stamp[32];
-    std::snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02d.%03d", tm.tm_year + 1900,
+    // 64 bytes: GCC's -Wformat-truncation assumes full int ranges for the
+    // tm fields; a generously sized buffer silences the false positive
+    // without changing the output format (debug-only path).
+    char stamp[64];
+    // Clamp the year to 4 digits: GCC's -Wformat-truncation otherwise assumes
+    // the full int range for tm_year+1900 and warns about a 32-byte buffer.
+    // Any representable local-time year is 4 digits, so output is unchanged.
+    const int year = (tm.tm_year + 1900) % 10000;
+    std::snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02d.%03d", year,
                   tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec,
                   static_cast<int>(now_ms % 1000));
     file << "=== " << tag << " " << stamp << " ===\n" << payload << '\n';
@@ -714,7 +721,7 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
                 finish_reason = fr->get<std::string>();
             }
         };
-        CurlWriteCtx ctx{&lines, &should_abort};
+        CurlWriteCtx ctx{&lines, &should_abort, {}};
 
         long status = 0;
         char error_buffer[CURL_ERROR_SIZE] = {0};

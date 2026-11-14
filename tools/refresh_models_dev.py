@@ -60,7 +60,18 @@ TSV_TEMPLATE = """#pragma once
 // Rows: {count}
 namespace mini_agent {{
 
+#if defined(__clang__)
+// The catalog is a vendored data snapshot (~477 KB), far beyond the 65536
+// literal length the C++ standard merely *requires* compilers to support.
+// clang's -Woverlength-strings checks the concatenated length, so splitting
+// into adjacent literals does not help; suppress it locally instead.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverlength-strings"
+#endif
 inline constexpr const char kModelsDevCatalogTsv[] = R"TSV({tsv})TSV";
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 }} // namespace mini_agent
 // clang-format on

@@ -9,6 +9,14 @@
 // Rows: 7158
 namespace mini_agent {
 
+#if defined(__clang__)
+// The catalog is a vendored data snapshot (~477 KB), far beyond the 65536
+// literal length the C++ standard merely *requires* compilers to support.
+// clang's -Woverlength-strings checks the concatenated length, so splitting
+// into adjacent literals does not help; suppress it locally instead.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverlength-strings"
+#endif
 inline constexpr const char kModelsDevCatalogTsv[] = R"TSV(http://127.0.0.1:1234/v1	openai/gpt-oss-20b	131072	32768
 http://127.0.0.1:1234/v1	qwen/qwen3-30b-a3b-2507	262144	16384
 http://127.0.0.1:1234/v1	qwen/qwen3-coder-30b	262144	65536
@@ -7168,6 +7176,9 @@ https://zenmux.ai/api/v1	z-ai/glm-5.3-flashx	1000000	128000
 https://zenmux.ai/api/v1	z-ai/glm-5v-turbo	200000	128000
 https://zenmux.ai/api/v1	z-ai/glm-image	10240	0
 )TSV";
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 } // namespace mini_agent
 // clang-format on

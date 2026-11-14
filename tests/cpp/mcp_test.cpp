@@ -372,7 +372,7 @@ void test_call_restart_after_child_death() {
                 {reply_to(2, R"({"content":[{"type":"text","text":"recovered"}]})")},
             };
         }
-        return std::move(fake);
+        return fake;
     };
     McpClient client(server_config("phx"), factory);
     const auto result =
@@ -392,7 +392,7 @@ void test_call_restart_after_child_death() {
             {},
         };
         raw->die_after_sends_ = 3; // dies on both attempts
-        return std::move(fake);
+        return fake;
     };
     const std::size_t before = spawned.size();
     McpClient client2(server_config("phx"), factory2);

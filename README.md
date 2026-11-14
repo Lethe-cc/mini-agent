@@ -198,7 +198,7 @@ python scripts/check.py --require-initialized
 
 各版本的完整验证记录见 [设计索引](docs/design/README.md) 中 007–015 各自的验证章节；本表只记录本次 README 更新时点的证据。
 
-已知非阻塞告警（不影响退出码，CI 默认未启用 `-Werror`）：`src/provider_openai.cpp` 的 `-Wformat-truncation`（debug-only 时间戳格式化，GCC 对 `tm_year+1900` 的保守上界推断）与 `tests/cpp/mcp_test.cpp` 的 `-Wpessimizing-move`（测试中多余的 `std::move`）。
+编译告警已于 2026-11-14 清零（GCC/Clang 双 debug preset 实测零告警）：修复 `src/provider_openai.cpp` 的 `-Wformat-truncation`（年份收窄 + 缓冲区扩容）与 `-Wmissing-field-initializers`（015 新增 `raw_body` 未同步初始化）、`tests/cpp/mcp_test.cpp` 两处 `-Wpessimizing-move`（返回局部对象多余的 `std::move`）、`src/tui.cpp` 拆分遗留的 `-Wunused-function` 死代码；`models_dev_data.hpp` 的 clang `-Woverlength-strings` 属 vendored 数据快照（~477KB 单字面量，超标准最低要求 65536；clang 按拼接后长度检查，切分字面量无效），在生成器模板中以局部 `#pragma clang diagnostic` 抑制并附注释。CI 默认仍未启用 `-Werror`。
 
 项目 CI（[`.github/workflows/project.yml`](.github/workflows/project.yml)）：四 preset 矩阵（`cpp`）+ pty 冒烟与冷启动预算（`smoke`）+ tidy/ASan（`quality`），均在 `ubuntu-24.04`。libcurl 开发头文件安装步骤已补齐；**远端 CI 结果以推送后实际运行为准**（推送需人工，ADR 008），不能据本表断言远端通过。
 
