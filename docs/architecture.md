@@ -164,3 +164,4 @@ stop
 - 手工冒烟（pty 驱动 TUI + mock SSE）：`python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent`
 - 单元契约：`build/<preset>/agent_test`（chat/session/loop/config/log/md/tui 纯函数）
 - MCP 客户端契约：`build/<preset>/mcp_test`（RPC/对话层 fake transport + stdio/http mock E2E，ctest `mcp.client`）
+- 远端 CI（`.github/workflows/project.yml`）：四 preset 矩阵（`cpp`）+ pty TUI/CLI 冒烟（`smoke`，loopback mock、零凭据）+ clang-tidy/ASan/UBSan（`quality`）。pty 冒烟仍不入 `quality_commands`（时序敏感、需 pty），但自 2026-11-14 起由 CI 门禁（此前仅本地手工）。

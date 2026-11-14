@@ -38,3 +38,48 @@ jobs:
         run: clang++ --version
       - name: Run strict project checks
         run: python scripts/check.py --strict-project
+
+  # Terminal end-to-end smoke (design 007 §5.6 / 014 §6 / 015 §6): the pty
+  # suites are the strongest regression net (TUI frame contract, approval
+  # flows, provider retry/compact scenarios) and run against loopback mock
+  # servers only -- no secrets, no external network. Kept out of
+  # quality_commands (timing-sensitive, needs a pty) but gated here.
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install libcurl development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+      - name: Build and unit-test (gcc debug)
+        run: python scripts/cpp_check.py --preset linux-gcc-debug
+      - name: TUI pty smoke
+        run: python tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent
+      - name: CLI pty smoke
+        run: python tests/pty_cli_smoke.py ./build/linux-gcc-debug/mini-agent
+
+  # Static analysis + sanitizers on the Clang debug preset (same gate the
+  # design docs record locally: tidy exit 0, ASan/UBSan ctest clean).
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install libcurl development headers and clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev clang-tidy
+      - name: clang-tidy + ASan/UBSan (clang debug)
+        run: python scripts/cpp_check.py --preset linux-clang-debug --tidy --sanitizers

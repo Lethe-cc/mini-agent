@@ -9,7 +9,8 @@ Usage:
   cmake --build --preset linux-gcc-debug
   python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent
 
-NOT part of quality_commands (needs pty + timing tolerance); run manually.
+NOT part of quality_commands (needs pty + timing tolerance); run manually
+or via the CI `smoke` job (.github/workflows/project.yml).
 """
 import fcntl
 import glob

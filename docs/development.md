@@ -69,7 +69,9 @@ cmake --install build/linux-gcc-debug
 | `./build/linux-gcc-debug/mcp_test` | v2 MCP 契约测试（RPC/对话层 fake transport + stdio/http mock E2E；ctest `mcp.client`） |
 | `python3 tests/mock_mcp_server.py` | 手工：stdio mock MCP server（`/tools` 前的最小对端） |
 | `python3 tests/mock_mcp_http_server.py 8933` | 手工：Streamable HTTP mock MCP server（SSE 响应 + Mcp-Session-Id） |
-| `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent` | pty 端到端冒烟：真实伪终端驱动 TUI，mock SSE 服务，断言帧不变量/方向键/历史/中断/持久化（非质量命令，手工运行） |
+| `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent` | pty 端到端冒烟：真实伪终端驱动 TUI，mock SSE 服务，断言帧不变量/方向键/历史/中断/持久化/重试/compact（非质量命令；本地手工运行，CI `smoke` job 同命令门禁） |
+| `python3 tests/pty_cli_smoke.py ./build/linux-gcc-debug/mini-agent` | CLI pty 冒烟：SIGINT 中断通道/line-mode/管道契约 + 014 流前重试 flaky 场景（同上，CI `smoke` job 门禁） |
+| `python3 scripts/cpp_check.py --preset linux-clang-debug --tidy --sanitizers` | clang-tidy + ASan/UBSan 门禁（CI `quality` job 同命令；本地可选） |
 | `python3 scripts/cpp_check.py` | 质量命令入口（configure → build → CTest），由 `check.py --strict-project` 调用 |
 | `clang-format --dry-run -Werror <files>` / `python3 scripts/cpp_format.py` | 第一方 C++ 格式检查（风格见 `.clang-format`） |
 

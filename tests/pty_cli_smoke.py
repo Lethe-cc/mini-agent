@@ -15,7 +15,8 @@ Usage:
   python3 tests/pty_cli_smoke.py ./build/linux-gcc-debug/mini-agent
 
 NOT part of quality_commands (needs pty + timing tolerance); run manually,
-same convention as tests/pty_tui_smoke.py.
+same convention as tests/pty_tui_smoke.py (both are gated by the CI
+`smoke` job in .github/workflows/project.yml).
 """
 import fcntl
 import json
