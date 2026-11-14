@@ -22,7 +22,8 @@ title mini-agent 模块架构（2026-11-05，均已实现）
 
 package "可执行入口" {
   [cli_main.cpp\n子命令解析 / 退出码] as CLI
-  [tui.cpp\n自绘 TUI：termios + ANSI\n帧模型 / 差分渲染 / 行编辑] as TUI
+  [tui.cpp\n自绘 TUI：termios + ANSI\n帧循环 / LiveScreen / run_loop] as TUI
+  [tui_render.cpp\n纯函数渲染/补全助手\n（单测经 tui.hpp 包装）] as TUIR
 }
 
 package "agent_core (静态库)" {
@@ -58,6 +59,7 @@ CLI --> SESSION
 CLI --> CONFIG
 CLI --> TUI
 TUI --> LOOP
+TUI --> TUIR : 纯函数渲染/补全
 TUI --> PROVIDER
 TUI --> SESSION
 TUI --> MD
@@ -85,7 +87,7 @@ note bottom of TUI : 渲染核心与网络分离：\nworker 线程只 append del
 @enduml
 ```
 
-依赖方向约束：`mini-agent → agent_core → {curl, nlohmann, md4c, spdlog}`；core 内不含 CLI 参数解析，TUI 不含 HTTP 细节；`loop::run_turn(Chat&, Provider&)` 为纯函数式入口，配置参数注入、无全局单例（多 Agent 扩展点）。
+依赖方向约束：`mini-agent → agent_core → {curl, nlohmann, md4c, spdlog}`；core 内不含 CLI 参数解析，TUI 不含 HTTP 细节；`loop::run_turn(Chat&, Provider&)` 为纯函数式入口，配置参数注入、无全局单例（多 Agent 扩展点）。TUI 内部自 2026-11-14 拆为两个翻译单元：`tui_render.cpp` 承载全部纯函数渲染/补全助手（约 940 行，无终端状态/线程/IO，经 tui.hpp 声明单测），`tui.cpp` 保留帧循环与终端/RAII 管道（约 3230 行）；拆分是行为保持的重构，验证见当日提交。
 
 ## TUI 帧模型（渲染与刷新）
 

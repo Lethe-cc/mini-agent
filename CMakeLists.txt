@@ -58,6 +58,7 @@ add_library(agent_core STATIC
     src/models_dev.cpp
     src/tools.cpp
     src/tui.cpp
+    src/tui_render.cpp
     third_party/md4c/md4c.c
 )
 target_include_directories(agent_core PUBLIC

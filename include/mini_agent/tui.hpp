@@ -158,6 +158,14 @@ std::string tool_activity_line(const std::string& tool_name, const std::string& 
                                bool executed, bool is_error, long long elapsed_ms,
                                std::size_t result_bytes);
 
+// v5 (design 011): post-execution preview block for the transcript --
+// Markdown rendering, syntax-highlighted code, or tinted diff lines
+// (is_markdown takes precedence; diff bodies use the shared colour map).
+// Pure; the caller commits the rows. Defined in tui_render.cpp.
+std::vector<std::string> result_preview_rows(const std::string& tool_name,
+                                             const std::string& preview, bool is_markdown,
+                                             const std::string& lang, std::size_t cols);
+
 // v4.11 (design 010 §21): rows for the in-turn activity panel -- the
 // process view between "question sent" and "answer complete" (route A of
 // the right-column discussion: the inline frame cannot split columns, so
