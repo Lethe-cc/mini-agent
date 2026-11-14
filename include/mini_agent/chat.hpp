@@ -52,6 +52,12 @@ class Chat {
     const std::vector<Message>& messages() const noexcept {
         return messages_;
     }
+    // 015 (design 015 §5): wholesale history replacement, used by /compact
+    // to swap the transcript for one summary message. No validation here:
+    // the caller owns the shape (same contract as add()).
+    void replace(std::vector<Message> messages) {
+        messages_ = std::move(messages);
+    }
     // v3 (design 009 section 5.5): rewrites the `Workspace:` line inside
     // the FIRST System message (the default prompt) when the session's
     // workspace changes via /cwd. No-op when no leading System message or
@@ -67,5 +73,13 @@ std::string chat_to_json(const Chat& chat);
 // Fails closed: malformed input, non-array root, or unknown role values
 // return nullopt with *error set (no silent drops, design 007 section 5.5).
 std::optional<Chat> chat_from_json(std::string_view text, std::string* error);
+
+// 015 (design 015 §4C): build the summary request for /compact. Keeps the
+// leading System message (if any) and adds ONE User message: a fixed
+// summarization instruction plus a bounded transcript of the history
+// (each message capped at 1500 chars; over 60000 chars total the middle
+// is dropped, head and tail kept). Pure + test-visible; the caller sends
+// it through a normal completion WITHOUT tools.
+Chat build_compact_request(const Chat& history);
 
 } // namespace mini_agent

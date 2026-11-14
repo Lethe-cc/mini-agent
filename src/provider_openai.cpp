@@ -56,6 +56,9 @@ class SseLines {
 struct CurlWriteCtx {
     SseLines* lines;
     const ShouldAbort* should_abort;
+    // 015 (design 015 §4A): bounded raw capture so a non-2xx error body
+    // can be mined for error.message (SSE data lines never need it).
+    std::string raw_body;
 };
 
 size_t curl_write(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -63,6 +66,9 @@ size_t curl_write(char* ptr, size_t size, size_t nmemb, void* userdata) {
     const std::size_t bytes = size * nmemb;
     if (ctx->should_abort && (*ctx->should_abort)()) {
         return 0; // abort transfer
+    }
+    if (ctx->raw_body.size() < 4096) {
+        ctx->raw_body.append(ptr, std::min(bytes, 4096 - ctx->raw_body.size()));
     }
     ctx->lines->feed(std::string_view(ptr, bytes));
     return bytes;
@@ -464,6 +470,51 @@ int retry_wait_ms(int retry_index, int retry_after_s) {
     return std::max(base, after);
 }
 
+bool context_overflow_message(std::string_view text) {
+    // 015 (design 015 §4B): narrow pattern set, same philosophy as the
+    // probe parser (010 §13) -- gateway wording is not a contract, so an
+    // unrecognized message yields false, never a guess.
+    std::string lower(text);
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>((c >= 'A' && c <= 'Z') ? c + 32 : c);
+    });
+    static constexpr std::string_view kPatterns[] = {
+        "context_length_exceeded", "maximum context length", "context length",
+        "reduce the length",       "range of input length",  "too many tokens",
+    };
+    for (const auto pattern : kPatterns) {
+        if (lower.find(pattern) != std::string::npos)
+            return true;
+    }
+    return false;
+}
+
+namespace {
+// 015 (design 015 §4A): mine error.message out of a non-2xx JSON body.
+// Bounded, sanitized, truncated -- the text lands in user-facing error
+// lines and logs, so control bytes never survive and the size stays small.
+std::string http_error_body_message(const std::string& body) {
+    auto parsed = nlohmann::json::parse(body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object())
+        return {};
+    const nlohmann::json* node = &parsed;
+    if (auto err = parsed.find("error"); err != parsed.end() && err->is_object())
+        node = &*err;
+    auto msg = node->find("message");
+    if (msg == node->end() || !msg->is_string())
+        return {};
+    std::string text = msg->get<std::string>();
+    for (char& c : text) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u == 0x7F)
+            c = ' ';
+    }
+    if (text.size() > 200)
+        text = text.substr(0, 200) + "...";
+    return text;
+}
+} // namespace
+
 OpenAiProvider::~OpenAiProvider() {
     if (curl_)
         ::curl_easy_cleanup(static_cast<CURL*>(curl_));
@@ -711,8 +762,12 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
             throw ProviderError(ProviderErrorKind::Network, "network error: " + detail);
         }
         if (status < 200 || status >= 300) {
-            throw ProviderError(ProviderErrorKind::HttpStatus,
-                                "HTTP status " + std::to_string(status), static_cast<int>(status));
+            // 015: append the gateway's error.message when the body carries
+            // one (prefix unchanged; callers match on "HTTP status N").
+            std::string detail = "HTTP status " + std::to_string(status);
+            if (const auto body_msg = http_error_body_message(ctx.raw_body); !body_msg.empty())
+                detail += ": " + body_msg;
+            throw ProviderError(ProviderErrorKind::HttpStatus, detail, static_cast<int>(status));
         }
         CompletionResult result;
         result.text = std::move(full);

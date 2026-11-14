@@ -58,9 +58,6 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode(errors="replace")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
         try:
             req_msgs = json.loads(body).get("messages", [])
         except Exception:
@@ -74,6 +71,31 @@ class Handler(BaseHTTPRequestHandler):
                           if m.get("role") == "tool")
         last_user = next((m.get("content", "") for m in reversed(req_msgs)
                           if m.get("role") == "user"), "")
+        # 015 (design 015): overflow-shaped 400 with a JSON error body
+        # (not SSE) -- the client must surface the message and the hint.
+        if last_user.startswith("OVERFLOW"):
+            resp = json.dumps({"error": {
+                "message": "This model's maximum context length is 8192 tokens. "
+                           "However, your messages resulted in 9000 tokens."}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        # 015: the /compact summary request (instruction prefix).
+        if last_user.startswith("This is a context-compaction request"):
+            for chunk in (
+                {"choices": [{"delta": {"content": "COMPACT-SUMMARY: goals and files preserved"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ):
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.flush()
+            self.wfile.write(b"data: [DONE]\n\n")
+            return
         if last_user.startswith("EDITFLOW") and tool_rounds == 0:
             # v3 approval flow: request a workspace write; the client must
             # show the diff preview block and wait for y/n before running.
@@ -837,6 +859,75 @@ def main():
     expect("login status=rejected" in rej_log and "wrong-key" not in rej_log,
            "rejected verdict logged without the key value")
     subprocess.run(["rm", "-rf", rej_root], check=False)
+
+    # 015 (design 015 §6): context-overflow hint + manual /compact, in a
+    # dedicated no-env session (own config/sessions/log). Two turns build
+    # history; /compact replaces it with the mock summary; the next turn
+    # must carry the summary; an OVERFLOW turn renders the 400 hint.
+    cmp_root = "/tmp/mini_agent_pty_smoke_cmp"
+    subprocess.run(["rm", "-rf", cmp_root], check=False)
+    os.makedirs(cmp_root + "/cfg", 0o700)
+    cmp_env = dict(batch_env,
+                   MINI_AGENT_CONFIG=cmp_root + "/cfg/config.json",
+                   MINI_AGENT_SESSION_DIR=cmp_root + "/sess",
+                   MINI_AGENT_LOG=cmp_root + "/agent.log")
+    cpid, cfd = pty.fork()
+    if cpid == 0:
+        os.execve(binary, [binary, "run", "--new"], cmp_env)
+    set_pty_size(cfd, 24, 80)
+    read_all(cfd, 0.8)
+
+    def cmp_send(keys, marker, tries=16):
+        os.write(cfd, keys)
+        out = ""
+        for _ in range(tries):
+            out += read_all(cfd, 0.5)
+            if marker in out:
+                break
+        return out
+
+    early = cmp_send(b"/compact\r", "nothing to compact")
+    expect("nothing to compact" in early, "compact: empty history is a no-op")
+    # No-env session: configure the mock route first (auto-default profile).
+    cmp_send(f"/provider http://127.0.0.1:{PORT}/v1\r".encode(), "models (2)")
+    cmp_send(b"/login pty-smoke-key\r", "login verified")
+    cmp_send(b"/model mock-small\r", "mock-small")
+    cmp_send(b"first turn\r", "tok0")
+    cmp_send(b"second turn\r", "tok0")
+    compacted = cmp_send(b"/compact\r", "[ok] compacted")
+    expect("[ok] compacted" in compacted and "messages into a summary" in compacted,
+           "compact: history replaced by the summary")
+    sess_files = glob.glob(cmp_root + "/sess/*.json")
+    expect(len(sess_files) == 1, "compact: one session file")
+    sess_doc = json.load(open(sess_files[0]))
+    sess_msgs = sess_doc.get("messages", [])
+    # The default system prompt survives; everything else is exactly the
+    # marked summary (no transcript leftovers).
+    expect(len(sess_msgs) == 2 and sess_msgs[0].get("role") == "system" and
+           "[conversation summary]" in sess_msgs[1].get("content", "") and
+           "COMPACT-SUMMARY" in sess_msgs[1].get("content", "") and
+           all("first turn" not in m.get("content", "") and
+               "second turn" not in m.get("content", "") for m in sess_msgs),
+           "compact: persisted history is system prompt + marked summary only")
+    after = cmp_send(b"after compact\r", "tok0")
+    expect("You: after compact" in after, "compact: the next turn works")
+    overflow = cmp_send(b"OVERFLOW too long\r", "[hint] context window exceeded", tries=20)
+    expect("[hint] context window exceeded" in overflow and "/compact" in overflow,
+           "overflow: 400 renders the actionable /compact hint")
+    expect("maximum context length is 8192" in overflow,
+           "overflow: the gateway error message is surfaced")
+    os.write(cfd, b"\x03\x03")
+    time.sleep(0.4)
+    try:
+        os.waitpid(cpid, 0)
+    except ChildProcessError:
+        pass
+    os.close(cfd)
+    # Read the log AFTER exit: spdlog flushes on shutdown.
+    cmp_log = open(cmp_env["MINI_AGENT_LOG"]).read()
+    expect("compact status=ok" in cmp_log and "first turn" not in cmp_log,
+           "compact: metadata-only log event, no message content")
+    subprocess.run(["rm", "-rf", cmp_root], check=False)
 
     # v6 multi-provider end-to-end (design 012 §8 M4): two mock endpoints
     # demanding DIFFERENT keys, one long-lived TUI process. Proves profiles

@@ -172,4 +172,57 @@ std::optional<Chat> chat_from_json(std::string_view text, std::string* error) {
     return chat;
 }
 
+Chat build_compact_request(const Chat& history) {
+    // 015 (design 015 §4C): bounded transcript so the summary request
+    // itself cannot overflow the window it is meant to relieve.
+    constexpr std::size_t kPerMessageChars = 1500;
+    constexpr std::size_t kTranscriptChars = 60000;
+    auto clip_bytes = [](const std::string& text, std::size_t cap) {
+        if (text.size() <= cap)
+            return text;
+        std::size_t end = cap;
+        // Never cut mid-codepoint: back off continuation bytes (10xxxxxx).
+        while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80)
+            --end;
+        return text.substr(0, end) + " [...truncated]";
+    };
+    std::vector<std::string> lines;
+    for (const auto& message : history.messages()) {
+        if (message.role == Role::System)
+            continue; // the leading prompt is carried verbatim, not summarized
+        std::string label(role_to_string(message.role));
+        if (message.role == Role::Tool && !message.tool_calls.empty())
+            label += "(" + message.tool_calls.front().name + ")";
+        lines.push_back(label + ": " + clip_bytes(message.content, kPerMessageChars));
+    }
+    std::string transcript;
+    for (const auto& line : lines)
+        transcript += line + "\n";
+    if (transcript.size() > kTranscriptChars && lines.size() > 2) {
+        // Keep head and tail, drop the middle: the newest work and the
+        // original goal matter most; the omission is explicit.
+        const std::size_t keep = lines.size() / 3;
+        std::string head;
+        std::string tail;
+        for (std::size_t i = 0; i < keep; ++i)
+            head += lines[i] + "\n";
+        for (std::size_t i = lines.size() - keep; i < lines.size(); ++i)
+            tail += lines[i] + "\n";
+        transcript = head + "[... middle omitted ...]\n" + tail;
+    }
+    Chat request;
+    if (!history.messages().empty() && history.messages().front().role == Role::System)
+        request.add(Message{history.messages().front()});
+    Message instruction;
+    instruction.role = Role::User;
+    instruction.content =
+        "This is a context-compaction request. Summarize the conversation transcript below "
+        "so it can replace the full history. Preserve: the user's goals, decisions made, "
+        "files and paths touched, code changes, tool outcomes, and open tasks. Be concise "
+        "but specific. Output only the summary, no preamble.\n\n--- transcript ---\n" +
+        transcript;
+    request.add(std::move(instruction));
+    return request;
+}
+
 } // namespace mini_agent

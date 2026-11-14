@@ -238,6 +238,12 @@ bool retryable_provider_error(ProviderErrorKind kind, int http_status);
 // Pure, test-visible.
 int retry_wait_ms(int retry_index, int retry_after_s);
 
+// 015 (design 015 §4B): does this gateway error text indicate a context
+// window overflow? Narrow case-insensitive pattern set (OpenAI/vLLM/
+// DashScope families); unrecognized text yields false -- never a guess.
+// Callers pair it with HTTP 400 to render the /compact hint.
+bool context_overflow_message(std::string_view text);
+
 // OpenAI-compatible Chat Completions (POST {base_url}/chat/completions,
 // stream=true, SSE). Protocol shape is a MUST-VERIFY fact against the
 // chosen provider's current docs before relying on it (design 007 section 3).

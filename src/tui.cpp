@@ -49,9 +49,9 @@ namespace mini_agent::tui {
 namespace {
 
 constexpr std::string_view kCommands[] = {
-    "/approve", "/config",   "/context", "/cwd",     "/debug",   "/exit",     "/help",
-    "/login",   "/mcp",      "/model",   "/models",  "/preview", "/provider", "/reasoning",
-    "/session", "/sessions", "/sidebar", "/sysinfo", "/tools"};
+    "/approve",   "/compact", "/config",   "/context", "/cwd",     "/debug",   "/exit",
+    "/help",      "/login",   "/mcp",      "/model",   "/models",  "/preview", "/provider",
+    "/reasoning", "/session", "/sessions", "/sidebar", "/sysinfo", "/tools"};
 
 class RawMode {
   public:
@@ -1487,6 +1487,18 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         ProbeOutcome outcome; // v4.3.1: kind matters (window vs output cap)
         std::string error;    // network/config failure text
     } probe_result;
+    // 015 (design 015 §4C): /compact summary worker, same join-then-read
+    // discipline as probe_worker. The summary replaces session.chat ONLY
+    // on the main thread after a successful join; failure/abort leaves
+    // the history untouched.
+    std::thread compact_worker;
+    std::atomic<bool> compact_done{false};
+    bool compact_running = false;
+    struct CompactResult {
+        std::string summary;
+        std::string error;
+        bool aborted = false;
+    } compact_result;
     // v4.2 (design 010 §11): capability metadata from the last successful
     // /models fetch (main-thread only; the worker fills models_result.caps).
     std::vector<ModelCapabilities> model_caps;
@@ -2342,6 +2354,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             screen.commit("          /login <name> [key] · /model <provider>/<name>");
             screen.commit("          /tools (tool registry) · /mcp (servers) · /cwd [path]");
             screen.commit("          /approve ask|allowlist|off (tool gate)");
+            screen.commit("          /compact (summarize history; context relief)");
             screen.commit("          /models (list & pick) · /log <path>|off|default");
             screen.commit(
                 "          /log info|debug|trace (capture level; /debug on|all|off alias)");
@@ -2643,6 +2656,56 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             }
             return true;
         }
+        if (line.rfind("/compact", 0) == 0) {
+            // 015 (design 015 §4C): manual history compaction. Idle-gated
+            // like /session; the summary request runs on its own worker.
+            if (streaming || compact_running || approval_pending()) {
+                screen.commit("[info] /compact needs an idle turn · wait or Ctrl-C");
+                return true;
+            }
+            std::size_t count = 0;
+            for (const auto& m : session.chat.messages()) {
+                if (m.role != Role::System)
+                    ++count;
+            }
+            if (count < 2) {
+                screen.commit("[info] nothing to compact (fewer than 2 messages)");
+                return true;
+            }
+            if (!config.complete()) {
+                screen.commit("[error] LLM not configured ·" + config_next_hint(config));
+                return true;
+            }
+            const AppConfig snapshot = config; // thread boundary
+            const Chat history = session.chat; // thread boundary
+            compact_result = CompactResult{};
+            compact_done = false;
+            compact_running = true;
+            abort_requested = false;
+            logger->event("compact", {{"status", "start"},
+                                      {"before", std::to_string(history.messages().size())}});
+            screen.commit("[info] compacting " + std::to_string(history.messages().size()) +
+                          " messages into a summary (Ctrl-C/Esc cancels)...");
+            compact_worker = std::thread([&, snapshot, history] {
+                CompactResult r;
+                try {
+                    OpenAiProvider provider(snapshot.to_provider());
+                    const Chat request = build_compact_request(history);
+                    // No tools, no UI deltas: the summary is not a turn.
+                    r.summary = provider.complete(
+                        request, [](std::string_view) {}, [&] { return abort_requested.load(); });
+                } catch (const ProviderError& e) {
+                    r.error = e.what();
+                } catch (const std::exception& e) {
+                    r.error = e.what();
+                }
+                if (abort_requested.load())
+                    r.aborted = true;
+                compact_result = std::move(r);
+                compact_done = true;
+            });
+            return true;
+        }
         if (line == "/config") {
             screen.commit("base_url=" + (config.current.base_url.empty() ? "(not set)" : config.current.base_url));
             screen.commit("model=" + (config.current.model.empty() ? "(not set)" : config.current.model));
@@ -2728,7 +2791,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                               " · usage /session <id or prefix> | /session new");
                 return true;
             }
-            if (streaming || turn_done.load()) {
+            if (streaming || turn_done.load() || compact_running) {
                 // The turn-completion handler writes session.chat after
                 // joining; swapping mid-fold would land the old turn in
                 // the new session. Require idle (Ctrl-C interrupts).
@@ -3186,7 +3249,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     continue; // held: swallowed without touching composer
                 }
                 if (c == 0x03) { // Ctrl-C
-                    if (streaming) {
+                    if (streaming || compact_running) {
                         if (abort_requested.load()) {
                             // already interrupted, waiting on worker: quit
                             goto done;
@@ -3305,11 +3368,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         // (before the interrupt chain -- focus is modal UI,
                         // same precedence as the menus below).
                         sidebar_focus = false;
-                    } else if (streaming) {
+                    } else if (streaming || compact_running) {
                         // Lone ESC interrupts the in-flight request (design 5.6
                         // rule 5 "esc-to-interrupt", 2026-11-02 maintainer
                         // request): same effect as the first Ctrl-C, without
-                        // the double-press-to-quit escalation.
+                        // the double-press-to-quit escalation. 015: a running
+                        // /compact is interruptible the same way.
                         abort_requested = true;
                     } else if (reasoning_menu_open) {
                         reasoning_menu_open = false;
@@ -3420,11 +3484,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             history_draft.clear();
                             if (line == "/exit")
                                 goto done;
-                            if (streaming) {
+                            if (streaming || compact_running) {
                                 // Pi-style steering (design 007 section 5.6
                                 // v1.x candidate 1): Enter while streaming
                                 // queues the input; it is sent after the
                                 // current turn commits (or is interrupted).
+                                // 015: a running compact queues the same way.
                                 pending.push_back(std::move(line));
                             } else if (!handle_slash(line)) {
                                 if (!config.complete()) {
@@ -3563,6 +3628,70 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit(auth_status_line(auth));
         }
 
+        // 015: compact completion (main-thread apply, same join-then-read
+        // discipline as the probe).
+        if (compact_done.load()) {
+            compact_done = false;
+            compact_running = false;
+            if (compact_worker.joinable())
+                compact_worker.join();
+            const std::size_t before = session.chat.messages().size();
+            if (compact_result.aborted) {
+                logger->event("compact",
+                              {{"status", "aborted"}, {"before", std::to_string(before)}});
+                screen.commit("[interrupted] compact (history unchanged)");
+            } else if (!compact_result.error.empty()) {
+                logger->event("compact", {{"status", "error"},
+                                          {"before", std::to_string(before)},
+                                          {"error", compact_result.error}});
+                screen.commit("[error] compact failed: " + compact_result.error +
+                              " (history unchanged)");
+            } else {
+                // Replace the transcript with the leading System prompt (if
+                // any) + ONE marked User summary. User role, not Assistant:
+                // never fabricate model speech; no tool data, no schema bump.
+                std::vector<Message> next;
+                if (!session.chat.messages().empty() &&
+                    session.chat.messages().front().role == Role::System)
+                    next.push_back(session.chat.messages().front());
+                Message summary;
+                summary.role = Role::User;
+                summary.content = "[conversation summary]\n" + compact_result.summary;
+                next.push_back(std::move(summary));
+                session.chat.replace(std::move(next));
+                std::string err;
+                if (!temp_mode && !store.save(session, &err)) {
+                    screen.commit("[warn] save failed: " + err);
+                    logger->event("session_save", {{"status", "error"}, {"error", err}});
+                }
+                reset_usage_readings(); // the old counts belong to the old history
+                logger->event("compact",
+                              {{"status", "ok"},
+                               {"before", std::to_string(before)},
+                               {"after", std::to_string(session.chat.messages().size())},
+                               {"summary_chars", std::to_string(compact_result.summary.size())}});
+                screen.commit("[ok] compacted " + std::to_string(before) +
+                              " messages into a summary");
+            }
+            // Drain the steering queue exactly like a turn commit.
+            if (!exiting && !pending.empty()) {
+                std::string next = std::move(pending.front());
+                pending.erase(pending.begin());
+                if (next == "/exit") {
+                    goto done;
+                }
+                if (!handle_slash(next)) {
+                    if (config.complete()) {
+                        start_turn(next);
+                    } else {
+                        screen.commit("[error] LLM not configured, dropped queued message ·" +
+                                      config_next_hint(config));
+                    }
+                } else {
+                    continue; // slash handled, keep rendering idle frame
+                }
+            }
+        }
         // v4.3: window-probe completion (main-thread rendering).
         if (probe_done.load()) {
             probe_done = false;
@@ -3694,6 +3823,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     screen.commit("[hint] if this gateway does not support reasoning_effort, "
                                   "clear it with /reasoning off (config value is otherwise "
                                   "kept verbatim)");
+                // 015 (design 015 §4B): overflow-shaped 400 -> actionable
+                // guidance instead of a bare status line.
+                if (result.http_status == 400 && context_overflow_message(result.error))
+                    screen.commit("[hint] context window exceeded · /compact summarizes "
+                                  "history into one message, or /session new starts fresh");
                 if (tools_active)
                     screen.commit("[note] tools already ran this turn; their side "
                                   "effects were not rolled back");
@@ -3835,6 +3969,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             } else if (model_menu_open) {
                 status += tint(sc, "36", "pick a model (Esc cancels)");
             }
+            if (compact_running) {
+                status +=
+                    tint(sc, "36", (status.empty() ? "" : " · ") + std::string("compacting..."));
+            }
             if (streaming) {
                 // Interrupt keys stay documented in /help and the composer
                 // hint; elapsed seconds live in the turn panel header. The
@@ -3944,6 +4082,8 @@ done:
         models_worker.join(); // bounded by its own 15 s curl timeout
     if (probe_worker.joinable())
         probe_worker.join(); // v4.3: bounded by its own 30 s curl timeout
+    if (compact_worker.joinable())
+        compact_worker.join(); // 015: abort flag set above; bounded by curl timeout
     if (sidebar_worker.joinable())
         sidebar_worker.join(); // v4.13: git scan capped at 5 s
     logger->event("session_close",

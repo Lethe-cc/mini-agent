@@ -3097,6 +3097,75 @@ void test_provider_retry_helpers() {
     }
 }
 
+// 015 (design 015 §6): overflow pattern matrix, Chat::replace, and the
+// bounded compact-request builder.
+void test_context_compact() {
+    using mini_agent::Chat;
+    using mini_agent::Message;
+    using mini_agent::Role;
+    // Overflow patterns: the known gateway families hit, case-insensitive;
+    // unrelated 400 wording never guesses.
+    check(mini_agent::context_overflow_message("Error code: context_length_exceeded"),
+          "openai code hits");
+    check(
+        mini_agent::context_overflow_message("This model's maximum context length is 8192 tokens"),
+        "vLLM/openai wording hits");
+    check(mini_agent::context_overflow_message("PLEASE REDUCE THE LENGTH of the messages"),
+          "case-insensitive match");
+    check(mini_agent::context_overflow_message("<400> Range of input length should be [1, 983616]"),
+          "dashscope input cap hits");
+    check(mini_agent::context_overflow_message("too many tokens in the request"),
+          "too-many-tokens hits");
+    check(!mini_agent::context_overflow_message("invalid reasoning_effort value"),
+          "unrelated 400 wording does not hit");
+    check(!mini_agent::context_overflow_message(""), "empty text does not hit");
+    // Chat::replace swaps wholesale and survives the JSON round trip.
+    Chat chat;
+    chat.add(Message{Role::System, "prompt", {}, {}});
+    chat.add(Message{Role::User, "old", {}, {}});
+    chat.replace({Message{Role::User, "[conversation summary]\nnew", {}, {}}});
+    check(chat.messages().size() == 1 &&
+              chat.messages()[0].content.find("new") != std::string::npos,
+          "replace swaps the whole history");
+    const auto parsed = mini_agent::chat_from_json(mini_agent::chat_to_json(chat), nullptr);
+    check(parsed && parsed->messages().size() == 1, "replaced history round-trips");
+    // build_compact_request: System kept verbatim, one User instruction,
+    // per-message truncation, head+tail kept when the transcript is huge.
+    Chat history;
+    history.add(Message{Role::System, "system prompt", {}, {}});
+    history.add(Message{Role::User, "goal: build the thing", {}, {}});
+    history.add(Message{Role::Assistant, std::string(3000, 'x'), {}, {}});
+    const auto request = mini_agent::build_compact_request(history);
+    check(request.messages().size() == 2 && request.messages()[0].role == Role::System &&
+              request.messages()[0].content == "system prompt",
+          "compact request keeps the system prompt verbatim");
+    const auto& instr = request.messages()[1].content;
+    check(request.messages()[1].role == Role::User &&
+              instr.find("context-compaction request") != std::string::npos &&
+              instr.find("goal: build the thing") != std::string::npos,
+          "instruction carries the transcript");
+    check(instr.find(std::string(1600, 'x')) == std::string::npos &&
+              instr.find("[...truncated]") != std::string::npos,
+          "long messages are capped per message");
+    // Huge history: middle dropped, head and tail survive, size bounded.
+    Chat huge;
+    for (int i = 0; i < 60; ++i)
+        huge.add(
+            Message{Role::User, "msg" + std::to_string(i) + " " + std::string(1400, 'y'), {}, {}});
+    const auto big = mini_agent::build_compact_request(huge);
+    const auto& big_instr = big.messages()[0].content;
+    check(big_instr.find("[... middle omitted ...]") != std::string::npos &&
+              big_instr.find("msg0 ") != std::string::npos &&
+              big_instr.find("msg59 ") != std::string::npos &&
+              big_instr.find("msg30 ") == std::string::npos,
+          "oversized transcript keeps head and tail, drops the middle");
+    check(big_instr.size() < 60000 + 2000, "transcript stays bounded");
+    // Empty history still yields a well-formed single-message request.
+    const auto empty = mini_agent::build_compact_request(Chat{});
+    check(empty.messages().size() == 1 && empty.messages()[0].role == Role::User,
+          "empty history yields the instruction alone");
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -3147,6 +3216,7 @@ int main() {
     test_v44_debug_log();
     test_v417_turn_bridge();
     test_provider_retry_helpers();
+    test_context_compact();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";
