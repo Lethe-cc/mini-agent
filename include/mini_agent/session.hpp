@@ -77,6 +77,11 @@ class SessionStore {
     explicit SessionStore(std::filesystem::path root) : root_(std::move(root)) {
     }
 
+    // 016: the storage root (read-only view; prune stats file mtimes here).
+    const std::filesystem::path& root() const noexcept {
+        return root_;
+    }
+
     // Ensures root exists with 0700. Returns false and sets *error otherwise.
     bool ensure_root(std::string* error);
 
@@ -111,6 +116,13 @@ class SessionStore {
 
 std::string session_to_json(const SessionMeta& meta, const Chat& chat);
 std::optional<Session> session_from_json(std::string_view text, std::string* error);
+
+// 016 (design 016 §2): linear Markdown transcript of a session for
+// `session export --format md`. Meta header + one section per message
+// (System/User/Assistant/Tool); assistant tool_calls render as fenced
+// JSON. Content is emitted verbatim -- no rewriting, no redaction
+// (export is an explicit user action). Pure + test-visible.
+std::string session_to_markdown(const Session& session);
 
 // v3 default system prompt (design 009 section 5.5). Static identity +
 // tool etiquette + the live workspace line. `config.system_prompt`:

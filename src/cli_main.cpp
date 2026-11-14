@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -113,6 +114,8 @@ void print_usage(std::ostream& out) {
            "  mini-agent                     bare == run: open the TUI directly (v4.9)\n"
            "      in-TUI session switch: /session <id|prefix> | /session new\n"
            "  mini-agent session list|rm ID  manage sessions\n"
+           "  mini-agent session export ID [--format md|json] [--out PATH]\n"
+           "  mini-agent session prune --older-than DAYS [--dry-run]\n"
            "      rm: ID may be the full session id or an unambiguous prefix\n"
            "  mini-agent mcp list            show configured MCP servers\n"
            "  --mcp NAME=SPEC (ask/run/mcp)  add one server this session:\n"
@@ -927,7 +930,130 @@ int cmd_session(int argc, char** argv) {
         std::cout << "removed session " << ref << '\n';
         return kOk;
     }
-    std::cerr << "usage: mini-agent session list | mini-agent session rm ID\n"
+    // 016 (design 016): export a session as Markdown (human-readable) or
+    // JSON (the on-disk shape; drop it back into sessions/ to re-import).
+    if (argc >= 4 && std::strcmp(argv[2], "export") == 0) {
+        std::string format = "md";
+        std::string out_path;
+        for (int i = 4; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--format") == 0 && i + 1 < argc) {
+                format = argv[++i];
+            } else if (std::strncmp(argv[i], "--format=", 9) == 0) {
+                format = argv[i] + 9;
+            } else if (std::strcmp(argv[i], "--out") == 0 && i + 1 < argc) {
+                out_path = argv[++i];
+            } else if (std::strncmp(argv[i], "--out=", 6) == 0) {
+                out_path = argv[i] + 6;
+            } else {
+                std::cerr << "error: unknown export option: " << argv[i] << '\n';
+                return kConfigError;
+            }
+        }
+        if (format != "md" && format != "json") {
+            std::cerr << "error: --format must be md or json\n";
+            return kConfigError;
+        }
+        const std::string ref = argv[3];
+        std::string list_err;
+        const auto ids = store.list(&list_err);
+        const auto m = mini_agent::match_session_ref(ref, ids);
+        std::string id;
+        if (m.exact) {
+            id = m.id;
+        } else if (!m.candidates.empty()) {
+            std::cerr << "error: ambiguous session prefix '" << ref << "':\n";
+            for (const auto& cand : m.candidates)
+                std::cerr << "  " << cand << '\n';
+            return kConfigError;
+        } else {
+            id = ref; // load reports the usual "no such session"
+        }
+        const auto session = store.load(id, &io_error);
+        if (!session) {
+            std::cerr << "error: " << io_error << '\n';
+            return kRuntimeError;
+        }
+        const std::string body = format == "json"
+                                     ? mini_agent::session_to_json(session->meta, session->chat)
+                                     : mini_agent::session_to_markdown(*session);
+        if (out_path.empty()) {
+            std::cout << body;
+            if (format == "json")
+                std::cout << '\n';
+            return kOk;
+        }
+        // 0600 like the session files themselves: exports carry the full
+        // conversation body (design 016 §4).
+        const int fd = ::open(out_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0) {
+            std::cerr << "error: cannot write " << out_path << ": " << std::strerror(errno) << '\n';
+            return kRuntimeError;
+        }
+        const ssize_t written = ::write(fd, body.data(), body.size());
+        ::close(fd);
+        if (written < 0 || static_cast<std::size_t>(written) != body.size()) {
+            std::cerr << "error: short write to " << out_path << '\n';
+            return kRuntimeError;
+        }
+        std::cout << "exported session " << id << " to " << out_path << " (" << format << ")\n";
+        return kOk;
+    }
+    // 016 (design 016): prune sessions unused for DAYS days (file mtime,
+    // same recency semantics as run's reuse). Explicit threshold required;
+    // locked (in-use) sessions are skipped; --dry-run only lists.
+    if (argc >= 3 && std::strcmp(argv[2], "prune") == 0) {
+        long days = -1;
+        bool dry_run = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--older-than") == 0 && i + 1 < argc) {
+                days = std::strtol(argv[++i], nullptr, 10);
+            } else if (std::strncmp(argv[i], "--older-than=", 13) == 0) {
+                days = std::strtol(argv[i] + 13, nullptr, 10);
+            } else if (std::strcmp(argv[i], "--dry-run") == 0) {
+                dry_run = true;
+            } else {
+                std::cerr << "error: unknown prune option: " << argv[i] << '\n';
+                return kConfigError;
+            }
+        }
+        if (days < 0) {
+            std::cerr << "error: prune requires --older-than DAYS (DAYS >= 0)\n";
+            return kConfigError;
+        }
+        const auto cutoff =
+            std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * days);
+        int pruned = 0;
+        for (const auto& id : store.list(&io_error)) {
+            std::error_code ec;
+            const auto stamp = std::filesystem::last_write_time(store.root() / (id + ".json"), ec);
+            if (ec || stamp > cutoff)
+                continue; // unreadable stamp or recently used: keep
+            if (dry_run) {
+                std::cout << "would prune: " << id << '\n';
+                ++pruned;
+                continue;
+            }
+            std::string lock_err;
+            if (!store.try_lock(id, &lock_err)) {
+                std::cout << "skipped (in use): " << id << '\n';
+                continue;
+            }
+            if (!store.remove(id, &io_error)) { // remove also clears the lock
+                std::cerr << "error: " << io_error << '\n';
+                return kRuntimeError;
+            }
+            std::cout << "pruned: " << id << '\n';
+            ++pruned;
+        }
+        if (!io_error.empty()) {
+            std::cerr << "error: " << io_error << '\n';
+            return kRuntimeError;
+        }
+        std::cout << (dry_run ? "would prune " : "pruned ") << pruned << " session(s)\n";
+        return kOk;
+    }
+    std::cerr << "usage: mini-agent session list | rm ID | export ID [--format md|json] "
+                 "[--out PATH] | prune --older-than DAYS [--dry-run]\n"
                  "  (ID may be a full session id or an unambiguous prefix)\n";
     return kConfigError;
 }

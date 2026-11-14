@@ -3171,6 +3171,52 @@ void test_context_compact() {
           "empty history yields the instruction alone");
 }
 
+// 016 (design 016 §5): Markdown export is a faithful linear transcript.
+void test_session_markdown_export() {
+    using mini_agent::Role;
+    mini_agent::Session session;
+    session.meta.id = "abcd1234abcd1234";
+    session.meta.model = "mock-large";
+    session.meta.created_at = "2026-11-14T00:00:00Z";
+    session.meta.updated_at = "2026-11-14T01:00:00Z";
+    session.meta.workspace = "/tmp/ws";
+    session.meta.provider = "alpha";
+    session.chat.add(mini_agent::Message{Role::System, "prompt text", {}, {}});
+    session.chat.add(mini_agent::Message{Role::User, "hello there", {}, {}});
+    mini_agent::Message assistant;
+    assistant.role = Role::Assistant;
+    assistant.content = "using a tool";
+    assistant.tool_calls.push_back(mini_agent::ToolCall{"c1", "run_bash", R"({"command":"ls"})"});
+    session.chat.add(std::move(assistant));
+    mini_agent::Message tool;
+    tool.role = Role::Tool;
+    tool.content = "file-a\nfile-b";
+    tool.tool_call_id = "c1";
+    session.chat.add(std::move(tool));
+    const auto md = mini_agent::session_to_markdown(session);
+    check(md.find("# session abcd1234abcd1234") == 0 &&
+              md.find("- model: mock-large") != std::string::npos &&
+              md.find("- workspace: /tmp/ws") != std::string::npos &&
+              md.find("- provider: alpha") != std::string::npos,
+          "markdown export carries the meta header");
+    check(md.find("## System") != std::string::npos && md.find("## User") != std::string::npos &&
+              md.find("## Assistant") != std::string::npos &&
+              md.find("## Tool (c1)") != std::string::npos,
+          "all four roles get sections, tool carries its call id");
+    check(md.find("hello there") != std::string::npos &&
+              md.find("file-a\nfile-b") != std::string::npos,
+          "message bodies are verbatim");
+    check(md.find("```json") != std::string::npos &&
+              md.find("\"name\": \"run_bash\"") != std::string::npos,
+          "tool_calls render as fenced json");
+    // Empty session: header only, no sections.
+    mini_agent::Session bare;
+    bare.meta.id = "empty";
+    const auto bare_md = mini_agent::session_to_markdown(bare);
+    check(bare_md.find("# session empty") == 0 && bare_md.find("## ") == std::string::npos,
+          "empty session exports the header alone");
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -3222,6 +3268,7 @@ int main() {
     test_v417_turn_bridge();
     test_provider_retry_helpers();
     test_context_compact();
+    test_session_markdown_export();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

@@ -63,7 +63,11 @@ cmake --install build/linux-gcc-debug     # ~/.local/bin/mini-agent
 /session <id|前缀>                    ← 切换（保存旧、加载新；需回合空闲）
 /session new                          ← 新会话
 mini-agent session list|rm <id|前缀>  ← CLI 侧管理
+mini-agent session export <id> [--format md|json] [--out 文件]   ← 导出转录/存档
+mini-agent session prune --older-than 30 [--dry-run]             ← 清理久未用的会话
 ```
+
+导出：md 适合人读/分享（含完整正文，分享前自查隐私；`--out` 落盘 0600）；json 就是会话文件格式，放回 sessions/ 目录即可重新导入。清理：阈值必填、按最后使用时间（mtime）、正在使用的会话（活锁）自动跳过；先 `--dry-run` 看清单再真删。
 
 **上下文满了怎么办**：长会话撞窗口时错误行会带 `[hint] context window exceeded`。两个选择：
 

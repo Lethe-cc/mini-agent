@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import signal
 import socket
@@ -337,6 +338,74 @@ def main():
                        capture_output=True, text=True, timeout=30)
     check(r.returncode == 1 and Handler.FLAKY_COUNTS.get("FLAKYOFF") == 1,
           "retry: MINI_AGENT_RETRIES=0 restores fail-fast semantics")
+
+    # ---- 5. 016 session export / prune -----------------------------------
+    lc_dir = tempfile.mkdtemp(prefix="mini-agent-cli-lifecycle-")
+    el = dict(e, MINI_AGENT_SESSION_DIR=lc_dir)
+
+    def make_session(text):
+        r = subprocess.run([binary, "run", "--new"], env=el,
+                           input=f"{text}\n/exit\n", capture_output=True,
+                           text=True, timeout=20)
+        m = re.search(r"session ([0-9a-f]{16})", r.stdout)
+        return m.group(1) if m else None
+
+    id_a = make_session("EXPORTME alpha content")
+    id_b = make_session("EXPORTME beta content")
+    check(id_a is not None and id_b is not None and id_a != id_b,
+          "lifecycle: two sessions created via line-mode")
+    r = subprocess.run([binary, "session", "export", id_a], env=el,
+                       capture_output=True, text=True, timeout=15)
+    check(r.returncode == 0 and f"# session {id_a}" in r.stdout and
+          "EXPORTME alpha content" in r.stdout and "## User" in r.stdout,
+          "lifecycle: export md carries header and verbatim body")
+    r = subprocess.run([binary, "session", "export", id_a, "--format", "json"],
+                       env=el, capture_output=True, text=True, timeout=15)
+    doc = json.loads(r.stdout) if r.returncode == 0 else {}
+    check(r.returncode == 0 and doc.get("meta", {}).get("id") == id_a and
+          any("EXPORTME alpha content" in m.get("content", "")
+              for m in doc.get("messages", [])),
+          "lifecycle: export json is the on-disk shape")
+    out_md = os.path.join(lc_dir, "export.md")
+    r = subprocess.run([binary, "session", "export", id_a, "--out", out_md],
+                       env=el, capture_output=True, text=True, timeout=15)
+    check(r.returncode == 0 and os.path.exists(out_md) and
+          oct(os.stat(out_md).st_mode & 0o777) == "0o600",
+          "lifecycle: export --out lands 0600")
+    r = subprocess.run([binary, "session", "export", "ffffffffffffffff"], env=el,
+                       capture_output=True, text=True, timeout=15)
+    check(r.returncode == 1 and "error:" in r.stderr,
+          "lifecycle: exporting an unknown id exits 1")
+    # prune: explicit threshold required; dry-run lists; mtime gates deletion.
+    r = subprocess.run([binary, "session", "prune"], env=el,
+                       capture_output=True, text=True, timeout=15)
+    check(r.returncode == 2 and "--older-than" in r.stderr,
+          "lifecycle: prune without threshold exits 2")
+    old = time.time() - 10 * 86400
+    os.utime(os.path.join(lc_dir, id_a + ".json"), (old, old))
+    r = subprocess.run([binary, "session", "prune", "--older-than", "5", "--dry-run"],
+                       env=el, capture_output=True, text=True, timeout=15)
+    check(r.returncode == 0 and f"would prune: {id_a}" in r.stdout and
+          id_b not in r.stdout and
+          os.path.exists(os.path.join(lc_dir, id_a + ".json")),
+          "lifecycle: dry-run lists only the old session, deletes nothing")
+    # A live lock protects even an old session.
+    lock = os.path.join(lc_dir, id_a + ".json.lock")
+    with open(lock, "w") as f:
+        f.write(str(os.getpid()))
+    r = subprocess.run([binary, "session", "prune", "--older-than", "5"],
+                       env=el, capture_output=True, text=True, timeout=15)
+    check(r.returncode == 0 and f"skipped (in use): {id_a}" in r.stdout and
+          os.path.exists(os.path.join(lc_dir, id_a + ".json")),
+          "lifecycle: locked session is skipped")
+    os.remove(lock)
+    r = subprocess.run([binary, "session", "prune", "--older-than", "5"],
+                       env=el, capture_output=True, text=True, timeout=15)
+    check(r.returncode == 0 and f"pruned: {id_a}" in r.stdout and
+          not os.path.exists(os.path.join(lc_dir, id_a + ".json")) and
+          os.path.exists(os.path.join(lc_dir, id_b + ".json")),
+          "lifecycle: prune removes only the old unlocked session")
+    subprocess.run(["rm", "-rf", lc_dir], check=False)
 
     httpd.shutdown()
     subprocess.run(["rm", "-rf", session_dir], check=False)

@@ -464,6 +464,50 @@ void SessionStore::unlock(const std::string& id) noexcept {
     ::unlink(lock_path_for(id).c_str());
 }
 
+std::string session_to_markdown(const Session& session) {
+    // 016 (design 016 §2): linear transcript, verbatim content. Fences
+    // around tool payloads keep raw JSON/arguments out of the prose flow.
+    std::ostringstream out;
+    const auto& meta = session.meta;
+    out << "# session " << meta.id << "\n\n";
+    out << "- model: " << (meta.model.empty() ? "(unknown)" : meta.model) << "\n";
+    out << "- created: " << meta.created_at << "\n";
+    out << "- updated: " << meta.updated_at << "\n";
+    if (meta.workspace)
+        out << "- workspace: " << *meta.workspace << "\n";
+    if (meta.provider)
+        out << "- provider: " << *meta.provider << "\n";
+    for (const auto& message : session.chat.messages()) {
+        switch (message.role) {
+        case Role::System:
+            out << "\n## System\n\n";
+            break;
+        case Role::User:
+            out << "\n## User\n\n";
+            break;
+        case Role::Assistant:
+            out << "\n## Assistant\n\n";
+            break;
+        case Role::Tool:
+            out << "\n## Tool";
+            if (message.tool_call_id)
+                out << " (" << *message.tool_call_id << ")";
+            out << "\n\n";
+            break;
+        }
+        if (!message.content.empty())
+            out << message.content << "\n";
+        for (const auto& call : message.tool_calls) {
+            out << "\n```json\n"
+                << "{\"id\": " << nlohmann::json(call.id).dump()
+                << ", \"name\": " << nlohmann::json(call.name).dump()
+                << ", \"arguments\": " << nlohmann::json(call.arguments_json).dump() << "}\n"
+                << "```\n";
+        }
+    }
+    return out.str();
+}
+
 std::string build_system_prompt(const std::string& workspace, const std::string& model,
                                 const std::optional<std::string>& override_prompt) {
     if (override_prompt.has_value())

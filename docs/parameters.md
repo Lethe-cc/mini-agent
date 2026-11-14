@@ -63,6 +63,8 @@ mini-agent ask [旗标] "问题"|-   # 一次性问答，stdout 只有回复
 mini-agent run [旗标]            # 会话（TTY→TUI；非 TTY→行模式）
 mini-agent session list          # 列出会话 id（新→旧）
 mini-agent session rm ID|前缀    # 删除会话（含锁文件）
+mini-agent session export ID [--format md|json] [--out PATH]   # 导出（016）
+mini-agent session prune --older-than DAYS [--dry-run]         # 清理（016）
 mini-agent mcp list [--mcp …]    # 生效 MCP server 清单（脱敏；无需 LLM 配好）
 mini-agent --help | --version
 ```
@@ -121,6 +123,8 @@ mini-agent --help | --version
 | --- | --- | --- |
 | `session list` | stdout 逐行打印会话 id（新→旧） | 存储目录不可用 → 1 |
 | `session rm ID\|前缀` | 删除会话文件与锁文件（v4.14.1 支持唯一前缀） | 歧义 → 列候选退出 2；不存在 → 1；缺参数 → 2 |
+| `session export ID\|前缀 [--format md\|json] [--out PATH]` | 导出会话（[设计 016](design/016-session-lifecycle.md)）：md = 元信息头 + 逐消息转录（tool_calls 为 fenced json）；json = 盘上格式（放回 sessions/ 即可重新导入）；默认 stdout，`--out` 写文件 **0600**（正文属隐私，分享前自查） | 歧义 → 2；不存在/IO → 1；非法 --format → 2 |
+| `session prune --older-than DAYS [--dry-run]` | 按文件 mtime（=最后使用，与 run 复用同语义）清理久未使用的会话；阈值必填（DAYS≥0，无默认）；活锁会话跳过（`skipped (in use)`）；`--dry-run` 只列不删 | 缺阈值/非法选项 → 2；IO → 1 |
 
 会话文件本身也有 `meta.schema_version`（当前 1；回合含工具消息时写 2）：旧二进制读到更高版本会明确拒绝而非静默丢数据，与 config.json 的 `schema_version` 是两回事。
 
