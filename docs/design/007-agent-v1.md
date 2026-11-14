@@ -392,6 +392,16 @@ TUI 规划（自绘最小集，已实现）：主屏内联渲染（见 5.6 规�
 
 验证（2026-11-14）：agent_test footer/sidebar 断言更新为 cols-1 契约（含"永不到达最后一列"回归断言）；GCC/Clang Debug 两 preset CTest 3/3；`pty_tui_smoke.py` **159 PASS / 0 FAIL**（三项既有失败转绿，无新增失败）；`pty_cli_smoke.py` ALL PASS。
 
+## v7.2 修订（2026-11-15 缺陷修复：状态行保底预算，sysinfo 先裁）
+
+v7.1 后 CI（GitHub Actions ubuntu-24.04 runner）的 smoke 仍复现其中两项失败（"queue depth"、"auto-tools 标记"），本地却全绿。根因是 v7.1 根因 B 的修复隐含了一个**环境宽度假设**：
+
+- **根因（裁剪预算随机器漂移）**：合并 footer 的"sysinfo 恒全显"契约下，状态段预算 = `cols - width(sysinfo) - 2`，而 sysinfo 宽度取决于 `user@host · cwd · clock`。本地 `marvin@linux-dev · ~/workspace/AI/mini_agent` 约 55 列 → 预算 23，`streaming · queued 1`（20 列）放得下；CI runner 主机名更长（`runner@fv-az…`）且 cwd 为 `~/work/mini-agent/mini-agent`，sysinfo ≥62 列 → 预算 ≤16，两个状态标记恰好都被裁掉。功能断言（排队自动发送、off 策略免审批）全部 PASS，证明只是**显示**被裁，非时序/功能问题。本地以 `USER=runner-az1234` 加宽 user@host 精确复现同样两项失败。
+- **修复（状态保底，信息先裁）**：`compose_footer` 给状态段保底 **24 列**（`kMinStatusCols`，覆盖 `streaming · queued N` 与 `idle · auto-tools` 并留余量）：宽终端（cols > 26）上 info 块先 clip 到 `cols - 24 - 2`（带省略号），再按剩余预算裁状态；小终端保持 v4.16 的 info-wins 旧行为。取舍依据：状态词是必须可见的操作信息，sysinfo 是装饰性信息（时钟被裁只损失精度）。autowrap 守卫（cols-1）与状态词前置顺序不变。
+- **测试加固**：smoke 的 sysinfo 断言接受完整形态或 v7.2 裁剪形态（省略号结尾）；TUI mock handler 捕获 `BrokenPipeError/ConnectionResetError`——中断场景客户端提前断流属预期，不再向 CI 日志打 traceback（此前日志中的 BrokenPipe 堆栈即此噪音，非失败原因）。
+
+验证（2026-11-15）：agent_test 新增 4 例 footer 断言（宽 info 下 queue-depth/auto-tools 存活、行宽恒 cols-1、sysinfo 带省略号、小终端 info-wins 不变）；四 preset（gcc/clang × debug/release）CTest 3/3；`pty_tui_smoke.py` 常规环境与 `USER=runner-az1234` 宽环境各 **172 PASS / 0 FAIL**、无 traceback；`pty_cli_smoke.py` ALL PASS；`scripts/check.py --require-initialized` PASS。
+
 ## v5 修订（2026-11-09 CLI SIGINT 中断通道；provider XFERINFO 检查点；stdio 子进程孤儿护栏）
 
 CLI 此前**没有取消路径**：`ask` 给 `run_turn` 传恒假 `should_abort`，Ctrl-C 走默认处置直接杀进程——历史回滚、锁释放、MCP 子进程回收（全部挂在析构/正常返回路径上）一概不发生。内核通道本身早已就位（curl 写回调、`run_subprocess` 的 poll 分片、loop 的回合内检查），缺的只是 CLI 侧的**信号源**。本修订把三者接通，并顺带堵上两个实测确认的漏洞：
@@ -406,7 +416,7 @@ CLI 此前**没有取消路径**：`ask` 给 `run_turn` 传恒假 `should_abort`
 
 v4.12 的系统信息行与状态行上下堆叠，底部两行读起来松散。现合并为**一行**：状态文本居左，系统信息贴右边缘。
 
-- **纯函数 `compose_footer(left, right, cols)`**：right 为空直接返回 left（旧行为，`/sysinfo off` 时状态占满整行）；否则 left 先 `md::clip` 到 `cols - width(right) - 1`（保证最少一个空格 gutter），用空格补齐到精确宽度再接 right——整行显示宽度恰好 `cols`，右段贴边（右对齐）。宽度不够放两段（`width(right)+1 >= cols`）时只显 right：信息段短且更重要，状态可整段丢弃。含 SGR 的输入安全（clip/display_width 均按零宽转义处理）。
+- **纯函数 `compose_footer(left, right, cols)`**：right 为空直接返回 left（旧行为，`/sysinfo off` 时状态占满整行）；否则 left 先 `md::clip` 到 `cols - width(right) - 1`（保证最少一个空格 gutter），用空格补齐到精确宽度再接 right——整行显示宽度恰好 `cols`，右段贴边（右对齐）。宽度不够放两段（`width(right)+1 >= cols`）时只显 right：信息段短且更重要，状态可整段丢弃。含 SGR 的输入安全（clip/display_width 均按零宽转义处理）。（本段为 v4.16 原始契约；行宽 cols-1 守卫见 v7.1 修订，"状态保底 24 列、info 先裁"见 v7.2 修订。）
 - **帧预算**：固定行恒为 2（footer + 光标行），`cap = rows - 2`，不再随 sysinfo 开关心跳变（v4.12 的 2/3 分支取消）。requestRender 输入缓存不变（status/sysinfo 仍是独立输入，合成发生在 render 内）。
 
 验证（2026-11-09）：`compose_footer` 单测三例（齐右/长状态 clip/无 info 原样返回）并入既有 footer 断言区；`test_v411_turn_panel` 等全量 agent_test、CTest 3/3、cpp_format、`scripts/check.py --strict-project` 通过；PTY smoke 全通过（含 v4.12 的 "system info row shows user@host · cwd · clock"——同一断言在合并行上依然命中，且新行为下 off 回退路径复用旧断言）。

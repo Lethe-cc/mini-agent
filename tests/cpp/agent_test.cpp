@@ -2657,6 +2657,20 @@ void test_v411_turn_panel() {
     check(mini_agent::md::display_width(tight) == 15 && tight.substr(tight.size() - 4) == "info",
           "long status clips to leave the gutter");
     check(T::compose_footer("only", "", 20) == "only", "no info = status alone");
+    // v7.2: the status keeps a guaranteed minimum budget -- a wide info
+    // block (long user@host/cwd, e.g. CI runners) is clipped FIRST instead
+    // of squeezing away the state words (the two CI-only smoke failures).
+    const std::string wide_info = "runner@fv-az1234-567 - ~/work/mini-agent/mini-agent - 14:40:19";
+    const auto wide = T::compose_footer("streaming - queued 1", wide_info, 80);
+    check(mini_agent::md::display_width(wide) == 79 && wide.rfind("streaming - queued 1", 0) == 0,
+          "wide info: queue-depth status survives, row stays cols-1");
+    check(wide.find("...") != std::string::npos, "wide info: sysinfo clipped with ellipsis");
+    const auto auto_marker = T::compose_footer("idle - auto-tools", wide_info, 80);
+    check(auto_marker.rfind("idle - auto-tools", 0) == 0, "wide info: auto-tools marker survives");
+    // Tiny terminals keep the old info-wins behaviour.
+    const auto tiny = T::compose_footer("status", wide_info, 20);
+    check(mini_agent::md::display_width(tiny) == 19 && tiny.find("status") == std::string::npos,
+          "tiny terminal: info still wins");
     // v4.13 sidebar composition: rows merge with the gutter, the shorter
     // column pads out, and every composed row is exactly one terminal row.
     const auto merged = T::compose_columns({"abc", "de"}, {"123456", "x", "long"}, 20, 6);

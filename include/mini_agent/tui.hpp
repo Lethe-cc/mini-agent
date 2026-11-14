@@ -203,6 +203,10 @@ std::string sidebar_status_glyph(std::string_view xy);
 // cols: a row filling the last column leaves the terminal in deferred
 // autowrap and the frame's trailing newline advances two rows, breaking
 // the live-block cursor accounting (5.6 rule 2 autowrap guard).
+// v7.2: the status keeps a guaranteed minimum budget (24 cols on wide
+// terminals): the info block is clipped FIRST when it would squeeze the
+// status below that -- its width depends on user@host/cwd and must never
+// hide the state words. On tiny terminals the info still wins.
 std::string compose_footer(std::string_view left, std::string_view right, std::size_t cols);
 
 // v4.12: one bottom system-info row: "user@host · cwd · clock" (dim when

@@ -3101,10 +3101,11 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             const bool sc = colors_enabled();
             // Status segment order: state words FIRST, identity and usage
             // last. The v4.16 merged footer clips the status to whatever
-            // the sysinfo leaves (often ~20 cols); with the identity prefix
-            // first, the streaming/queued/auto-tools/approval markers were
-            // exactly the part that got clipped away. State is the part
-            // that must survive; model/session also live in the banner.
+            // the sysinfo leaves (v7.2 guarantees >=24 cols on wide
+            // terminals); with the identity prefix first, the streaming/
+            // queued/auto-tools/approval markers were exactly the part
+            // that got clipped away. State is the part that must survive;
+            // model/session also live in the banner.
             std::string status;
             if (models_running) {
                 status += tint(sc, "36", "listing models...");
@@ -3118,8 +3119,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             if (streaming) {
                 // Interrupt keys stay documented in /help and the composer
                 // hint; elapsed seconds live in the turn panel header. The
-                // status word must fit the footer clip budget (~20 cols on
-                // an 80-col terminal) WITH the queue depth attached.
+                // status word must fit the footer clip budget (v7.2: >=24
+                // cols on an 80-col terminal) WITH the queue depth attached.
                 status += tint(sc, "36", (status.empty() ? "" : " · ") + std::string("streaming"));
                 if (!pending.empty()) {
                     status += tint(sc, "36", " · queued " + std::to_string(pending.size()));

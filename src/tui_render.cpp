@@ -849,7 +849,17 @@ std::string compose_footer(std::string_view left, std::string_view right, std::s
     const std::size_t guard = cols > 1 ? cols - 1 : 1;
     if (right.empty())
         return md::clip(std::string(left), guard);
-    const std::string info = md::clip(std::string(right), guard);
+    // v7.2: the status (left) carries the state words that MUST survive
+    // (streaming/queued/auto-tools/AWAITING APPROVAL); the info block is
+    // decorative and its width varies per machine (user@host + cwd). On
+    // long-hostname machines (CI runners) it used to eat the whole row
+    // and clip the state words away. Guarantee the status a minimum
+    // budget by clipping the info FIRST; tiny terminals keep the old
+    // info-wins behaviour.
+    constexpr std::size_t kMinStatusCols = 24;
+    const std::size_t info_cap =
+        cols > kMinStatusCols + 2 ? std::min(guard, cols - kMinStatusCols - 2) : guard;
+    const std::string info = md::clip(std::string(right), info_cap);
     const std::size_t rw = md::display_width(info);
     if (rw + 1 >= cols)
         return info; // no room for both: the info wins

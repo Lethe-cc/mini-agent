@@ -139,6 +139,16 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(0.1)
         self.wfile.write(b"data: [DONE]\n\n")
 
+    def handle_one_request(self):
+        # Interrupt scenarios (Esc/Ctrl-C mid-stream) disconnect the client
+        # while SSE chunks are still being written: expected, not a server
+        # error -- swallow the broken pipe instead of dumping a traceback
+        # into the CI log.
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
     def log_message(self, *args):
         pass
 
@@ -482,9 +492,12 @@ def main():
     expect("this turn" in strip_csi(long_raw), "turn panel header shown while streaming")
     # v4.12: bottom system-info row (user@host · cwd · clock) present by
     # default; OSC-capable strips keep it visible in the cleaned stream.
-    expect(re.search(r"@\S+ \u00b7 \S+ \u00b7 \d\d:\d\d:\d\d", strip_csi(splash + turn))
-               is not None,
-           "system info row shows user@host · cwd · clock")
+    # v7.2: on wide user@host/cwd machines the info block is clipped with
+    # an ellipsis to guarantee the status budget -- accept both shapes.
+    info_plain = strip_csi(splash + turn)
+    expect(re.search(r"@\S+ \u00b7 \S+ \u00b7 \d\d:\d\d:\d\d", info_plain) is not None or
+           re.search(r"@\S+ \u00b7 .+\.\.\.", info_plain) is not None,
+           "system info row shows user@host · cwd · clock (or its v7.2 clip)")
     # v4.13 sidebar: /sidebar on composes a right column (tree rows joined
     # by the " | " gutter) inside the inline frame; width invariant holds.
     os.write(fd, b"/sidebar on\r")
