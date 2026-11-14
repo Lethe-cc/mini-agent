@@ -826,7 +826,7 @@ std::vector<std::string> approval_rows(const std::string& tool_name,
         if (!stream.eof())
             rows.push_back(tint(colors, "2", "  ... diff truncated (approve applies full change)"));
         rows.push_back(tint(colors, "33",
-                            "y=allow  n=deny  a=allow-name  ?=params  (Esc/Ctrl-C "
+                            "y=allow  n=deny  a=allow ALL (session)  ?=params  (Esc/Ctrl-C "
                             "deny+stop)"));
         return rows;
     }
@@ -843,9 +843,9 @@ std::vector<std::string> approval_rows(const std::string& tool_name,
             rows.push_back(tint(colors, "2", "  ..."));
     }
     rows.push_back(tint(colors, "33",
-                        expanded ? "y=allow  n=deny  a=allow-name  ?=params(compact)  "
+                        expanded ? "y=allow  n=deny  a=allow ALL (session)  ?=params(compact)  "
                                    "other keys held"
-                                 : "y=allow  n=deny  a=allow-name  ?=params  "
+                                 : "y=allow  n=deny  a=allow ALL (session)  ?=params  "
                                    "(Esc/Ctrl-C deny+stop)"));
     return rows;
 }
@@ -1740,6 +1740,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         }
         if (!handled)
             return;
+        // Session-allow is per tool NAME, argument-blind: say so out loud
+        // at the moment of consent, loudest for run_bash (any shell command).
+        if (answer == 3) {
+            if (call.name == "run_bash") {
+                screen.commit("[warn] session-allow: EVERY run_bash command now runs "
+                              "unapproved (this session)");
+            } else {
+                screen.commit("[info] session-allow: every " + call.name +
+                              " call runs unapproved this session (any arguments)");
+            }
+        }
         bridge.answer_approval(answer);
         logger->event("tool_approve",
                       {{"tool", call.name},

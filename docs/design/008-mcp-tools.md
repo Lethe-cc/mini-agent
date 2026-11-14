@@ -179,7 +179,7 @@ struct TurnOptions {
 ### 5.4 CLI / TUI 交互（文案英文，遵循 007 §5.6 帧模型）
 
 - 历史区新增工具行：`[tool] run_bash · ls -la …(截断 1 行)` → `[ok 0.4s · 1.2 KB]` / `[error …]`；MCP 远端显示 `[tool] fs/read_file`。
-- 确认行内联在 composer 上方：`allow 'run_bash': ls -la /etc [y/N/a/?]`——`y` 本次、`n` 拒绝并回填告知模型、`a` 本会话同工具名免问、`?` 展开完整参数 JSON。Esc/Ctrl-C = n。streaming 期间输入语义不变。
+- 确认行内联在 composer 上方：`allow 'run_bash': ls -la /etc [y/N/a/?]`——`y` 本次、`n` 拒绝并回填告知模型、`a` 本会话同工具名免问（**按名免问、不看参数**：run_bash 即任意命令；2026-11-14 起图例改显式 `a=allow ALL (session)` 并在按下时回显 scope 警示行，语义不变）、`?` 展开完整参数 JSON。Esc/Ctrl-C = n。streaming 期间输入语义不变。
 - 斜杠命令新增 `/tools`（列出注册表条目与来源、server 在线状态）、`/mcp`（列 server、重启子进程）。`/config` 增 `approval=` 行。
 - 子命令 `mcp list`：打印 env+file+`--mcp` 合并后的 server 清单（bearer 恒 `set`、URL 过 redact_url），不要求 LLM 配置完整，作为配置自检入口。
 - `ask`：新增 `--tools off|ask|auto`，默认 `off`（保持非交互脚本的确定性契约与退出码语义）；`ask` 模式要求 TTY，否则等同 `off` 并 stderr 提示。

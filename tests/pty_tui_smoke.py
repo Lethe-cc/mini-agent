@@ -607,6 +607,8 @@ def main():
            "v3 diff file header bold (git meta default)")
     expect("+hello from approval" in plain and "-(no content)" not in plain,
            "v3 diff rows visible with content")
+    expect("a=allow ALL (session)" in plain,
+           "approval legend states the session-wide scope of `a`")
     os.write(afd, b"y")
     approved = read_all(afd, 5.0)
     approved_plain = strip_csi(approved)
@@ -622,6 +624,19 @@ def main():
     expect(os.path.exists(ws_dir + "/note.txt")
            and "hello from approval" in open(ws_dir + "/note.txt").read(),
            "v3 approved write landed on disk inside the workspace")
+    # Session-allow (`a`): the consent echo must name the argument-blind
+    # scope, and the NEXT call of the same tool must skip approval.
+    os.write(afd, b"EDITFLOW session allow\r")
+    sa_block = strip_csi(read_all(afd, 5.0))
+    expect("ALLOW write_file" in sa_block, "session-allow: approval block appears")
+    os.write(afd, b"a")
+    sa_echo = strip_csi(read_all(afd, 5.0))
+    expect("session-allow: every write_file call runs unapproved this session" in sa_echo,
+           "session-allow: consent echo names the scope")
+    os.write(afd, b"EDITFLOW third\r")
+    sa_next = strip_csi(read_all(afd, 6.0))
+    expect("AWAITING APPROVAL" not in sa_next and "[tool] write_file" in sa_next,
+           "session-allow: same-name call skips approval")
     os.write(afd, b"/cwd\r")
     cwd_out = read_all(afd, 2.5)
     expect("workspace: " in strip_csi(cwd_out),

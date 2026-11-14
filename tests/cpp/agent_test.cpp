@@ -1117,6 +1117,11 @@ void test_tool_ui_helpers() {
     check(compact.size() == 2 && compact[0].find("rm -rf /tmp/x") != std::string::npos &&
               compact[1].find("y=allow") != std::string::npos,
           "approval rows compact shape");
+    // The `a` legend must state the session-wide, argument-blind scope
+    // (wording fix: 'allow-name' hid that run_bash means ANY command).
+    check(compact[1].find("a=allow ALL (session)") != std::string::npos &&
+              mini_agent::md::display_width(compact[1]) <= 80,
+          "session-allow legend is explicit and fits one row");
     const auto wide = tui::approval_rows("srv__tool", R"({"a":{"b":1}})", true);
     std::string joined;
     for (const auto& row : wide)
