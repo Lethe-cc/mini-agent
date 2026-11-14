@@ -303,6 +303,15 @@ ProviderConfig AppConfig::to_provider() const {
         if (parsed > 0)
             p.total_timeout_seconds = static_cast<std::size_t>(parsed);
     }
+    // 014 (design 014 §4): pre-stream retry budget, env-only like the
+    // timeout knob (no config.json field). 0 disables; 0..5 accepted,
+    // anything else keeps the default (2). The provider clamps as well.
+    if (const char* retries = env_nonempty("MINI_AGENT_RETRIES")) {
+        char* end = nullptr;
+        const long parsed = std::strtol(retries, &end, 10);
+        if (end != retries && *end == '\0' && parsed >= 0 && parsed <= 5)
+            p.max_retries = static_cast<int>(parsed);
+    }
     return p;
 }
 

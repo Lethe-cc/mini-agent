@@ -15,6 +15,7 @@
 #include <mutex>
 #include <set>
 #include <sstream>
+#include <thread>
 
 namespace mini_agent {
 namespace {
@@ -85,6 +86,44 @@ int curl_abort_checkpoint(void* clientp, curl_off_t, curl_off_t, curl_off_t, cur
         return 1;
     }
     return 0;
+}
+
+// 014 (design 014 §5): capture Retry-After from response headers. Only
+// the integer-seconds form is parsed (HTTP-date falls back to the default
+// backoff); the value matters on 429/503 error responses, which are not
+// SSE, so the stream-started gate stays false for them.
+struct RetryAfterCtx {
+    int seconds = 0;
+};
+
+size_t curl_header(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    auto* ctx = static_cast<RetryAfterCtx*>(userdata);
+    const std::size_t bytes = size * nmemb;
+    const std::string_view line(ptr, bytes);
+    constexpr std::string_view kName = "retry-after:";
+    if (line.size() > kName.size()) {
+        bool match = true;
+        for (std::size_t i = 0; i < kName.size(); ++i) {
+            const char c = line[i];
+            const char lower = (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
+            if (lower != kName[i]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            std::string value(line.substr(kName.size()));
+            // Trim whitespace; strtol stops at the first non-digit, so an
+            // HTTP-date yields 0 (absent) rather than a guess.
+            const auto first = value.find_first_not_of(" \t");
+            if (first != std::string::npos) {
+                const long parsed = std::strtol(value.c_str() + first, nullptr, 10);
+                if (parsed > 0)
+                    ctx->seconds = static_cast<int>(parsed);
+            }
+        }
+    }
+    return bytes;
 }
 
 namespace {
@@ -399,6 +438,32 @@ std::string preview_chat_request_body(const Chat& chat, const std::string& model
     return request_body(chat, model, tools_json, reasoning_effort, include_usage);
 }
 
+bool retryable_provider_error(ProviderErrorKind kind, int http_status) {
+    if (kind == ProviderErrorKind::Network)
+        return true; // curl failures short of cancellation are transient candidates
+    if (kind != ProviderErrorKind::HttpStatus)
+        return false; // Protocol/Cancelled: never retry
+    switch (http_status) {
+    case 408: // request timeout
+    case 429: // rate limited
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+        return true;
+    default:
+        return false; // 401/403 key rejection, 400 bad request, ...
+    }
+}
+
+int retry_wait_ms(int retry_index, int retry_after_s) {
+    if (retry_after_s > 30)
+        return -1; // server refuses a short wait: fail instead of hanging
+    const int base = 1000 << std::clamp(retry_index, 0, 4);
+    const int after = retry_after_s > 0 ? retry_after_s * 1000 : 0;
+    return std::max(base, after);
+}
+
 OpenAiProvider::~OpenAiProvider() {
     if (curl_)
         ::curl_easy_cleanup(static_cast<CURL*>(curl_));
@@ -452,208 +517,254 @@ OpenAiProvider::complete_chat(const Chat& chat, const std::string& tools_json,
     const std::string auth = "Authorization: Bearer " + config_.api_key;
     const std::string type = "Content-Type: application/json";
     const std::string accept = "Accept: text/event-stream";
-    struct curl_slist* headers = nullptr;
-    headers = ::curl_slist_append(headers, auth.c_str());
-    headers = ::curl_slist_append(headers, type.c_str());
-    headers = ::curl_slist_append(headers, accept.c_str());
 
-    std::string full;
-    std::string http_error;
-    std::string finish_reason;
-    TokenUsage usage;          // v4: filled by the usage chunk when the gateway sends one
-    ActualReasoning reasoning; // v4.2: evidence collected across all chunks
-    // v4.4: chat traffic only (design 010 §15). One dump per round trip.
-    debug_dump(config_.debug_log_path, "REQUEST", body);
-    ToolCallAccumulator tool_calls;
-    SseLines lines;
-    lines.on_data_ = [&](std::string&& payload) {
-        debug_dump(config_.debug_log_path, "SSE", payload);
-        if (payload == "[DONE]")
-            return;
-        auto parsed = nlohmann::json::parse(payload, nullptr, false);
-        if (parsed.is_discarded()) {
-            throw ProviderError(ProviderErrorKind::Protocol, "malformed SSE JSON payload");
-        }
-        const auto top = parsed.find("error");
-        if (top != parsed.end() && top->is_object()) {
-            std::string msg = "provider error";
-            if (auto m = top->find("message"); m != top->end() && m->is_string()) {
-                msg = m->get<std::string>();
+    // 014 (design 014): pre-stream retry loop. One attempt keeps the exact
+    // request/parse logic below; the outer loop re-runs it only while the
+    // failure is transient AND no SSE payload was parsed yet (nothing
+    // delivered to the caller -- a retry cannot duplicate visible text).
+    const int max_retries = std::clamp(config_.max_retries, 0, 5);
+    bool stream_started = false;
+    RetryAfterCtx retry_after;
+    auto attempt_once = [&]() -> CompletionResult {
+        stream_started = false;
+        retry_after.seconds = 0;
+        struct curl_slist* headers = nullptr;
+        headers = ::curl_slist_append(headers, auth.c_str());
+        headers = ::curl_slist_append(headers, type.c_str());
+        headers = ::curl_slist_append(headers, accept.c_str());
+
+        std::string full;
+        std::string finish_reason;
+        TokenUsage usage;          // v4: filled by the usage chunk when the gateway sends one
+        ActualReasoning reasoning; // v4.2: evidence collected across all chunks
+        // v4.4: chat traffic only (design 010 §15). One dump per round trip.
+        debug_dump(config_.debug_log_path, "REQUEST", body);
+        ToolCallAccumulator tool_calls;
+        SseLines lines;
+        lines.on_data_ = [&](std::string&& payload) {
+            // 014: any parsed payload means the caller may already have seen
+            // output; from here on no failure may trigger a retry.
+            stream_started = true;
+            debug_dump(config_.debug_log_path, "SSE", payload);
+            if (payload == "[DONE]")
+                return;
+            auto parsed = nlohmann::json::parse(payload, nullptr, false);
+            if (parsed.is_discarded()) {
+                throw ProviderError(ProviderErrorKind::Protocol, "malformed SSE JSON payload");
             }
-            throw ProviderError(ProviderErrorKind::Protocol, msg);
-        }
-        const auto choices = parsed.find("choices");
-        // v4.2: a `reasoning_effort` string echoes the effective level
-        // back. Gateways place it at the payload top level (OpenRouter)
-        // or per-choice (observed mock/compat shapes) -- check both.
-        const auto note_effort = [&reasoning](const nlohmann::json& node) {
-            if (auto re = node.find("reasoning_effort");
-                re != node.end() && re->is_string() && !re->get_ref<const std::string&>().empty()) {
-                reasoning.effort = re->get<std::string>();
-                reasoning.seen = true;
+            const auto top = parsed.find("error");
+            if (top != parsed.end() && top->is_object()) {
+                std::string msg = "provider error";
+                if (auto m = top->find("message"); m != top->end() && m->is_string()) {
+                    msg = m->get<std::string>();
+                }
+                throw ProviderError(ProviderErrorKind::Protocol, msg);
+            }
+            const auto choices = parsed.find("choices");
+            // v4.2: a `reasoning_effort` string echoes the effective level
+            // back. Gateways place it at the payload top level (OpenRouter)
+            // or per-choice (observed mock/compat shapes) -- check both.
+            const auto note_effort = [&reasoning](const nlohmann::json& node) {
+                if (auto re = node.find("reasoning_effort");
+                    re != node.end() && re->is_string() &&
+                    !re->get_ref<const std::string&>().empty()) {
+                    reasoning.effort = re->get<std::string>();
+                    reasoning.seen = true;
+                }
+            };
+            note_effort(parsed);
+            if (choices != parsed.end() && choices->is_array() && !choices->empty())
+                note_effort(choices->front());
+            // v4: usage chunk (stream_options.include_usage) carries `usage`
+            // with an empty/absent choices array -- read it before the choices
+            // guard below returns early. Last-seen wins (gateways that emit
+            // per-chunk usage end with the authoritative total).
+            if (auto u = parsed.find("usage"); u != parsed.end() && u->is_object()) {
+                const auto num = [&u](const char* key) -> long long {
+                    if (auto it = u->find(key); it != u->end() && it->is_number_integer())
+                        return it->get<long long>();
+                    return 0;
+                };
+                usage.prompt_tokens = num("prompt_tokens");
+                usage.completion_tokens = num("completion_tokens");
+                usage.total_tokens = num("total_tokens");
+                // Some gateways use Anthropic-style names; fold them in only
+                // when the OpenAI keys were absent (008 R2 divergence rule).
+                if (usage.prompt_tokens == 0)
+                    usage.prompt_tokens = num("input_tokens");
+                if (usage.completion_tokens == 0)
+                    usage.completion_tokens = num("output_tokens");
+                if (usage.total_tokens == 0)
+                    usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+                // v4.2: reasoning output tokens (OpenAI
+                // completion_tokens_details.reasoning_tokens; some gateways
+                // nest under usage.completion_token_details -- try both).
+                for (const char* details_key :
+                     {"completion_tokens_details", "completion_token_details"}) {
+                    if (auto details = u->find(details_key);
+                        details != u->end() && details->is_object()) {
+                        if (auto rt = details->find("reasoning_tokens"); rt != details->end() &&
+                                                                         rt->is_number_integer() &&
+                                                                         rt->get<long long>() > 0) {
+                            usage.reasoning_tokens = rt->get<long long>();
+                            reasoning.seen = true;
+                            reasoning.has_reasoning_tokens = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (choices == parsed.end() || !choices->is_array() || choices->empty()) {
+                return;
+            }
+            const auto& first = choices->front();
+            const auto delta = first.find("delta");
+            if (delta != first.end() && delta->is_object()) {
+                // content text -> UI stream + accumulated reply
+                if (auto content = delta->find("content");
+                    content != delta->end() && content->is_string()) {
+                    const auto fragment = content->get<std::string>();
+                    if (!fragment.empty()) {
+                        full.append(fragment);
+                        on_delta(fragment);
+                    }
+                }
+                // tool call fragments -> index-keyed accumulator (no UI feed:
+                // 007 5.6 event/render separation -- tool noise must not
+                // spam the reply area)
+                if (auto tc = delta->find("tool_calls"); tc != delta->end() && tc->is_array()) {
+                    tool_calls.feed(*tc);
+                }
+                if (auto fc = delta->find("function_call"); fc != delta->end() && fc->is_object()) {
+                    tool_calls.feed_legacy(*fc);
+                }
+                // v4.2: reasoning content deltas prove the model actually
+                // thought this round. Displayed nowhere yet (design 010 §11:
+                // status reading only); never folded into the reply text.
+                for (const char* key : {"reasoning_content", "reasoning"}) {
+                    if (auto rc = delta->find(key); rc != delta->end() && rc->is_string() &&
+                                                    !rc->get_ref<const std::string&>().empty()) {
+                        reasoning.seen = true;
+                        if (config_.reasoning_live) // v4.11: turn panel (mid-stream)
+                            config_.reasoning_live->store(true, std::memory_order_relaxed);
+                        break;
+                    }
+                }
+            }
+            // Non-streaming delivery inside the SSE stream: complete call
+            // under choices[0].message (qwen compat variant, 2026-11-04).
+            if (auto msg = first.find("message"); msg != first.end() && msg->is_object()) {
+                if (auto tc = msg->find("tool_calls"); tc != msg->end() && tc->is_array())
+                    tool_calls.feed_message(*tc);
+                if (auto fc = msg->find("function_call"); fc != msg->end() && fc->is_object())
+                    tool_calls.feed_legacy(*fc);
+            }
+            if (auto fr = first.find("finish_reason"); fr != first.end() && fr->is_string()) {
+                finish_reason = fr->get<std::string>();
             }
         };
-        note_effort(parsed);
-        if (choices != parsed.end() && choices->is_array() && !choices->empty())
-            note_effort(choices->front());
-        // v4: usage chunk (stream_options.include_usage) carries `usage`
-        // with an empty/absent choices array -- read it before the choices
-        // guard below returns early. Last-seen wins (gateways that emit
-        // per-chunk usage end with the authoritative total).
-        if (auto u = parsed.find("usage"); u != parsed.end() && u->is_object()) {
-            const auto num = [&u](const char* key) -> long long {
-                if (auto it = u->find(key); it != u->end() && it->is_number_integer())
-                    return it->get<long long>();
-                return 0;
-            };
-            usage.prompt_tokens = num("prompt_tokens");
-            usage.completion_tokens = num("completion_tokens");
-            usage.total_tokens = num("total_tokens");
-            // Some gateways use Anthropic-style names; fold them in only
-            // when the OpenAI keys were absent (008 R2 divergence rule).
-            if (usage.prompt_tokens == 0)
-                usage.prompt_tokens = num("input_tokens");
-            if (usage.completion_tokens == 0)
-                usage.completion_tokens = num("output_tokens");
-            if (usage.total_tokens == 0)
-                usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-            // v4.2: reasoning output tokens (OpenAI
-            // completion_tokens_details.reasoning_tokens; some gateways
-            // nest under usage.completion_token_details -- try both).
-            for (const char* details_key :
-                 {"completion_tokens_details", "completion_token_details"}) {
-                if (auto details = u->find(details_key);
-                    details != u->end() && details->is_object()) {
-                    if (auto rt = details->find("reasoning_tokens"); rt != details->end() &&
-                                                                     rt->is_number_integer() &&
-                                                                     rt->get<long long>() > 0) {
-                        usage.reasoning_tokens = rt->get<long long>();
-                        reasoning.seen = true;
-                        reasoning.has_reasoning_tokens = true;
-                    }
-                    break;
-                }
-            }
+        CurlWriteCtx ctx{&lines, &should_abort};
+
+        long status = 0;
+        char error_buffer[CURL_ERROR_SIZE] = {0};
+        ::curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+        ::curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        ::curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+        ::curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+        ::curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        ::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
+        ::curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
+        // 014: Retry-After capture (integer seconds; error responses only).
+        ::curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, curl_header);
+        ::curl_easy_setopt(curl, CURLOPT_HEADERDATA, &retry_after);
+        // Abort even when the server sends nothing (idle thinking time): the
+        // progress callback fires ~2x/second regardless of traffic.
+        ::curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_abort_checkpoint);
+        ::curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
+        ::curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        ::curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
+        ::curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
+                           static_cast<long>(config_.connect_timeout_seconds));
+        ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(config_.total_timeout_seconds));
+        ::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        // Never enable CURLOPT_VERBOSE in this code path: it would echo the
+        // Authorization header (design 007 section 6).
+
+        const CURLcode code = ::curl_easy_perform(curl);
+        ::curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+        ::curl_slist_free_all(headers);
+        // Handle stays open (connection cache lives here); aborted transfers
+        // are safe to reuse -- curl closes the socket itself when needed.
+
+        if (should_abort()) {
+            throw ProviderError(ProviderErrorKind::Cancelled, "request cancelled");
         }
-        if (choices == parsed.end() || !choices->is_array() || choices->empty()) {
-            return;
+        if (code == CURLE_ABORTED_BY_CALLBACK) {
+            throw ProviderError(ProviderErrorKind::Cancelled, "request cancelled");
         }
-        const auto& first = choices->front();
-        const auto delta = first.find("delta");
-        if (delta != first.end() && delta->is_object()) {
-            // content text -> UI stream + accumulated reply
-            if (auto content = delta->find("content");
-                content != delta->end() && content->is_string()) {
-                const auto fragment = content->get<std::string>();
-                if (!fragment.empty()) {
-                    full.append(fragment);
-                    on_delta(fragment);
-                }
-            }
-            // tool call fragments -> index-keyed accumulator (no UI feed:
-            // 007 5.6 event/render separation -- tool noise must not
-            // spam the reply area)
-            if (auto tc = delta->find("tool_calls"); tc != delta->end() && tc->is_array()) {
-                tool_calls.feed(*tc);
-            }
-            if (auto fc = delta->find("function_call"); fc != delta->end() && fc->is_object()) {
-                tool_calls.feed_legacy(*fc);
-            }
-            // v4.2: reasoning content deltas prove the model actually
-            // thought this round. Displayed nowhere yet (design 010 §11:
-            // status reading only); never folded into the reply text.
-            for (const char* key : {"reasoning_content", "reasoning"}) {
-                if (auto rc = delta->find(key); rc != delta->end() && rc->is_string() &&
-                                                !rc->get_ref<const std::string&>().empty()) {
-                    reasoning.seen = true;
-                    if (config_.reasoning_live) // v4.11: turn panel (mid-stream)
-                        config_.reasoning_live->store(true, std::memory_order_relaxed);
-                    break;
-                }
-            }
+        if (code != CURLE_OK) {
+            // error_buffer may contain the URL but never our API key (it is
+            // header-only); still avoid pasting raw curl text blindly.
+            std::string detail = error_buffer[0] ? error_buffer : ::curl_easy_strerror(code);
+            throw ProviderError(ProviderErrorKind::Network, "network error: " + detail);
         }
-        // Non-streaming delivery inside the SSE stream: complete call
-        // under choices[0].message (qwen compat variant, 2026-11-04).
-        if (auto msg = first.find("message"); msg != first.end() && msg->is_object()) {
-            if (auto tc = msg->find("tool_calls"); tc != msg->end() && tc->is_array())
-                tool_calls.feed_message(*tc);
-            if (auto fc = msg->find("function_call"); fc != msg->end() && fc->is_object())
-                tool_calls.feed_legacy(*fc);
+        if (status < 200 || status >= 300) {
+            throw ProviderError(ProviderErrorKind::HttpStatus,
+                                "HTTP status " + std::to_string(status), static_cast<int>(status));
         }
-        if (auto fr = first.find("finish_reason"); fr != first.end() && fr->is_string()) {
-            finish_reason = fr->get<std::string>();
+        CompletionResult result;
+        result.text = std::move(full);
+        result.tool_calls = tool_calls.finish();
+        result.usage = usage;
+        result.reasoning = std::move(reasoning);
+        // Fail LOUD where an earlier build stayed silent: the stream carried
+        // tool_call fragments (or finish_reason "tool_calls") but nothing
+        // completed -- a gateway shape we do not parse (fragments without
+        // id/name). Blank "AI:" replies are exactly that silent drop
+        // (deepwiki live test 2026-11-04), so surface it as an error instead.
+        if (result.tool_calls.empty() &&
+            (tool_calls.saw_fragments() || finish_reason == "tool_calls" ||
+             finish_reason == "function_call") &&
+            result.text.empty()) {
+            throw ProviderError(ProviderErrorKind::Protocol,
+                                "provider streamed tool calls in an unrecognized shape (no id/name "
+                                "resolved); stream structure [" +
+                                    tool_calls.shape_summary() +
+                                    "] slots=" + tool_calls.resolution_summary() +
+                                    " -- report this line to adapt the parser, or try --tools off");
         }
+        return result;
     };
-    CurlWriteCtx ctx{&lines, &should_abort};
-
-    long status = 0;
-    char error_buffer[CURL_ERROR_SIZE] = {0};
-    ::curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
-    ::curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    ::curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    ::curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
-    ::curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    ::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
-    ::curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
-    // Abort even when the server sends nothing (idle thinking time): the
-    // progress callback fires ~2x/second regardless of traffic.
-    ::curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_abort_checkpoint);
-    ::curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx);
-    ::curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    ::curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
-    ::curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
-                       static_cast<long>(config_.connect_timeout_seconds));
-    ::curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(config_.total_timeout_seconds));
-    ::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-    ::curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-    // Never enable CURLOPT_VERBOSE in this code path: it would echo the
-    // Authorization header (design 007 section 6).
-
-    const CURLcode code = ::curl_easy_perform(curl);
-    ::curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    ::curl_slist_free_all(headers);
-    // Handle stays open (connection cache lives here); aborted transfers
-    // are safe to reuse -- curl closes the socket itself when needed.
-
-    if (should_abort()) {
-        throw ProviderError(ProviderErrorKind::Cancelled, "request cancelled");
+    for (int attempt = 0;; ++attempt) {
+        try {
+            return attempt_once();
+        } catch (const ProviderError& e) {
+            if (stream_started || attempt >= max_retries ||
+                !retryable_provider_error(e.kind(), e.http_status()) || should_abort()) {
+                throw;
+            }
+            const int wait_ms = retry_wait_ms(attempt, retry_after.seconds);
+            if (wait_ms < 0) {
+                throw; // Retry-After beyond the cap: fail instead of hanging
+            }
+            if (config_.on_retry) {
+                config_.on_retry(attempt + 1, e.http_status(), wait_ms);
+            }
+            // Abort-aware backoff: 100 ms slices keep Ctrl-C/Esc responsive
+            // while the retry wait runs (no transfer is in flight here, so
+            // the XFERINFO checkpoint cannot cover this phase).
+            for (int slept = 0; slept < wait_ms;) {
+                if (should_abort()) {
+                    throw ProviderError(ProviderErrorKind::Cancelled, "request cancelled");
+                }
+                const int slice = std::min(100, wait_ms - slept);
+                std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+                slept += slice;
+            }
+        }
     }
-    if (code == CURLE_ABORTED_BY_CALLBACK) {
-        throw ProviderError(ProviderErrorKind::Cancelled, "request cancelled");
-    }
-    if (code != CURLE_OK) {
-        // error_buffer may contain the URL but never our API key (it is
-        // header-only); still avoid pasting raw curl text blindly.
-        std::string detail = error_buffer[0] ? error_buffer : ::curl_easy_strerror(code);
-        throw ProviderError(ProviderErrorKind::Network, "network error: " + detail);
-    }
-    if (status < 200 || status >= 300) {
-        http_error = "HTTP status " + std::to_string(status);
-        throw ProviderError(ProviderErrorKind::HttpStatus, http_error, static_cast<int>(status));
-    }
-    CompletionResult result;
-    result.text = std::move(full);
-    result.tool_calls = tool_calls.finish();
-    result.usage = usage;
-    result.reasoning = std::move(reasoning);
-    // Fail LOUD where an earlier build stayed silent: the stream carried
-    // tool_call fragments (or finish_reason "tool_calls") but nothing
-    // completed -- a gateway shape we do not parse (fragments without
-    // id/name). Blank "AI:" replies are exactly that silent drop
-    // (deepwiki live test 2026-11-04), so surface it as an error instead.
-    if (result.tool_calls.empty() &&
-        (tool_calls.saw_fragments() || finish_reason == "tool_calls" ||
-         finish_reason == "function_call") &&
-        result.text.empty()) {
-        throw ProviderError(ProviderErrorKind::Protocol,
-                            "provider streamed tool calls in an unrecognized shape (no id/name "
-                            "resolved); stream structure [" +
-                                tool_calls.shape_summary() +
-                                "] slots=" + tool_calls.resolution_summary() +
-                                " -- report this line to adapt the parser, or try --tools off");
-    }
-    return result;
 }
 
 std::optional<std::vector<std::string>> parse_models_json(std::string_view body,

@@ -3040,6 +3040,63 @@ void test_v417_turn_bridge() {
     }
 }
 
+// 014 (design 014 §4/§6): pre-stream retry decision + backoff helpers, the
+// env knob, and the bridge retry-event queue (worker -> main handoff).
+void test_provider_retry_helpers() {
+    using mini_agent::ProviderErrorKind;
+    using mini_agent::retry_wait_ms;
+    using mini_agent::retryable_provider_error;
+    // Decision matrix: network always; transient statuses only; auth and
+    // request errors never; Protocol/Cancelled never.
+    check(retryable_provider_error(ProviderErrorKind::Network, 0), "network error retryable");
+    for (int status : {408, 429, 500, 502, 503, 504}) {
+        check(retryable_provider_error(ProviderErrorKind::HttpStatus, status),
+              "transient HTTP status retryable");
+    }
+    for (int status : {400, 401, 403, 404, 422, 501, 505}) {
+        check(!retryable_provider_error(ProviderErrorKind::HttpStatus, status),
+              "non-transient HTTP status not retryable");
+    }
+    check(!retryable_provider_error(ProviderErrorKind::Protocol, 0), "protocol never retried");
+    check(!retryable_provider_error(ProviderErrorKind::Cancelled, 0), "cancelled never retried");
+    // Backoff: 1s << index; Retry-After raises the wait; >30s gives up.
+    check(retry_wait_ms(0, 0) == 1000 && retry_wait_ms(1, 0) == 2000 && retry_wait_ms(2, 0) == 4000,
+          "exponential backoff 1s/2s/4s");
+    check(retry_wait_ms(0, 3) == 3000, "Retry-After raises the first wait");
+    check(retry_wait_ms(2, 1) == 4000, "backoff wins over a smaller Retry-After");
+    check(retry_wait_ms(0, 30) == 30000, "Retry-After at the cap is honored");
+    check(retry_wait_ms(0, 31) == -1, "Retry-After beyond the cap gives up");
+    check(retry_wait_ms(0, -2) == 1000, "negative Retry-After treated as absent");
+    // Env knob: 0..5 accepted, invalid values keep the default (2).
+    {
+        mini_agent::AppConfig cfg;
+        ::setenv("MINI_AGENT_RETRIES", "0", 1);
+        check(cfg.to_provider().max_retries == 0, "MINI_AGENT_RETRIES=0 disables");
+        ::setenv("MINI_AGENT_RETRIES", "5", 1);
+        check(cfg.to_provider().max_retries == 5, "MINI_AGENT_RETRIES=5 accepted");
+        ::setenv("MINI_AGENT_RETRIES", "9", 1);
+        check(cfg.to_provider().max_retries == 2, "out-of-range keeps the default");
+        ::setenv("MINI_AGENT_RETRIES", "abc", 1);
+        check(cfg.to_provider().max_retries == 2, "non-numeric keeps the default");
+        ::unsetenv("MINI_AGENT_RETRIES");
+        check(cfg.to_provider().max_retries == 2, "absent env keeps the default");
+    }
+    // Bridge queue: push/drain swaps out, reset_turn clears.
+    {
+        mini_agent::tui::TurnBridge bridge;
+        bridge.push_retry_event(mini_agent::tui::RetryEvent{1, 429, 1000});
+        bridge.push_retry_event(mini_agent::tui::RetryEvent{2, 0, 2000});
+        const auto batch = bridge.drain_retry_events();
+        check(batch.size() == 2 && batch[0].attempt == 1 && batch[0].http_status == 429 &&
+                  batch[1].wait_ms == 2000,
+              "retry events drain in order with metadata intact");
+        check(bridge.drain_retry_events().empty(), "drain empties the queue");
+        bridge.push_retry_event(mini_agent::tui::RetryEvent{1, 503, 1000});
+        bridge.reset_turn();
+        check(bridge.drain_retry_events().empty(), "reset_turn clears retry events");
+    }
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -3089,6 +3146,7 @@ int main() {
     test_v411_turn_panel();
     test_v44_debug_log();
     test_v417_turn_bridge();
+    test_provider_retry_helpers();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

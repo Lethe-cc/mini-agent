@@ -57,6 +57,16 @@ constexpr long long kApprovalWarnAtS = 90;
 // Outcome of TurnBridge::wait_approval.
 enum class ApprovalWait { Answer, Timeout, Aborted };
 
+// 014 (design 014 §5): one pre-stream provider retry, parked by the worker
+// for the main thread to log. The logger itself is main-thread-owned (/log
+// may reassign it mid-turn), so retry events cross the boundary as data,
+// never as a logger pointer.
+struct RetryEvent {
+    int attempt = 0;     // 1-based
+    int http_status = 0; // 0 = network error
+    int wait_ms = 0;
+};
+
 class TurnBridge {
   public:
     // ---- streaming deltas (worker appends, main reads per frame) ----
@@ -97,6 +107,18 @@ class TurnBridge {
         return running_tool_;
     }
 
+    // ---- 014: provider retry events (worker pushes, main drains+logs) ----
+    void push_retry_event(RetryEvent event) {
+        std::lock_guard<std::mutex> lock(tool_mutex_);
+        retry_events_.push_back(event);
+    }
+    std::vector<RetryEvent> drain_retry_events() {
+        std::vector<RetryEvent> batch;
+        std::lock_guard<std::mutex> lock(tool_mutex_);
+        batch.swap(retry_events_);
+        return batch;
+    }
+
     // ---- per-turn reset (start_turn, main thread, worker joined) ----
     void reset_turn() {
         {
@@ -106,6 +128,7 @@ class TurnBridge {
         std::lock_guard<std::mutex> lock(tool_mutex_);
         tool_events_.clear();
         running_tool_.clear();
+        retry_events_.clear();
     }
 
     // ---- approval protocol (fixed slot + sequence, 008 section 5.4) ----
@@ -207,6 +230,7 @@ class TurnBridge {
     std::mutex tool_mutex_;
     std::vector<ToolRound> tool_events_;
     std::string running_tool_;
+    std::vector<RetryEvent> retry_events_; // 014, same mutex as tool events
 };
 
 } // namespace mini_agent::tui

@@ -23,6 +23,8 @@ import os
 import pty
 import select
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -47,7 +49,14 @@ def check(cond, name):
 class Handler(BaseHTTPRequestHandler):
     """SSE scripts keyed on the last user message prefix. TRICKLE paces
     chunks ~0.4 s apart so a SIGINT sent ~1.4 s after the request lands
-    inside the transfer; PLAIN answers immediately (timing-independent)."""
+    inside the transfer; PLAIN answers immediately (timing-independent).
+    014: FLAKY* prefixes fail the first N requests with a transient HTTP
+    status (counters below prove the client's retry budget); MIDRST
+    delivers one content chunk then RSTs the connection (a stream-started
+    failure the client must NOT retry)."""
+
+    FLAKY_COUNTS = {}
+    MIDRST_COUNT = 0
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -58,6 +67,40 @@ class Handler(BaseHTTPRequestHandler):
             msgs = []
         last_user = next((m.get("content", "") for m in reversed(msgs)
                           if m.get("role") == "user"), "")
+        # 014: transient-failure scripts (before any 200 is sent).
+        for prefix, fails, status in (("FLAKY429", 2, 429),
+                                      ("FLAKY503", 1, 503),
+                                      ("FLAKYOFF", 1, 429)):
+            if last_user.startswith(prefix):
+                n = Handler.FLAKY_COUNTS.get(prefix, 0) + 1
+                Handler.FLAKY_COUNTS[prefix] = n
+                if n <= fails:
+                    resp = json.dumps({"error": {"message": "transient"}}).encode()
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    if status == 429:
+                        self.send_header("Retry-After", "1")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+        if last_user.startswith("MIDRST"):
+            Handler.MIDRST_COUNT += 1
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            chunk = {"choices": [{"delta": {"content": "partial"}}]}
+            self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.wfile.flush()
+            # RST (SO_LINGER 0): the client already parsed a data payload,
+            # so the retry gate must stay closed despite the network error.
+            try:
+                self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                           struct.pack("ii", 1, 0))
+                self.connection.close()
+            except OSError:
+                pass
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -263,6 +306,36 @@ def main():
                        capture_output=True, text=True, timeout=20)
     check(r.returncode == 0 and r.stdout.strip() == "echo: PLAIN piped",
           "ask: piped run unaffected (stdout contract intact)")
+
+    # ---- 4. 014 pre-stream retry: transient failures retried with backoff,
+    # stream-started failures never retried, env knob disables -------------
+    e4 = dict(e, MINI_AGENT_LOG=os.path.join(session_dir, "retry.log"))
+    r = subprocess.run([binary, "ask", "FLAKY429 retry me"], env=e4,
+                       capture_output=True, text=True, timeout=30)
+    check(r.returncode == 0 and r.stdout.strip() == "echo: FLAKY429 retry me",
+          "retry: 429x2 (Retry-After: 1) then success, full reply")
+    check(Handler.FLAKY_COUNTS.get("FLAKY429") == 3,
+          "retry: exactly 3 attempts for the 429x2 script")
+    rlog = open(os.path.join(session_dir, "retry.log")).read()
+    check(rlog.count("provider_retry") == 2 and "status=429" in rlog,
+          "retry: two metadata-only provider_retry log events")
+    check("retry me" not in rlog, "retry: log carries no message content")
+    r = subprocess.run([binary, "ask", "FLAKY503 retry me"], env=e4,
+                       capture_output=True, text=True, timeout=30)
+    check(r.returncode == 0 and r.stdout.strip() == "echo: FLAKY503 retry me",
+          "retry: 503x1 then success")
+    check(Handler.FLAKY_COUNTS.get("FLAKY503") == 2,
+          "retry: exactly 2 attempts for the 503x1 script")
+    r = subprocess.run([binary, "ask", "MIDRST broken stream"], env=e4,
+                       capture_output=True, text=True, timeout=30)
+    check(r.returncode == 1, "retry: mid-stream RST fails with exit 1")
+    check(Handler.MIDRST_COUNT == 1,
+          "retry: no retry once a payload was delivered (stream-started gate)")
+    e0 = dict(e4, MINI_AGENT_RETRIES="0")
+    r = subprocess.run([binary, "ask", "FLAKYOFF no retry"], env=e0,
+                       capture_output=True, text=True, timeout=30)
+    check(r.returncode == 1 and Handler.FLAKY_COUNTS.get("FLAKYOFF") == 1,
+          "retry: MINI_AGENT_RETRIES=0 restores fail-fast semantics")
 
     httpd.shutdown()
     subprocess.run(["rm", "-rf", session_dir], check=False)

@@ -37,7 +37,7 @@ CLI 旗标（--cwd/--tools/--mcp/--log-level…，仅本次进程）
 ```
 
 - TUI 内的修改直接写 config.json 或仅存于进程内（[§5](#5-tui-斜杠命令与按键) 逐项标注）；环境变量覆盖仍然优先于文件，所以被 env 盖住的字段在 TUI 里改了也可能"看不见效果"——排障时先 `env | grep MINI_AGENT`。
-- 少数键**只有 env 入口**（`MINI_AGENT_CONFIG`、`MINI_AGENT_SESSION_DIR`、`MINI_AGENT_TIMEOUT_SECONDS`），没有对应的文件字段或 CLI 旗标。
+- 少数键**只有 env 入口**（`MINI_AGENT_CONFIG`、`MINI_AGENT_SESSION_DIR`、`MINI_AGENT_TIMEOUT_SECONDS`、`MINI_AGENT_RETRIES`），没有对应的文件字段或 CLI 旗标。
 - **v7 命名档案（[§4.4](#44-多-provider-档案providers--active_provider)）**：LLM 配置只存于命名档案表（`providers`），`active_provider` 指定生效档案；运行时生效值 = 活动档案 + env 叠加（单向派生，无顶层字段）。`MINI_AGENT_MODEL=provider/model` 限定名与 CLI `--provider NAME` / `--model NAME`（[§2.2](#22-ask--一次性问答)）选档案，CLI `--model` 按上述链条最后生效且只改本次进程；三个既有 LLM env 的非空覆盖**恒赢**——env 覆盖生效期间 TUI 内切档案/改 key 只写盘、本进程生效值不变（`/config` 显示 `env override in effect`，选择时另有 `[warn]`；unset 后重启恢复）。
 
 ### 1.3 "持久化"与"仅本次会话"
@@ -178,6 +178,7 @@ mini-agent --help | --version
 | `MINI_AGENT_DEBUG` | 任意非空 / `2` | 未设置 | 旧开关：非空=debug，`2`=trace；被 `MINI_AGENT_LOG_LEVEL` 覆盖 |
 | `MINI_AGENT_SESSION_DIR` | 目录路径 | `$XDG_DATA_HOME/mini-agent/sessions`（回落 `~/.local/share/…`） | 会话存储根目录 |
 | `MINI_AGENT_TIMEOUT_SECONDS` | 正整数 | 120 | 单次 LLM 请求总超时秒数（连接超时固定 5s）；非法值忽略 |
+| `MINI_AGENT_RETRIES` | `0–5` | 2 | 流前重试次数（[设计 014](design/014-provider-retry.md)）：仅对尚未交付任何 SSE 内容的瞬时失败（网络错误/HTTP 408/429/500/502/503/504）生效，指数退避 1s/2s/…，尊重 `Retry-After`（>30s 放弃）；`0` 关闭；越界/非法值忽略 |
 
 `.env.example`（仓库根）是同一份清单的可复制模板；mini-agent **不会自动读取 `.env` 文件**，需自行 `source` 或导出。
 

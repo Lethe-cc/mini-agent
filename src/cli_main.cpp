@@ -184,6 +184,20 @@ void print_provider_error(const mini_agent::ProviderError& error) {
     std::cerr << prefix << error.what() << '\n';
 }
 
+// 014 (design 014 §5): provider config whose retry notification logs a
+// metadata-only event. The CLI logger is stable for the whole process
+// (no /log command here), so a reference capture is safe.
+mini_agent::ProviderConfig provider_with_retry_log(const mini_agent::AppConfig& config,
+                                                   mini_agent::Logger& logger) {
+    auto pc = config.to_provider();
+    pc.on_retry = [&logger](int attempt, int http_status, int wait_ms) {
+        logger.event("provider_retry", {{"attempt", std::to_string(attempt)},
+                                        {"status", std::to_string(http_status)},
+                                        {"wait_ms", std::to_string(wait_ms)}});
+    };
+    return pc;
+}
+
 // Apply repeatable --mcp NAME=SPEC flags over merged config (session-
 // scoped injection, design 008 section 5.3): upsert so a CLI name replaces
 // a same-named file entry. Returns false on the first invalid spec.
@@ -404,9 +418,9 @@ int cmd_ask(int argc, char** argv) {
     // stays false -- the request path is behaviorally unchanged.
     install_cli_sigint();
 
-    mini_agent::OpenAiProvider provider(config.to_provider());
     mini_agent::Logger logger(
         mini_agent::Logger::resolve_path(config).value_or(std::filesystem::path{}));
+    mini_agent::OpenAiProvider provider(provider_with_retry_log(config, logger));
     if (config.migrated_from_v1)
         logger.event("config_migrate", {{"from", "1"}, {"to", "2"},
                                         {"profiles", std::to_string(config.providers.size())}});
@@ -783,9 +797,9 @@ int cmd_run(int argc, char** argv) {
     // v5 CLI interrupt: the TUI branch above owns SIGINT itself (raw mode +
     // SIG_IGN); line mode installs the cooperative Ctrl-C handler here.
     install_cli_sigint();
-    mini_agent::OpenAiProvider provider(config.to_provider());
     mini_agent::Logger logger(
         mini_agent::Logger::resolve_path(config).value_or(std::filesystem::path{}));
+    mini_agent::OpenAiProvider provider(provider_with_retry_log(config, logger));
     if (config.migrated_from_v1)
         logger.event("config_migrate", {{"from", "1"}, {"to", "2"},
                                         {"profiles", std::to_string(config.providers.size())}});

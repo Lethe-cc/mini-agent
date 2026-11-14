@@ -1671,6 +1671,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             {"builtin", tool_registry->empty() ? "no" : "yes"}});
 
     auto drain_tool_events = [&] {
+        // 014: provider retries are metadata-only log events (no history
+        // row -- the streaming state word already covers the wait).
+        for (const auto& retry : bridge.drain_retry_events()) {
+            logger->event("provider_retry", {{"attempt", std::to_string(retry.attempt)},
+                                             {"status", std::to_string(retry.http_status)},
+                                             {"wait_ms", std::to_string(retry.wait_ms)}});
+        }
         for (const auto& round : bridge.drain_tool_events()) {
             screen.commit(tool_activity_line(round.tool_name, round.arguments_json, round.executed,
                                              round.is_error, round.elapsed_ms, round.result_bytes));
@@ -1752,9 +1759,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         // Intentional snapshot: config mutates on the main thread while the
         // worker runs (/login, /model); the copy is the thread boundary.
         const AppConfig turn_config = config; // NOLINT(performance-unnecessary-copy-initialization)
+        // 014: retry events log through the CURRENT logger. The worker
+        // parks them in the bridge (data, not a logger pointer): /log may
+        // reassign `logger` mid-turn, and only the main thread touches it.
         worker = std::thread([&, turn_config, user_msg = std::move(user)]() mutable {
             auto provider_config = turn_config.to_provider();
             provider_config.reasoning_live = &reasoning_live; // v4.11 panel
+            // 014 (design 014 §5): metadata-only retry notification; never
+            // on_delta (reply text/history stay free of retry noise).
+            provider_config.on_retry = [&bridge](int attempt, int http_status, int wait_ms) {
+                bridge.push_retry_event(RetryEvent{attempt, http_status, wait_ms});
+            };
             OpenAiProvider provider(std::move(provider_config));
             // v4.17: the old second deep copy (`Chat outgoing`) was dead
             // code -- run_turn builds and commits its own `turn_chat`

@@ -60,6 +60,18 @@ struct ProviderConfig {
     // the post-turn status). The owner (main thread) resets it per turn;
     // lifetime must cover the completion call.
     std::atomic<bool>* reasoning_live = nullptr;
+    // 014: pre-stream retry budget for transient failures (network errors,
+    // HTTP 408/429/500/502/503/504). 0 disables; the implementation clamps
+    // to 0..5. Retries fire ONLY before any SSE data payload was parsed
+    // (nothing delivered to the caller yet), so streaming/abort/rollback
+    // semantics are untouched. Env knob: MINI_AGENT_RETRIES.
+    int max_retries = 2;
+    // 014: optional retry notification (attempt is 1-based, http_status is
+    // 0 for network errors, wait_ms is the backoff about to be slept).
+    // Called synchronously on the calling thread; must not throw. Wired
+    // to metadata-only logging by TUI/CLI -- never to on_delta (the reply
+    // text and session history must stay free of retry noise).
+    std::function<void(int attempt, int http_status, int wait_ms)> on_retry;
 };
 
 // Abort hook: called from the streaming callback; return true to stop the
@@ -211,6 +223,20 @@ std::optional<std::vector<ModelCapabilities>> parse_models_meta_json(std::string
 // Extract the limit from a gateway's probe rejection message. The text is
 // not an API contract, so unknown shapes yield Unknown -- never a guess.
 ProbeOutcome parse_context_probe_error(std::string_view body);
+
+// 014 (design 014 §4): is this failure worth a pre-stream retry? Network
+// errors (any curl failure short of cancellation) and the transient HTTP
+// statuses 408/429/500/502/503/504 qualify; Protocol/Cancelled and all
+// other statuses (401/403 key rejection, 400 bad request, ...) never do.
+// Pure, test-visible.
+bool retryable_provider_error(ProviderErrorKind kind, int http_status);
+
+// 014 (design 014 §4): backoff for retry_index (0-based): 1s << index,
+// raised to Retry-After seconds when the server sent one. Returns -1 when
+// Retry-After exceeds 30 s (the server explicitly refuses a short wait --
+// fail instead of hanging). retry_after_s <= 0 means "header absent".
+// Pure, test-visible.
+int retry_wait_ms(int retry_index, int retry_after_s);
 
 // OpenAI-compatible Chat Completions (POST {base_url}/chat/completions,
 // stream=true, SSE). Protocol shape is a MUST-VERIFY fact against the
