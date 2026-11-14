@@ -69,7 +69,7 @@ cmake --install build/linux-gcc-debug        # 默认前缀 ~/.local → ~/.loca
 
 配置（首次运行免环境变量，TUI 内 `/provider <url>` → `/login <key>` → `/model <name>` 分批录入，0600 落盘）或直接设 `MINI_AGENT_BASE_URL` / `MINI_AGENT_API_KEY` / `MINI_AGENT_MODEL`。
 
-- 架构见 [docs/architecture.md](docs/architecture.md)；设计与验证记录见 [docs/design/README.md](docs/design/README.md)（业务功能为 007–015）；决策见 [docs/decisions/README.md](docs/decisions/README.md)（ADR 001–009）。
+- 架构见 [docs/architecture.md](docs/architecture.md)；设计与验证记录见 [docs/design/README.md](docs/design/README.md)（业务功能为 007–016）；决策见 [docs/decisions/README.md](docs/decisions/README.md)（ADR 001–009）。
 - 文档中所有示意图统一使用 PlantUML（仓库离线不渲染，可贴在线服务器或本地 `plantuml` 查看）。
 
 ### 质量门禁（模板工具层）
@@ -151,7 +151,7 @@ python scripts/check.py --require-initialized
 | [MCP 与工具使用指南](docs/mcp-usage.md) | 工具层使用者文档：MCP server 配置、审批交互、`--mcp`/`mcp list`、安全边界 |
 | [语言配置](docs/languages/README.md) | C++ 优先的语言规范、工具链与起步代码 |
 | [参考资料](docs/references/README.md) | 资料选择、版本与使用边界 |
-| [设计索引](docs/design/README.md) | 草案至最终设计的生命周期（业务功能为 007–015） |
+| [设计索引](docs/design/README.md) | 草案至最终设计的生命周期（业务功能为 007–016） |
 | [决策索引](docs/decisions/README.md) | 重要设计取舍（ADR 001–009） |
 | [任务模板](templates/task.md) | 范围、参考、验收标准 |
 | [设计模板](templates/design.md) | 最终实现与验证记录 |

@@ -721,8 +721,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     const auto banner_model = config.current.model.empty() ? std::string("(no model)") : config.current.model;
     // v4.15: tag the id with how it was chosen (temp | resumed | new).
     const char* session_tag = temp_mode ? "temp" : (options.resumed ? "resumed" : "new");
-    screen.commit("mini-agent · model=" + banner_model + " · session=" + active_session_id + " (" +
-                  session_tag + ")");
+    // 0.8.0: the banner carries the build version (MINI_AGENT_VERSION is
+    // defined for agent_core by CMake; fallback keeps foreign builds sane).
+#ifndef MINI_AGENT_VERSION
+#define MINI_AGENT_VERSION "0.0.0-dev"
+#endif
+    screen.commit("mini-agent v" MINI_AGENT_VERSION " · model=" + banner_model +
+                  " · session=" + active_session_id + " (" + session_tag + ")");
     if (!config.complete()) {
         // Names only the next missing step: the three commands save
         // independently, so they may be supplied one per sitting.

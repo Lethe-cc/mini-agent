@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.23)
-project(mini-agent VERSION 0.1.0 LANGUAGES C CXX)
+project(mini-agent VERSION 0.8.0 LANGUAGES C CXX)
 
 # Default `cmake --install` prefix: ~/.local, so the binary lands in
 # ~/.local/bin (commonly already on PATH). An explicit -DCMAKE_INSTALL_PREFIX
@@ -41,6 +41,32 @@ endfunction()
 
 find_package(CURL REQUIRED)
 
+# Build metadata for `mini-agent version` and the startup banners:
+# short commit (+ "-dirty" when the tree has uncommitted changes) and a
+# UTC configure-time stamp. Graceful fallbacks outside a git checkout
+# (source tarballs); never a hard requirement.
+find_package(Git QUIET)
+set(MINI_AGENT_COMMIT "unknown")
+if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE MINI_AGENT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(NOT MINI_AGENT_COMMIT)
+        set(MINI_AGENT_COMMIT "unknown")
+    endif()
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" status --porcelain
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE MINI_AGENT_DIRTY OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(MINI_AGENT_DIRTY)
+        string(APPEND MINI_AGENT_COMMIT "-dirty")
+    endif()
+endif()
+string(TIMESTAMP MINI_AGENT_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
+
 add_library(agent_core STATIC
     src/chat.cpp
     src/config.cpp
@@ -69,11 +95,16 @@ target_include_directories(agent_core PUBLIC
 )
 target_compile_features(agent_core PUBLIC cxx_std_17)
 target_link_libraries(agent_core PUBLIC CURL::libcurl)
+# The TUI banner (tui.cpp, part of agent_core) shows the version too.
+target_compile_definitions(agent_core PRIVATE MINI_AGENT_VERSION="${PROJECT_VERSION}")
 starter_options(agent_core)
 
 add_executable(mini-agent src/cli_main.cpp)
 target_link_libraries(mini-agent PRIVATE agent_core)
-target_compile_definitions(mini-agent PRIVATE MINI_AGENT_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(mini-agent PRIVATE
+    MINI_AGENT_VERSION="${PROJECT_VERSION}"
+    MINI_AGENT_COMMIT="${MINI_AGENT_COMMIT}"
+    MINI_AGENT_BUILD_TIME="${MINI_AGENT_BUILD_TIME}")
 starter_options(mini-agent)
 
 # `agent_core` is an internal static library (not a public API), so only the

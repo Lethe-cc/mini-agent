@@ -31,6 +31,14 @@
 #ifndef MINI_AGENT_VERSION
 #define MINI_AGENT_VERSION "0.0.0-dev"
 #endif
+// Build metadata (CMake configure time); fallbacks keep non-CMake builds
+// and source tarballs working.
+#ifndef MINI_AGENT_COMMIT
+#define MINI_AGENT_COMMIT "unknown"
+#endif
+#ifndef MINI_AGENT_BUILD_TIME
+#define MINI_AGENT_BUILD_TIME "unknown"
+#endif
 
 namespace {
 
@@ -122,6 +130,7 @@ void print_usage(std::ostream& out) {
            "      NAME=https://host/mcp          Streamable HTTP\n"
            "      NAME=cmd arg1 arg2             stdio subprocess\n"
            "      NAME={json entry}              full control (env, bearer)\n"
+           "  mini-agent version             version + commit + build time\n"
            "  mini-agent --help | --version  no network, no key needed\n"
            "\nenvironment:\n"
            "  MINI_AGENT_BASE_URL  e.g. https://api.openai.com/v1\n"
@@ -815,7 +824,8 @@ int cmd_run(int argc, char** argv) {
                                         {"profiles", std::to_string(config.providers.size())}});
     logger.event("session_open",
                  {{"mode", "line"}, {"id", session.meta.id}, {"model", config.current.model}});
-    std::cout << "session " << session.meta.id << " (model " << config.current.model << ")\n"
+    std::cout << "mini-agent v" MINI_AGENT_VERSION " · session " << session.meta.id
+              << " (model " << config.current.model << ")\n"
               << "type a line to chat; /exit or EOF (Ctrl-D) exits\n";
     std::string line;
     for (;;) {
@@ -1067,6 +1077,14 @@ int main(int argc, char** argv) {
     }
     if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
         std::cout << MINI_AGENT_VERSION << '\n';
+        return kOk;
+    }
+    if (argc >= 2 && std::strcmp(argv[1], "version") == 0) {
+        // Detailed build identity; like --version, no env/network/key.
+        // --version stays version-only for the script contract.
+        std::cout << "mini-agent " MINI_AGENT_VERSION "\n"
+                  << "commit " MINI_AGENT_COMMIT "\n"
+                  << "built " MINI_AGENT_BUILD_TIME "\n";
         return kOk;
     }
     curl_global_init(CURL_GLOBAL_DEFAULT);

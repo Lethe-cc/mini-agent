@@ -1733,7 +1733,7 @@ void test_history_styling() {
     check(tui::style_history_line("[tool] x [error 5ms · 0 B]", true).find("\x1b[33m") == 0,
           "error tool row yellow");
     // Identity rows bold, informational echoes dim, replies left plain.
-    check(tui::style_history_line("mini-agent · model=m · session=s", true).find("\x1b[1mm") == 0,
+    check(tui::style_history_line("mini-agent v0.8.0 · model=m · session=s", true).find("\x1b[1mm") == 0,
           "banner bold");
     check(tui::style_history_line("You: hello", true).find("\x1b[1mYou: hello\x1b[0m") == 0,
           "user echo bold");

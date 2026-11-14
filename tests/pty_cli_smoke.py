@@ -407,6 +407,25 @@ def main():
           "lifecycle: prune removes only the old unlocked session")
     subprocess.run(["rm", "-rf", lc_dir], check=False)
 
+    # ---- 6. version identity: banners + version subcommand ----------------
+    r = subprocess.run([binary, "version"], env=e, capture_output=True,
+                       text=True, timeout=10)
+    lines = r.stdout.splitlines()
+    check(r.returncode == 0 and len(lines) == 3 and
+          re.fullmatch(r"mini-agent \d+\.\d+\.\d+", lines[0]) is not None and
+          lines[1].startswith("commit ") and len(lines[1]) > len("commit ") and
+          lines[2].startswith("built ") and len(lines[2]) > len("built "),
+          "version: prints version + commit + build time")
+    r = subprocess.run([binary, "--version"], env=e, capture_output=True,
+                       text=True, timeout=10)
+    check(r.returncode == 0 and
+          re.fullmatch(r"\d+\.\d+\.\d+", r.stdout.strip()) is not None,
+          "version: --version stays version-only (script contract)")
+    r = subprocess.run([binary, "run", "--new"], env=e,
+                       input="/exit\n", capture_output=True, text=True, timeout=20)
+    check("mini-agent v" in r.stdout and "session" in r.stdout,
+          "version: line-mode banner carries the version")
+
     httpd.shutdown()
     subprocess.run(["rm", "-rf", session_dir], check=False)
     print(f"\n{'ALL PASS' if failures == 0 else str(failures) + ' FAILURE(S)'}")

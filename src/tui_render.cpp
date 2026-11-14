@@ -307,8 +307,8 @@ std::string style_history_line(std::string_view line, bool colors) {
         return tint(colors, "2", line);
     if (starts_with(line, "[hint]"))
         return tint(colors, "36", line);
-    if (starts_with(line, "mini-agent · ") || starts_with(line, "You: "))
-        return tint(colors, "1", line); // bold: identity rows
+    if (starts_with(line, "mini-agent v") || starts_with(line, "You: "))
+        return tint(colors, "1", line); // bold: identity rows (versioned banner)
     if (starts_with(line, "config "))
         return tint(colors, line.find("· ready") != std::string_view::npos ? "32" : "2", line);
     // Everything below is informational echo / legend text and should recede.

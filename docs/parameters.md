@@ -1,6 +1,6 @@
 # mini-agent 参数使用大纲
 
-> **文档性质**：使用者参数参考（大纲式索引）。所有条目按当前源码核对（v0.1.0，v1–v6 命令面）；日常快速查看以 `mini-agent --help` 为准，本文补充语义、默认值、持久化范围与出处。
+> **文档性质**：使用者参数参考（大纲式索引）。所有条目按当前源码核对（v0.8.0，v1–v7 + 014–016 命令面）；日常快速查看以 `mini-agent --help` 为准，本文补充语义、默认值、持久化范围与出处。
 >
 > **来源**：[cli_main.cpp](../src/cli_main.cpp)、[config.hpp](../include/mini_agent/config.hpp)、[config.cpp](../src/config.cpp)、[tui.cpp](../src/tui.cpp)、[tools.cpp](../src/tools.cpp)、[session.cpp](../src/session.cpp)、[log.cpp](../src/log.cpp)。设计与取舍见文末[参考](#7-参考)。
 
@@ -66,10 +66,11 @@ mini-agent session rm ID|前缀    # 删除会话（含锁文件）
 mini-agent session export ID [--format md|json] [--out PATH]   # 导出（016）
 mini-agent session prune --older-than DAYS [--dry-run]         # 清理（016）
 mini-agent mcp list [--mcp …]    # 生效 MCP server 清单（脱敏；无需 LLM 配好）
+mini-agent version               # 版本 + commit + 构建时间
 mini-agent --help | --version
 ```
 
-`--help`/`--version` 在 curl 初始化之前处理：零网络、不读配置。版本号来自 CMake 工程版本（当前 0.1.0）。
+`--help`/`--version`/`version` 在 curl 初始化之前处理：零网络、不读配置。版本号来自 CMake 工程版本（当前 0.8.0）；`--version` 只输出版本号（脚本契约），`version` 额外输出构建 commit（短哈希，工作区有未提交改动时带 `-dirty`）与 UTC 构建时间（configure 时刻，源码包构建无 git 时为 `unknown`）。TUI/line-mode 启动横幅首段也带版本号（`mini-agent v0.8.0 · …`）。
 
 ### 2.2 `ask` — 一次性问答
 

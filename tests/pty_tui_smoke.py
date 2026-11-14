@@ -305,7 +305,8 @@ def main():
             failures.append(label)
 
     splash = read_all(fd, 1.0)
-    expect("mini-agent · model=smoke" in splash, "splash shows model/session")
+    expect("mini-agent v" in splash and "· model=smoke" in splash,
+           "splash shows version/model/session")
     # Connection marker (2026-11-02 request): the `>` prompt itself carries the
     # provider state as glyph + colour. Fully configured from the environment
     # but never probed in this process, so it must be the yellow `?`
@@ -313,7 +314,7 @@ def main():
     expect("\x1b[33m?\x1b[0m" in splash, "startup prompt marker is the yellow unverified state")
     # History colouring (2026-11-04 readability request): tag rows are tinted
     # whole-line, so the printable text stays contiguous inside the span.
-    expect("\x1b[1mmini-agent · model=smoke" in splash,
+    expect("\x1b[1mmini-agent v" in splash,
            "banner row is bold and text stays contiguous")
     expect("\x1b[33m[auth] login unverified" in splash,
            "unverified auth row is yellow")
@@ -789,7 +790,7 @@ def main():
         return out
 
     bare = bare_session(b"/session new\r")
-    expect("mini-agent · model=" in strip_csi(bare),
+    expect("mini-agent v" in strip_csi(bare),
            "bare: mini-agent with no subcommand opens the TUI")
     expect("[ok] new session" in strip_csi(bare),
            "bare: /session new forks a fresh session in place")
