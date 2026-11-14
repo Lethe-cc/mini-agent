@@ -64,6 +64,8 @@ jobs:
         run: python tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent
       - name: CLI pty smoke
         run: python tests/pty_cli_smoke.py ./build/linux-gcc-debug/mini-agent
+      - name: Cold-start budget (success criterion 1)
+        run: python tools/cold_start_check.py ./build/linux-gcc-debug/mini-agent
 
   # Static analysis + sanitizers on the Clang debug preset (same gate the
   # design docs record locally: tidy exit 0, ASan/UBSan ctest clean).
