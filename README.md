@@ -17,10 +17,13 @@
 | v3 | 编码能力：文件编辑五工具 + session 级 workspace 边界、git 工具（只读自由、add/commit 随审批档、**永不 push**）、unified diff 审批显示、默认 system prompt、CLI `--tools allowlist` 档 | [009](docs/design/009-coding-v3.md) |
 | v4 | 模型元数据：SSE usage 采集与跨轮汇总、context window 估算、TUI 状态栏 ctx%/out/reasoning、`/context` `/reasoning`；TUI/CLI 侧另有工作区侧栏（目录树 + 修改文件）、Ctrl-F 文件选择器与 `p` 预览、底部系统信息行、`run` 复用最近 session（`--new`/`--temp`）、`session rm` 前缀匹配、bare `mini-agent` 直开 TUI | [010](docs/design/010-model-metadata.md) + [007 §v4.9–v4.16 修订](docs/design/007-agent-v1.md) |
 | v5 | 文件内容预览（`preview_file`，走 UI 通道不入模型上下文）、编辑→diff→渲染一体化 transcript 回显、手写零依赖语法高亮、CLI TTY Ctrl-C 协作取消 | [011](docs/design/011-preview-tui-integration.md) + [007 §v5 修订](docs/design/007-agent-v1.md) |
+| v6 | 多 provider 登录：命名档案表、`/provider add\|rm\|list`、`/login <name>`、`/models` 聚合菜单、`/model <provider>/<name>` 限定名切换、per-profile 鉴权探针 | [012](docs/design/012-multi-provider.md) |
+| v7 | provider 强制命名 + config schema v2：`providers`+`active_provider` 唯一 LLM 持久化面、运行时 `current` 单向派生（env 恒赢）、自动 `default` 档案、v1 一次性迁移 | [013](docs/design/013-named-providers.md) + [ADR 009](docs/decisions/009-named-providers-schema-v2.md) |
+| 韧性 | 流前重试（网络错误/429/5xx，指数退避 + Retry-After，`MINI_AGENT_RETRIES`）；上下文溢出提示 + 手动 `/compact` 历史压缩 | [014](docs/design/014-provider-retry.md)、[015](docs/design/015-context-compact.md) |
 
 其中 v2–v5 均已实现但**待人工评审**；ADR 005（MCP 传输抽象）与 ADR 006（工具审批策略）状态仍为**提议**，实现先于批复落地，取舍见 [决策索引](docs/decisions/README.md)。
 
-工具与 MCP 的配置、审批交互、`--mcp`/`mcp list` 与安全边界见 [MCP 与工具使用指南](docs/mcp-usage.md)（该文档覆盖 v2 工具层）；CLI 旗标、环境变量、config.json 字段与 TUI 命令的完整参数说明见 [参数使用大纲](docs/parameters.md)（快速查看仍以 `mini-agent --help` 为准）。
+日常使用（首次配置、切 provider、审批、会话管理、/compact）见 [日常使用指南](docs/usage.md)；工具与 MCP 的配置、审批交互、`--mcp`/`mcp list` 与安全边界见 [MCP 与工具使用指南](docs/mcp-usage.md)；CLI 旗标、环境变量、config.json 字段与 TUI 命令的完整参数说明见 [参数使用大纲](docs/parameters.md)（快速查看仍以 `mini-agent --help` 为准）。
 
 ```plantuml
 @startuml mini-agent-overview
@@ -66,7 +69,7 @@ cmake --install build/linux-gcc-debug        # 默认前缀 ~/.local → ~/.loca
 
 配置（首次运行免环境变量，TUI 内 `/provider <url>` → `/login <key>` → `/model <name>` 分批录入，0600 落盘）或直接设 `MINI_AGENT_BASE_URL` / `MINI_AGENT_API_KEY` / `MINI_AGENT_MODEL`。
 
-- 架构见 [docs/architecture.md](docs/architecture.md)；设计与验证记录见 [docs/design/README.md](docs/design/README.md)（业务功能为 007–011）；决策见 [docs/decisions/README.md](docs/decisions/README.md)（ADR 001–008）。
+- 架构见 [docs/architecture.md](docs/architecture.md)；设计与验证记录见 [docs/design/README.md](docs/design/README.md)（业务功能为 007–015）；决策见 [docs/decisions/README.md](docs/decisions/README.md)（ADR 001–009）。
 - 文档中所有示意图统一使用 PlantUML（仓库离线不渲染，可贴在线服务器或本地 `plantuml` 查看）。
 
 ### 质量门禁（模板工具层）
@@ -139,7 +142,8 @@ python scripts/check.py --require-initialized
 
 | 入口 | 用途 |
 | --- | --- |
-| [完整使用手册](docs/user-guide.md) | 从创建项目到验证、设计交付和发布的逐步操作 |
+| [完整使用手册](docs/user-guide.md) | 从创建项目到验证、设计交付和发布的逐步操作（模板层） |
+| [日常使用指南](docs/usage.md) | mini-agent 本身的任务导向手册：首次配置、provider 切换、审批、会话、/compact、排障 |
 | [AGENTS.md](AGENTS.md) | AI 统一工作规则 |
 | [项目背景](docs/project-context.md) | 需求、范围、约束、成功标准与逐日项目状态 |
 | [架构总览](docs/architecture.md) | 系统边界、模块依赖方向、TUI 帧模型、数据流 |
@@ -147,8 +151,8 @@ python scripts/check.py --require-initialized
 | [MCP 与工具使用指南](docs/mcp-usage.md) | 工具层使用者文档：MCP server 配置、审批交互、`--mcp`/`mcp list`、安全边界 |
 | [语言配置](docs/languages/README.md) | C++ 优先的语言规范、工具链与起步代码 |
 | [参考资料](docs/references/README.md) | 资料选择、版本与使用边界 |
-| [设计索引](docs/design/README.md) | 草案至最终设计的生命周期（业务功能为 007–011） |
-| [决策索引](docs/decisions/README.md) | 重要设计取舍（ADR 001–008） |
+| [设计索引](docs/design/README.md) | 草案至最终设计的生命周期（业务功能为 007–015） |
+| [决策索引](docs/decisions/README.md) | 重要设计取舍（ADR 001–009） |
 | [任务模板](templates/task.md) | 范围、参考、验收标准 |
 | [设计模板](templates/design.md) | 最终实现与验证记录 |
 | [模板维护](docs/template-maintenance.md) | 升级、发布与安全注意事项 |
@@ -182,20 +186,21 @@ python scripts/check.py --require-initialized
 
 ### mini-agent 业务验证
 
-2026-11-10 在 Ubuntu 24.04.5 LTS 开发容器内实测（GCC 13.3.0、Clang 18.1.3、CMake 3.28.3、libcurl 8.5.0；容器无 Ninja，故用 `-G "Unix Makefiles"` 代替 preset 执行）：
+2026-11-14 本地实测（Linux 开发容器，GCC/Clang，Ninja preset）：
 
-| preset | configure | build | CTest |
-| --- | --- | --- | --- |
-| linux-gcc-debug | ✅ 找到 CURL 8.5.0 | ✅ 退出 0 | ✅ 3/3（`agent.core`、`mcp.client`、`starter.project_name`） |
-| linux-clang-debug | ✅ | ✅ 退出 0 | ✅ 3/3 |
+| 门禁 | 结果 |
+| --- | --- |
+| 四 preset（gcc/clang × debug/release）configure + build + CTest | ✅ 各 3/3（`agent.core`、`mcp.client`、`starter.project_name`） |
+| clang-tidy + ASan/UBSan（`cpp_check.py --preset linux-clang-debug --tidy --sanitizers`） | ✅ 退出 0，ctest 3/3 |
+| `tests/pty_tui_smoke.py`（真 pty + mock SSE） | ✅ 171 PASS / 0 FAIL（含 014 重试、015 compact、session-allow 场景；历史三项既有失败已修复，见 007 v7.1 修订） |
+| `tests/pty_cli_smoke.py` | ✅ ALL PASS（含流前重试 flaky 场景） |
+| 冷启动预算（`tools/cold_start_check.py`，成功标准 #1） | ✅ 中位数 ~5ms（预算 100ms） |
 
-已满足成功标准第 5 条的"Linux GCC 与 Clang 至少各验证一种 preset"。**两个 Release preset 未在本机运行**（`linux-gcc-release`、`linux-clang-release` 交由项目 CI 覆盖）。
+各版本的完整验证记录见 [设计索引](docs/design/README.md) 中 007–015 各自的验证章节；本表只记录本次 README 更新时点的证据。
 
-本轮**未验证**：clang-tidy `-Werror`、Sanitizers（ASan/UBSan）正路径、`tests/pty_*_smoke.py` 终端端到端、mock OpenAI/MCP server 联调、`cmake --install` 落盘。各版本的完整验证记录（preset 组合、tidy、ASan、PTY 断言）见 [设计索引](docs/design/README.md) 中 007–011 各自的验证章节；本表只记录本次 README 更新时点的构建证据。
+已知非阻塞告警（不影响退出码，CI 默认未启用 `-Werror`）：`src/provider_openai.cpp` 的 `-Wformat-truncation`（debug-only 时间戳格式化，GCC 对 `tm_year+1900` 的保守上界推断）与 `tests/cpp/mcp_test.cpp` 的 `-Wpessimizing-move`（测试中多余的 `std::move`）。
 
-已知非阻塞告警（不影响上述退出码，CI 默认未启用 `-Werror`）：`src/provider_openai.cpp:117` 的 `-Wformat-truncation`（debug-only 时间戳格式化，GCC 对 `tm_year+1900` 的保守上界推断）与 `tests/cpp/mcp_test.cpp:375,395` 的 `-Wpessimizing-move`（测试中多余的 `std::move`）。
-
-项目 CI（[`.github/workflows/project.yml`](.github/workflows/project.yml)）在 `ubuntu-24.04` 上跑 GCC/Clang × Debug/Release 四组合。它此前**持续失败**于 `find_package(CURL REQUIRED)`——hosted 镜像自带 curl CLI 但不含开发头文件；本轮已补 `sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev` 步骤。**该修复尚未推送，远端 CI 在推送并转绿前仍是红灯**，不能据本表断言 CI 通过。
+项目 CI（[`.github/workflows/project.yml`](.github/workflows/project.yml)）：四 preset 矩阵（`cpp`）+ pty 冒烟与冷启动预算（`smoke`）+ tidy/ASan（`quality`），均在 `ubuntu-24.04`。libcurl 开发头文件安装步骤已补齐；**远端 CI 结果以推送后实际运行为准**（推送需人工，ADR 008），不能据本表断言远端通过。
 
 ### 模板工具层验证（历史记录）
 
