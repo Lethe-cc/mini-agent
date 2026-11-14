@@ -358,6 +358,7 @@ Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定�
 | `/debug` | `on \| all \| off` | 仅会话 | `/log debug/trace/info` 的别名 |
 | `/sidebar` | `on \| off` | 仅会话 | 文件树 + git 变更侧栏 |
 | `/sysinfo` | `on \| off` | 仅会话 | user@host · cwd · 时钟信息行 |
+| `/version` | — | — | 构建身份三行：版本 · commit（未提交改动带 `-dirty`）· UTC 构建时间；与 CLI `version` 子命令一致，任何状态可用 |
 | `/help` | — | — | 命令摘要；提示符含义：`?` 未配置、`~` 探测中、`>` 就绪、`!` key 被拒、`x` 不可达 |
 
 ## 6. 内置工具参数速查

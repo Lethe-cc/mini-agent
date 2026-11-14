@@ -726,6 +726,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
 #ifndef MINI_AGENT_VERSION
 #define MINI_AGENT_VERSION "0.0.0-dev"
 #endif
+#ifndef MINI_AGENT_COMMIT
+#define MINI_AGENT_COMMIT "unknown"
+#endif
+#ifndef MINI_AGENT_BUILD_TIME
+#define MINI_AGENT_BUILD_TIME "unknown"
+#endif
     screen.commit("mini-agent v" MINI_AGENT_VERSION " · model=" + banner_model +
                   " · session=" + active_session_id + " (" + session_tag + ")");
     if (!config.complete()) {
@@ -1487,6 +1493,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 "          /log info|debug|trace (capture level; /debug on|all|off alias)");
             screen.commit(
                 "          /config · /sessions · /session <id|prefix>|new · /sysinfo on|off");
+            screen.commit("          /version (build identity: version · commit · built)");
             screen.commit("          /sidebar on|off (tree + changed files)");
             screen.commit("          /preview <path> (show a file; .md renders)");
             screen.commit("          /exit");
@@ -1896,6 +1903,14 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             } else {
                 screen.commit("[error] /sysinfo expects on|off");
             }
+            return true;
+        }
+        if (line.rfind("/version", 0) == 0) {
+            // 0.8.0: runtime build identity, same three lines as the CLI
+            // `version` subcommand. Read-only; works in any state.
+            screen.commit("mini-agent v" MINI_AGENT_VERSION);
+            screen.commit("commit " MINI_AGENT_COMMIT);
+            screen.commit("built " MINI_AGENT_BUILD_TIME);
             return true;
         }
         if (line == "/sessions") {

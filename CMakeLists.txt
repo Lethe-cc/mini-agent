@@ -95,8 +95,12 @@ target_include_directories(agent_core PUBLIC
 )
 target_compile_features(agent_core PUBLIC cxx_std_17)
 target_link_libraries(agent_core PUBLIC CURL::libcurl)
-# The TUI banner (tui.cpp, part of agent_core) shows the version too.
-target_compile_definitions(agent_core PRIVATE MINI_AGENT_VERSION="${PROJECT_VERSION}")
+# The TUI banner (tui.cpp, part of agent_core) shows the version too,
+# and /version reports the same build identity as the CLI subcommand.
+target_compile_definitions(agent_core PRIVATE
+    MINI_AGENT_VERSION="${PROJECT_VERSION}"
+    MINI_AGENT_COMMIT="${MINI_AGENT_COMMIT}"
+    MINI_AGENT_BUILD_TIME="${MINI_AGENT_BUILD_TIME}")
 starter_options(agent_core)
 
 add_executable(mini-agent src/cli_main.cpp)

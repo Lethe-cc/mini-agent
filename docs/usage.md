@@ -12,7 +12,7 @@ cmake --install build/linux-gcc-debug     # ~/.local/bin/mini-agent
 - `mini-agent`（裸命令）或 `mini-agent run`：进 TUI；`run` 默认**复用最近会话**（`--new` 新建、`--temp` 临时不落盘、`--session <id|前缀>` 显式恢复）。
 - `mini-agent ask "问题"`：一次性问答，适合脚本（stdout 只有回复；失败非零退出码：1 运行时 / 2 配置）。
 - 非 TTY 的 `run` 自动退化为 line-mode（逐行对话，脚本可用）。
-- 启动横幅首段带版本号；`mini-agent version` 打印版本 + 构建 commit + 构建时间（`--version` 只输出版本号，供脚本用）。
+- 启动横幅首段带版本号；`mini-agent version` 打印版本 + 构建 commit + 构建时间（`--version` 只输出版本号，供脚本用）；TUI 内随时 `/version` 看同样信息。
 
 ## 2. 首次配置（免环境变量）
 

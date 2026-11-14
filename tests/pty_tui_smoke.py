@@ -356,6 +356,10 @@ def main():
     expect("/sessions" in slash, "slash /help lists commands")
     expect("prompt: ?=unconfigured/unverified" in strip_csi(slash),
            "/help documents the prompt marker legend")
+    os.write(fd, b"/version\r")
+    ver_out = strip_csi(read_all(fd, 1.0))
+    expect("mini-agent v" in ver_out and "commit " in ver_out and "built " in ver_out,
+           "/version reports version + commit + build time")
 
     # Typing "/" surfaces the Tab-completion hint as a vertical list: a
     # header row, then one row per match (2026-11-01 follow-up).
