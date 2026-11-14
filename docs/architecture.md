@@ -144,7 +144,7 @@ stop
 ## 错误处理与安全边界
 
 - 失败轮回滚：`ProviderError`（网络/HTTP/协议）只渲染进历史区，Chat 与 session 文件保持上一轮状态；中断轮同样不落盘。
-- 退出码：`ask` 0 成功 / 1 运行时错误 / 2 配置错误；`--help`/`--version` 不触网、不读密钥。
+- 退出码：`ask` 0 成功 / 1 运行时错误 / 2 配置错误；`--help`/`--version`/`version` 不触网、不读密钥。构建身份：CMake configure 时嵌入版本/短 commit（未提交改动带 `-dirty`）/UTC 构建时间；TUI 与 line-mode 启动横幅首段带版本，TUI `/version` 与 CLI `version` 输出同一三行信息（0.8.0 起）。
 - 无内置权限系统：进程以其用户权限运行文件/网络/凭据访问；需要边界时自行容器化或最小权限运行。
 - 供应链：vendored 第三方（nlohmann/md4c/spdlog）附许可证与来源记录于 `third_party/`；新增依赖前核实许可证并记 ADR。
 
@@ -154,7 +154,7 @@ stop
 | --- | --- | --- |
 | 工具调用 (function calling) | **v2 已实现**（2026-11-04，待人工评审） | [008](design/008-mcp-tools.md)：run_turn 多轮循环 + ToolRegistry + 内置 run_bash（默认逐次人审，ADR 006 提议）+ MCP 客户端（传输抽象 + stdio/Streamable HTTP，ADR 005 提议） |
 | 编码能力（文件编辑/工作区/diff 审批/git 本地提交/system prompt） | **v3 已实现**（2026-11-05，待人工评审） | [009](design/009-coding-v3.md)：FileRuntime 五工具 + 软性 workspace 边界（ADR 007）+ 自写 unified diff 审批块 + GitRuntime（无 push，ADR 008 已接受）+ 默认 system prompt + CLI `--cwd`/`--tools allowlist` |
-| 上下文压缩 | 不实现 | 历史在内存重放，可插 summarize |
+| 上下文压缩 | **手动 /compact 已实现**（2026-11-14，[015](design/015-context-compact.md)，待人工评审）；自动压缩仍不做 | 有界转录摘要替换历史（保留 System）；溢出错误窄模式提示；自动阈值触发留作后续 |
 | 多 Agent / 编排 | 不实现 | `run_turn(Chat&, Provider&)` 参数注入、无全局单例 |
 | 跨折行光标移动、鼠标、语法高亮 | 不实现（v2） | 帧模型行预算与 diff 结构已就位 |
 | 真滚动窗口（全文档 diff） | 不实现（v2） | 需整屏重放策略，见 007 §5.6 已知局限 |

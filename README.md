@@ -192,11 +192,11 @@ python scripts/check.py --require-initialized
 | --- | --- |
 | 四 preset（gcc/clang × debug/release）configure + build + CTest | ✅ 各 3/3（`agent.core`、`mcp.client`、`starter.project_name`） |
 | clang-tidy + ASan/UBSan（`cpp_check.py --preset linux-clang-debug --tidy --sanitizers`） | ✅ 退出 0，ctest 3/3 |
-| `tests/pty_tui_smoke.py`（真 pty + mock SSE） | ✅ 171 PASS / 0 FAIL（含 014 重试、015 compact、session-allow 场景；历史三项既有失败已修复，见 007 v7.1 修订） |
+| `tests/pty_tui_smoke.py`（真 pty + mock SSE） | ✅ 172 PASS / 0 FAIL（含 014 重试、015 compact、session-allow、/version 场景；历史三项既有失败已修复，见 007 v7.1 修订） |
 | `tests/pty_cli_smoke.py` | ✅ ALL PASS（含流前重试 flaky 场景） |
 | 冷启动预算（`tools/cold_start_check.py`，成功标准 #1） | ✅ 中位数 ~5ms（预算 100ms） |
 
-各版本的完整验证记录见 [设计索引](docs/design/README.md) 中 007–015 各自的验证章节；本表只记录本次 README 更新时点的证据。
+各版本的完整验证记录见 [设计索引](docs/design/README.md) 中 007–016 各自的验证章节；本表只记录本次 README 更新时点的证据。
 
 编译告警已于 2026-11-14 清零（GCC/Clang 双 debug preset 实测零告警）：修复 `src/provider_openai.cpp` 的 `-Wformat-truncation`（年份收窄 + 缓冲区扩容）与 `-Wmissing-field-initializers`（015 新增 `raw_body` 未同步初始化）、`tests/cpp/mcp_test.cpp` 两处 `-Wpessimizing-move`（返回局部对象多余的 `std::move`）、`src/tui.cpp` 拆分遗留的 `-Wunused-function` 死代码；`models_dev_data.hpp` 的 clang `-Woverlength-strings` 属 vendored 数据快照（~477KB 单字面量，超标准最低要求 65536；clang 按拼接后长度检查，切分字面量无效），在生成器模板中以局部 `#pragma clang diagnostic` 抑制并附注释。CI 默认仍未启用 `-Werror`。
 
