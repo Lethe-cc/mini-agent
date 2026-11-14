@@ -172,12 +172,14 @@ std::vector<std::string> turn_panel_rows(bool colors, bool thinking, long long e
                                          std::size_t max_rows);
 
 // v4.13 (design 007 §v4.13): right-hand sidebar inside the inline frame.
-// compose_columns merges pre-built content rows (width <= cols-side_w-3)
-// with sidebar rows (width <= side_w) into full-width rows joined by a
-// " | " separator; content rows are padded to the split width with
-// spaces (display-width aware). Rows beyond the sidebar's length render
-// blank on the right; shorter content is what the caller guarantees
-// (md::clip). Pure + unit-testable; the caller owns data gathering.
+// compose_columns merges pre-built content rows (width <= cols-side_w-4)
+// with sidebar rows (width <= side_w) into rows joined by a " | "
+// separator; content rows are padded to the split width with spaces
+// (display-width aware). Composed width caps at cols-1 (autowrap guard:
+// a row filling the last column breaks the frame's row accounting).
+// Rows beyond the sidebar's length render blank on the right; shorter
+// content is what the caller guarantees (md::clip). Pure + unit-testable;
+// the caller owns data gathering.
 std::vector<std::string> compose_columns(const std::vector<std::string>& content,
                                          const std::vector<std::string>& sidebar, std::size_t cols,
                                          std::size_t side_w);
@@ -189,7 +191,10 @@ std::string sidebar_status_glyph(std::string_view xy);
 // v4.16: merge a left-aligned status line and a right-aligned info line
 // into ONE bottom row: `left` is clipped (with an ellipsis budget) so
 // `right` always lands flush against the right edge; a single space is
-// the minimum gutter. Returns the composed row (display-width exact).
+// the minimum gutter. Composed display width is exactly cols-1, never
+// cols: a row filling the last column leaves the terminal in deferred
+// autowrap and the frame's trailing newline advances two rows, breaking
+// the live-block cursor accounting (5.6 rule 2 autowrap guard).
 std::string compose_footer(std::string_view left, std::string_view right, std::size_t cols);
 
 // v4.12: one bottom system-info row: "user@host · cwd · clock" (dim when

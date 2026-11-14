@@ -731,7 +731,8 @@ std::vector<std::string> result_preview_rows(const std::string& tool_name,
     const bool colors = colors_enabled();
     if (is_markdown) {
         rows.push_back(tint(colors, "36", "[preview] " + sanitize_display(tool_name)));
-        const auto rendered = md::render(preview, cols);
+        // cols-1 wrap budget: the autowrap guard (see compose_footer).
+        const auto rendered = md::render(preview, cols > 1 ? cols - 1 : 1);
         std::string line;
         std::istringstream stream(rendered);
         while (std::getline(stream, line))
@@ -918,7 +919,7 @@ std::vector<std::string> compose_columns(const std::vector<std::string>& content
     std::vector<std::string> out;
     if (side_w == 0 || sidebar.empty() || cols <= side_w + 3)
         return content;                          // no room / disabled: pass through
-    const std::size_t split = cols - side_w - 3; // content width + " | "
+    const std::size_t split = cols - side_w - 4; // content width + " | " + autowrap guard
     const std::size_t n = std::max(content.size(), sidebar.size());
     out.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -933,16 +934,22 @@ std::vector<std::string> compose_columns(const std::vector<std::string>& content
 }
 
 std::string compose_footer(std::string_view left, std::string_view right, std::size_t cols) {
+    const std::size_t guard = cols > 1 ? cols - 1 : 1;
     if (right.empty())
-        return std::string(left);
-    const std::size_t rw = md::display_width(right);
+        return md::clip(std::string(left), guard);
+    const std::string info = md::clip(std::string(right), guard);
+    const std::size_t rw = md::display_width(info);
     if (rw + 1 >= cols)
-        return std::string(right);            // no room for both: the info wins
-    const std::size_t budget = cols - rw - 1; // min one-space gutter
+        return info; // no room for both: the info wins
+    // Composed width caps at cols-1, never cols: a row filling the last
+    // column leaves the terminal in deferred-autowrap, and the frame's
+    // trailing \n then advances TWO rows, breaking the live_rows_ cursor
+    // accounting (5.6 rule 2). One blank column is the guard.
+    const std::size_t budget = cols - rw - 2; // min one-space gutter + guard
     std::string head = md::clip(std::string(left), budget);
     const std::size_t hw = md::display_width(head);
-    head.append(cols - rw - hw, ' ');
-    return head + std::string(right);
+    head.append(cols - 1 - rw - hw, ' ');
+    return head + info;
 }
 
 std::string sysinfo_line(bool colors, const std::string& user, const std::string& host,
@@ -1041,7 +1048,10 @@ class LiveScreen {
         // unchanged), and commit lines are hard-wrapped, not clipped, so the
         // line may exceed the clipped width of the live status row here.
         const std::string styled = style_history_line(line, colors_enabled());
-        const std::size_t cols = current_cols();
+        // Wrap budget cols-1: a row reaching the last column triggers the
+        // terminal's deferred autowrap on the trailing \n (two rows advanced
+        // for one printed row), breaking the live-block accounting.
+        const std::size_t cols = current_cols() > 1 ? current_cols() - 1 : 1;
         std::size_t printed = 0;
         std::string out;
         for (auto& row : md::wrap(styled, cols)) {
@@ -1132,7 +1142,10 @@ class LiveScreen {
         // width, right clipped), preserving the hard-wrap invariant
         // (5.6 rule 2). Narrow terminals (< 60 cols) shrink the sidebar.
         const std::size_t side_w = sidebar.empty() ? 0 : (cols > 60 ? 30 : cols / 3);
-        const std::size_t content_cols = side_w > 0 && cols > side_w + 3 ? cols - side_w - 3 : cols;
+        // Content wraps to cols-1 (autowrap guard, see compose_footer); with
+        // the sidebar the content column shrinks by side_w + 3 (" | " gutter).
+        const std::size_t content_cols =
+            side_w > 0 && cols > side_w + 4 ? cols - side_w - 4 : (cols > 1 ? cols - 1 : 1);
         const std::size_t cap = rows > fixed_rows ? rows - fixed_rows : 1;
         auto pin_rows =
             streaming ? md::wrap(style_history_line("You: " + pinned_question, colors_enabled()),
@@ -1191,6 +1204,7 @@ class LiveScreen {
         // v4.16: status left + system info right-aligned on ONE row
         // (the two-row footer of v4.12 read as clutter; the info stays
         // fully visible, the status clips with the width budget).
+        // compose_footer caps the composed width at cols-1 (autowrap guard).
         content.push_back(compose_footer(md::clip(status, cols), md::clip(sysinfo, cols), cols) +
                           "\x1b[0m");
         // Bottom-anchored live block (2026-11-05 maintainer request): pad
@@ -2216,7 +2230,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         screen.commit("[preview] " + sanitize_display(path_raw));
         if (markdown) {
             std::string pline;
-            std::istringstream pr(md::render(body, cols_now()));
+            std::istringstream pr(md::render(body, cols_now() > 1 ? cols_now() - 1 : 1));
             while (std::getline(pr, pline))
                 screen.commit(pline.empty() ? std::string(" ") : pline);
         } else {
@@ -3631,7 +3645,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.clear_live();
                 screen.commit("You: " + last_user);
                 if (::isatty(STDOUT_FILENO)) {
-                    for (auto& para : split_ansi_paragraphs(md::render(result.reply, cols_now()))) {
+                    for (auto& para : split_ansi_paragraphs(
+                             md::render(result.reply, cols_now() > 1 ? cols_now() - 1 : 1))) {
                         screen.commit(para);
                     }
                 } else {
@@ -3793,38 +3808,37 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // bold yellow). SGR is zero-width for md::clip, and the clip
             // keeps any active span (it re-emits escapes while cutting).
             const bool sc = colors_enabled();
-            // v4.15: the id follows /session switches (like the banner) and
-            // carries the temp tag; was options.session_id (launch snapshot).
-            std::string status = tint(
-                sc, "2",
-                "model=" + (config.current.model.empty() ? std::string("(not set)") : config.current.model) +
-                    " · session=" + active_session_id + (temp_mode ? " (temp)" : std::string()));
+            // Status segment order: state words FIRST, identity and usage
+            // last. The v4.16 merged footer clips the status to whatever
+            // the sysinfo leaves (often ~20 cols); with the identity prefix
+            // first, the streaming/queued/auto-tools/approval markers were
+            // exactly the part that got clipped away. State is the part
+            // that must survive; model/session also live in the banner.
+            std::string status;
             if (models_running) {
-                status += tint(sc, "36", " · listing models...");
+                status += tint(sc, "36", "listing models...");
             } else if (model_menu_open) {
-                status += tint(sc, "36", " · pick a model (Esc cancels)");
+                status += tint(sc, "36", "pick a model (Esc cancels)");
             }
             if (streaming) {
-                const auto secs =
-                    std::chrono::duration_cast<std::chrono::seconds>(steady_now() - turn_start)
-                        .count();
-                status +=
-                    tint(sc, "36", " · streaming (Ctrl-C/Esc) · " + std::to_string(secs) + "s");
+                // Interrupt keys stay documented in /help and the composer
+                // hint; elapsed seconds live in the turn panel header. The
+                // status word must fit the footer clip budget (~20 cols on
+                // an 80-col terminal) WITH the queue depth attached.
+                status += tint(sc, "36", (status.empty() ? "" : " · ") + std::string("streaming"));
                 if (!pending.empty()) {
                     status += tint(sc, "36", " · queued " + std::to_string(pending.size()));
                 }
-            } else {
-                status += tint(sc, "2", " · idle");
+            } else if (status.empty()) {
+                status += tint(sc, "2", "idle");
             }
             if (approval_policy == "off" && !tool_registry->empty())
-                status += tint(sc, "1;31", " · auto-tools"); // persistent danger marker (008 5.4)
-            // v4: usage tail (ctx/out/reasoning) before transient states so
-            // streaming/approval messages keep their established position.
-            status += status_usage_segments(sc, context_reading());
+                status += tint(sc, "1;31",
+                               (status.empty() ? "" : " · ") +
+                                   std::string("auto-tools")); // persistent danger marker (008 5.4)
             if (approval_pending()) {
-                const ToolCall snapshot = bridge.approval_call();
-                const std::string snapshot_preview = bridge.approval_preview();
-                status += tint(sc, "1;33", " · AWAITING APPROVAL");
+                status += tint(sc, "1;33",
+                               (status.empty() ? "" : " · ") + std::string("AWAITING APPROVAL"));
                 // v4.17: after 90 s of the 120 s auto-deny budget, show the
                 // remaining seconds. The line changes once per second, which
                 // naturally busts render()'s input cache (no per-frame
@@ -3834,6 +3848,21 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     const long long left = std::max<long long>(0, kApprovalTimeoutS - waited_s);
                     status += tint(sc, "1;31", " · auto-deny in " + std::to_string(left) + "s");
                 }
+            }
+            // v4.15: the id follows /session switches (like the banner) and
+            // carries the temp tag; was options.session_id (launch snapshot).
+            status += tint(sc, "2",
+                           (status.empty() ? "" : " · ") + std::string("model=") +
+                               (config.current.model.empty() ? std::string("(not set)")
+                                                             : config.current.model) +
+                               " · session=" + active_session_id +
+                               (temp_mode ? " (temp)" : std::string()));
+            // v4: usage tail (ctx/out/reasoning) last: least critical under
+            // the footer clip, and /context still reports it in full.
+            status += status_usage_segments(sc, context_reading());
+            if (approval_pending()) {
+                const ToolCall snapshot = bridge.approval_call();
+                const std::string snapshot_preview = bridge.approval_preview();
                 extra_rows = approval_rows(snapshot.name, snapshot.arguments_json,
                                            approval_expanded, snapshot_preview);
             }

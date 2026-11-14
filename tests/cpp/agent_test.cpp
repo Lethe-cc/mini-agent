@@ -2642,26 +2642,30 @@ void test_v411_turn_panel() {
     check(T::sysinfo_line(false, "a\x1b[31mb", "h", "c", "t").find("\x1b") == std::string::npos,
           "sysinfo never carries escape bytes");
     // v4.16 merged footer: right block flush to the edge, left clipped.
+    // Autowrap guard: the composed width caps at cols-1, NEVER cols -- a
+    // row filling the last column leaves the terminal in deferred autowrap
+    // and the frame's trailing \n advances two rows (broken live accounting).
     const auto foot = T::compose_footer("status", "info", 16);
-    check(mini_agent::md::display_width(foot) == 16 && foot.substr(foot.size() - 4) == "info",
-          "footer pads the gap, info flush right");
+    check(mini_agent::md::display_width(foot) == 15 && foot.substr(foot.size() - 4) == "info",
+          "footer pads the gap, info flush right, one guard column");
     const auto tight = T::compose_footer("0123456789abcdefghij", "info", 16);
-    check(mini_agent::md::display_width(tight) == 16 && tight.substr(tight.size() - 4) == "info",
+    check(mini_agent::md::display_width(tight) == 15 && tight.substr(tight.size() - 4) == "info",
           "long status clips to leave the gutter");
     check(T::compose_footer("only", "", 20) == "only", "no info = status alone");
     // v4.13 sidebar composition: rows merge with the gutter, the shorter
     // column pads out, and every composed row is exactly one terminal row.
     const auto merged = T::compose_columns({"abc", "de"}, {"123456", "x", "long"}, 20, 6);
     check(merged.size() == 3, "row count = max of both columns");
-    check(merged[0] == std::string("abc") + std::string(8, ' ') + " | 123456",
-          "content padded to split (11), sidebar kept");
-    check(merged[2] == std::string(11, ' ') + " | long", "missing content row pads blank");
+    check(merged[0] == std::string("abc") + std::string(7, ' ') + " | 123456",
+          "content padded to split (10), sidebar kept");
+    check(merged[2] == std::string(10, ' ') + " | long", "missing content row pads blank");
     // The right column is clipped, not padded: rows with a short sidebar
     // are narrower than cols. The invariant is "one terminal row each":
-    // width <= cols always, == cols when both sides are full.
-    check(mini_agent::md::display_width(merged[0]) == 20 &&
-              mini_agent::md::display_width(merged[2]) <= 20,
-          "composed rows never exceed the width; full pair hits it exactly");
+    // width <= cols-1 always (autowrap guard), == cols-1 when both sides
+    // are full.
+    check(mini_agent::md::display_width(merged[0]) == 19 &&
+              mini_agent::md::display_width(merged[2]) <= 19,
+          "composed rows never reach the last column; full pair hits cols-1");
     const auto off = T::compose_columns({"abc"}, {}, 20, 6);
     check(off.size() == 1 && off[0] == "abc", "empty sidebar passes content through");
     check(T::sidebar_status_glyph("??") == "??", "untracked glyph");
