@@ -1,13 +1,13 @@
-# Context 计量与压缩机制调研：Codewhale / Pi / Codex CLI / OpenCode / Claude Code
+# Context 计量与压缩机制调研：Codewhale / Pi / Codex CLI / OpenCode / Claude Code / Zed
 
 ## 文档状态
 
 - 性质：**设计参考**（017 上下文管理增强的输入），非本项目规范。采纳结论须进 `docs/design/017-*.md`，本文只保原始记录。
 - 调研日期：2026-11-15。
-- 方法：本机 checkout 源码实读（Codewhale/pi/codex/opencode）；**claude-code 公开仓库不含实现源码**（仅 docs/plugins/examples/CHANGELOG，实现为闭源 bundled npm 包，本机未安装），其结论仅基于 CHANGELOG 文档化行为，证据层单独标注。未运行任何被调研项目。
-- 动因：维护者 2026-11-15 指示逐家分析五款终端 Agent 的上下文管理（起于 Codewhale 的 Context 面板截图），汇总为本报告，供 015（手动 /compact）之后的增强设计取舍。
+- 方法：本机 checkout 源码实读（Codewhale/pi/codex/opencode/zed）；**claude-code 公开仓库不含实现源码**（仅 docs/plugins/examples/CHANGELOG，实现为闭源 bundled npm 包，本机未安装），其结论仅基于 CHANGELOG 文档化行为，证据层单独标注。未运行任何被调研项目。
+- 动因：维护者 2026-11-15 指示逐家分析五款终端 Agent 与 Zed 编辑器的上下文管理（起于 Codewhale 的 Context 面板截图），汇总为本报告，供 015（手动 /compact）之后的增强设计取舍。
 - 分工：窗口大小判定链与 reasoning 档位见 [context-reasoning-survey.md](context-reasoning-survey.md)（2026-11-08）；TUI 布局/状态栏见 [tui-agent-ui-survey.md](tui-agent-ui-survey.md)（2026-11-06）。**本文不重复窗口判定**，只覆盖：用量计量、压缩触发、溢出检测与恢复、压缩策略、历史保全、摘要 prompt 纪律、上下文显示。
-- 许可证：借鉴设计不复制代码。Codewhale/pi=MIT、codex=Apache-2.0（[coding-agents.md](coding-agents.md) 2026-11-05 登记）；opencode 许可证本轮未重核，沿用既有调研标注；claude-code 闭源，仅行为参考。
+- 许可证：借鉴设计不复制代码。Codewhale/pi=MIT、codex=Apache-2.0（[coding-agents.md](coding-agents.md) 2026-11-05 登记）；**Zed 主体 GPL-3.0-or-later**（部分 Apache-2.0 组件，README 载明）——与本项目 MIT 不兼容，仅借思路；opencode 许可证本轮未重核，沿用既有调研标注；claude-code 闭源，仅行为参考。
 
 ### 被调研项目修订表
 
@@ -18,6 +18,7 @@
 | Codex CLI | /home/marvin/code/repos/AI/codex | `b016cd1847`（2026-11-15） | 源码 |
 | OpenCode | /home/marvin/code/repos/AI/opencode | `d432a06b9c`（2026-11-14） | 源码 |
 | Claude Code | /home/marvin/code/repos/AI/claude-code | `c159118`（2026-11-15） | 仅 CHANGELOG |
+| Zed | /home/marvin/code/repos/AI/zed | `703b5ac3f4`（2026-11-14） | 源码 |
 
 行号对应该修订；引用格式 `文件:行`。
 
@@ -88,20 +89,36 @@
 - 溢出先**剥旧图片**再压缩（Bedrock，L959）；`/compact` 后转录折叠 "Compacted (ctrl+o to see full summary)"（L994）——摘要默认隐藏可展开。
 - 边界：以上为发布说明记载的行为与修复，**无源码佐证**，不引用其内部实现细节。
 
+### 1.6 Zed：纯 reported 计量 + 压缩即一等条目 + 编辑器原生上下文
+
+Zed 是 AI 原生编辑器（Rust/GPUI），agent 面板走 ACP（Agent Client Protocol）；压缩被标准化为协议事件（`ThreadEvent::ContextCompaction`，`crates/agent/src/agent.rs:2918-2925`）。
+
+**计量**（`crates/agent/src/thread.rs`）：**纯 provider-reported，无本地字符估算**——请求内 usage 取各字段 **max**（流式更新不累加，`:2425-2457`），cumulative 只加 delta（计费用）；`context_usage` = **最后一个请求**的 usage，按 user message id 存 map（`:2483-2493`）；truncate 后从 map 重建（`:2527`）。**溢出合成 Exceeded**：失败请求无 usage，`mark_token_limit_exceeded`（`:2469-2481`）用 max(解析出的溢出 token 数, 模型上限) 合成读数，meter 不显示陈旧值。
+
+**溢出检测**：`ProviderErrorCategory::PromptTooLarge`（`language_model_core/src/util.rs:42-56`、`language_model_core.rs:193-208`）：Anthropic 400 "prompt is too long: N tokens" **解析出 N**、OpenAI `context_length_exceeded`、413；**非瞬时 → 不重试**（`thread.rs:4852-4874`）。
+
+**触发**（`:4709-4737` + `agent_settings.rs:148-208`）：默认 **90%**，三种表达 `Percentage / TokensUsed(正数) / TokensRemaining(负数)`；**最小窗口守卫 `MIN_COMPACTION_CONTEXT_WINDOW=80_000`**（`:121-125`，小窗口不做自动压缩——headroom 不够）；active = 最后 usage 的 input+output，对比 `input_token_capacity = min(max_input, combined−output)`（`:5005-5029`）；发送前 preflight（`:3384`）；**尾部未答 user 消息排除在摘要外**（`:4724-4728`）。
+
+**压缩**：专用 `compaction_model` registry 覆盖、回退线程模型（`:4766-4770`）；`COMPACTION_PROMPT`（agent_settings/prompts/compaction_prompt.txt）：Goal/State/Context/Next/**Pitfalls（试过但失败的路）**——五家中唯一显式要求保留失败尝试；手动 `/compact` 无视用量强制（`:2706-2712`）；结果是一等条目 `Message::Compaction` / `AgentThreadEntry::ContextCompaction`，可原位更新（`acp_thread.rs:6063-6082`）；**保留 compaction 点之前的 user 消息，80k 字节预算**逐条截断（`:128, :5094-5136, :5245-5249`）。
+
+**显示**：composer footer ratio 三态 Normal/Warning(0.8)/Exceeded（`acp_thread.rs:3693-3724`）；**小窗口（<80k）才出 callout**："run /compact or start a new thread and @-mention this one" + **Start New Thread 按钮 = 从摘要开新线程**（`agent_ui/.../thread_view.rs:13705-13750`，`NewNativeAgentThreadFromSummary`）——大窗口靠自动压缩兜底，不打扰。
+
+**编辑器原生上下文**（`acp_thread/src/mention.rs:21-70`）：@-mention 显式注入，种类 File/Directory/**Symbol(行范围)**/Thread/**Diagnostics(错误/警告)**/Selection/Fetch/**TerminalSelection**/**GitDiff**/**MergeConflict**/PastedImage；不自动塞打开的 buffer。这是终端 Agent 没有的上下文维度（诊断、diff、冲突直接入上下文）。
+
 ## 2. 横向对比
 
-| 维度 | Codewhale | pi | Codex | OpenCode | Claude Code | mini-agent 现状 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 计量 | 估算优先+billed 抬升+校准 | usage 锚点+尾部 | 窗口基线（server 优先） | measured+estimated | 文档层：meter 曾 2× | reported 优先+纯估算 fallback |
-| 触发表达 | %×预算数学（默认 80%） | 绝对 window−16k | catalog 限额+95% | max(15%,16k) 混合 | per-model 窗口 | 无自动；仅 400 后提示 |
-| 默认自动 | off（设阈值即开） | on | on | on（off 时溢出也不压） | on | off（015 决策） |
-| 溢出检测 | 模式集+size ladder | 目录+排除集+静默/length-stop | catalog/服务端 | 拒绝→shrink 阶梯+纯文本重发 | 剥图片+压缩 | 窄模式集（含 DashScope），仅 400 |
-| 保留尾部 | 近期用户消息逐字 | 20k 全消息、回合边界 | ≤20k 用户消息 | 15k | 文档层未详 | 无（全量替换） |
-| 先机械剪枝 | ✅ tool output | ❌ | （retained tool outputs 另策） | ❌ | 剥图片 | ❌ |
-| 摘要迭代 | ✅ | ✅ +文件清单 | ✅ | ✅ +NUDGE+legacy 重写 | 文档层未详 | ❌（每次全摘） |
-| 历史保全 | 内存替换 | entry-log 投影 | rollout append-only | DB | 文档层：history 仍保存 | **磁盘有损** |
-| 后台预摘要 | ❌ | ❌ | ✅ async | ✅ precompute（缓存感知） | 文档层未详 | ❌ |
-| 显示 | Context 页 breakdown+gauge | footer %/window 变色 | /status | TUI 消息流 | meter+ctrl+o | status 尾部 ctx + /context |
+| 维度 | Codewhale | pi | Codex | OpenCode | Claude Code | Zed | mini-agent 现状 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 计量 | 估算优先+billed 抬升+校准 | usage 锚点+尾部 | 窗口基线（server 优先） | measured+estimated | 文档层：meter 曾 2× | 纯 reported（请求内 max）+Exceeded 合成 | reported 优先+纯估算 fallback |
+| 触发表达 | %×预算数学（默认 80%） | 绝对 window−16k | catalog 限额+95% | max(15%,16k) 混合 | per-model 窗口 | 默认 90%，%／+used／−remaining 三表达 | 无自动；仅 400 后提示 |
+| 默认自动 | off（设阈值即开） | on | on | on（off 时溢出也不压） | on | on（窗口≥80k 守卫） | off（015 决策） |
+| 溢出检测 | 模式集+size ladder | 目录+排除集+静默/length-stop | catalog/服务端 | 拒绝→shrink 阶梯+纯文本重发 | 剥图片+压缩 | PromptTooLarge 类别（解析 N）不重试 | 窄模式集（含 DashScope），仅 400 |
+| 保留尾部 | 近期用户消息逐字 | 20k 全消息、回合边界 | ≤20k 用户消息 | 15k | 文档层未详 | user 消息 ≤80k 字节 | 无（全量替换） |
+| 先机械剪枝 | ✅ tool output | ❌ | （retained tool outputs 另策） | ❌ | 剥图片 | ❌ | ❌ |
+| 摘要迭代 | ✅ | ✅ +文件清单 | ✅ | ✅ +NUDGE+legacy 重写 | 文档层未详 | ✅ 含旧摘要+Pitfalls | ❌（每次全摘） |
+| 历史保全 | 内存替换 | entry-log 投影 | rollout append-only | DB | 文档层：history 仍保存 | 条目不可变，压缩为一等条目 | **磁盘有损** |
+| 后台预摘要 | ❌ | ❌ | ✅ async | ✅ precompute（缓存感知） | 文档层未详 | ❌ | ❌ |
+| 显示 | Context 页 breakdown+gauge | footer %/window 变色 | /status | TUI 消息流 | meter+ctrl+o | footer ratio 0.8 警告+Exceeded+小窗 callout | status 尾部 ctx + /context |
 
 ## 3. 行业收敛与共同坑
 
@@ -110,7 +127,7 @@
 2. **留输出余量再触发**（绝对/百分比/混合/目录限额四种表达，语义同一）。
 3. **保留近期尾部逐字** + 结构化交接摘要 + 迭代更新。
 4. **溢出→压缩而非重试**（pi/opencode/codex/claude；与 mini-agent 014 只重试瞬时错误的分工一致）。
-5. **"压不动就别压"守卫**（Codewhale/claude）。
+5. **"压不动就别压"守卫**（Codewhale/claude/Zed 最小窗口 80k）。
 6. **磁盘历史不可变/可恢复**（pi/codex/opencode）。
 
 **共同坑家族**（设计时必须设回归断言）：
@@ -136,9 +153,11 @@
 2. `/context` 三行 breakdown：system / conversation / tool output（Codewhale；数据已在 chat，纯函数）。
 3. 混合余量压力提示 `max(15%, 16k)`，**只提示不自动**（opencode 表达 + 015 非目标决策）。
 4. `/compact` 升级：先机械剪旧 tool output（Codewhale）→ codex 式保留近期 user 消息 ≤20k + 最后一轮完整问答（切点不破坏 tool 配对，pi 硬约束）→ 结构化迭代摘要。
-5. 摘要 prompt 移植 opencode 纪律：不复述系统提示/AGENTS.md、未答问题逐字携带、工作流状态、精确路径/错误串、不提压缩；NUDGE 一次重试；迭代时允许删除失效信息。
+5. 摘要 prompt 移植 opencode 纪律：不复述系统提示/AGENTS.md、未答问题逐字携带、工作流状态、精确路径/错误串、不提压缩；**加 Zed 的 Pitfalls 段（试过但失败的路）**；NUDGE 一次重试；迭代时允许删除失效信息。
 6. 压缩前原始转录备份（`<id>.pre-compact.json` 轻量中间态，不动 schema；pi/codex/opencode 不可变精神的降级版）。
 7. 溢出模式集加 NON_OVERFLOW 排除（pi）。
+8. 溢出后 meter 合成 Exceeded 读数（Zed `mark_token_limit_exceeded`）：400 后不显示陈旧 usage，与 015 提示联动。
+9. 可选扩展："从摘要开新会话"逃生舱（Zed `NewNativeAgentThreadFromSummary`）——`/session new` 可以摘要播种，旧会话仍可恢复；与第 6 项备份互补。
 
 **非目标**（规模产物或既有决策）：自动压缩本体、remote/native 压缩、async precompute、hooks、entry-tree/分支摘要、cache-zone 计费机器（Codewhale）、1.5× 双估算器（单一读数函数纪律即可）。
 

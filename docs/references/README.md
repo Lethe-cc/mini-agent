@@ -17,7 +17,7 @@
 | md-renderers | [终端 Markdown 渲染库](md-renderers.md)（md4c、cmark、glamour、glow、termimad、rich） | md 模块扩展表格/复杂语法、评估切换 md4c 时 | 许可证层已核对（2026-11-01）：md4c/glamour/glow/rich=MIT、cmark 需读原文、termimad 未核实；引入依赖必须先记 ADR |
 | tui-ui-survey | [TUI 界面调研](tui-agent-ui-survey.md)（Codewhale、Pi、opencode、Codex CLI 四家终端 Agent 交互界面横向对比） | TUI 布局/流式刷新/审批 UI/状态栏设计与取舍 | 源码层调研（2026-11-06，本机 checkout 实读：Codewhale@4df5d291、pi@2c8d1fe、opencode@69269e4、codex 快照；关键结论已抽查复核）；未运行被调研项目，动态行为未实测；opencode 许可证本轮未重核 |
 | ctx-reasoning-survey | [Context 窗口与 Reasoning 级别判定调研](context-reasoning-survey.md)（Codewhale、Codex CLI、opencode、Pi 四家 + pi-agent-book 旁证） | context_window 解析链/reasoning 档位策略设计参考、`/context probe` 与 caps 缓存的取舍论证、未来压缩与 clamp 特性评估 | 源码层调研（2026-11-08，本机 checkout 实读：Codewhale@4df5d291、pi@2c8d1feb1、opencode@69269e4、codex 快照、pi-agent-book@c0544bc；结论附 file:line 证据）；未运行被调研项目；opencode 许可证未重核；两处未验证项已在文中标注 |
-| ctx-compaction-survey | [Context 计量与压缩机制调研](context-compaction-survey.md)（Codewhale、Pi、Codex CLI、OpenCode、Claude Code 五家横向对比 + mini-agent 基线） | 017 上下文管理增强设计输入：锚点计量/压缩触发/溢出恢复/保留尾部/摘要 prompt 纪律/历史保全的取舍论证 | 源码层调研（2026-11-15，本机 checkout 实读，修订表见文首；claude-code 仅 CHANGELOG 文档层，无实现源码）；未运行被调研项目；opencode 许可证未重核；只借设计不抄代码 |
+| ctx-compaction-survey | [Context 计量与压缩机制调研](context-compaction-survey.md)（Codewhale、Pi、Codex CLI、OpenCode、Claude Code、Zed 六家横向对比 + mini-agent 基线） | 017 上下文管理增强设计输入：锚点计量/压缩触发/溢出恢复/保留尾部/摘要 prompt 纪律/历史保全的取舍论证 | 源码层调研（2026-11-15，本机 checkout 实读，修订表见文首；claude-code 仅 CHANGELOG 文档层，无实现源码；Zed 同日增补）；未运行被调研项目；opencode 许可证未重核；只借设计不抄代码 |
 
 新增来源请复制 [参考资料模板](../../templates/reference.md) 到本目录，并在上表登记用途和阅读要求。不要将模板中的示例字段视为真实来源。agent-* 四条为设计参考登记，均未在线核对；许可证未核实前不复制任何代码。
 
