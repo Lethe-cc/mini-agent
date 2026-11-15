@@ -2515,8 +2515,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             }
                         }
                         // v5: make the preview key discoverable on entry.
-                        screen.commit("[hint] sidebar focus: Up/Down walk · p=preview · "
-                                      "Enter=insert path · Esc=leave");
+                        screen.commit("[hint] sidebar: Up/Down select · p=preview+unselect · "
+                                      "Enter=insert · Esc=leave");
                     }
 
                 } else if (c == 0x1B) { // ESC: edit sequences or interrupt
@@ -2546,6 +2546,15 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                 if (paths.empty())
                                     return;
                                 std::size_t cur = sidebar_sel;
+                                if (cur == static_cast<std::size_t>(-1)) {
+                                    // No selection (p preview clears it): enter
+                                    // from the nearest end, not SIZE_MAX wrap.
+                                    cur = delta > 0 ? 0 : paths.size() - 1;
+                                    if (!paths[cur].empty()) {
+                                        sidebar_sel = cur;
+                                        return;
+                                    }
+                                }
                                 for (std::size_t step = 0; step < paths.size(); ++step) {
                                     cur = (cur + paths.size() + static_cast<std::size_t>(delta)) %
                                           paths.size();
@@ -2749,11 +2758,22 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 } else if (c >= 0x20) {
                     // v5 (design 011): while the sidebar owns focus, `p`
                     // previews the highlighted file into the transcript
-                    // (no model turn, focus stays); any other printable
-                    // char goes to the composer as usual.
-                    if (sidebar_focus && c == 'p' && sidebar_sel < sidebar_result.paths.size() &&
-                        !sidebar_result.paths[sidebar_sel].empty()) {
-                        preview_workspace_file(sidebar_result.paths[sidebar_sel]);
+                    // (no model turn, focus stays) AND clears the selection
+                    // (2026-11-15 maintainer request: a previewed file must
+                    // not stay picked, so a stray Enter cannot insert its
+                    // path). Up/Down re-selects; any other printable char
+                    // goes to the composer as usual.
+                    if (sidebar_focus && c == 'p') {
+                        if (sidebar_sel < sidebar_result.paths.size() &&
+                            !sidebar_result.paths[sidebar_sel].empty()) {
+                            preview_workspace_file(sidebar_result.paths[sidebar_sel]);
+                            sidebar_sel = static_cast<std::size_t>(-1);
+                            screen.commit("[sidebar] selection cleared · Up/Down re-selects, "
+                                          "Esc leaves");
+                        } else {
+                            screen.commit("[hint] no sidebar row selected · Up/Down selects, "
+                                          "p previews");
+                        }
                     } else {
                         utf8_insert(composer, cursor, std::string_view(&buf[i], 1));
                         mark_edited();

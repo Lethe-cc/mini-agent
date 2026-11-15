@@ -536,10 +536,19 @@ def main():
     expect("p=preview" in strip_csi(focus_raw),
            "v5 sidebar focus entry shows the key legend (p=preview)")
     os.write(fd, b"p")
-    pvk = strip_csi(read_all(fd, 1.0))
+    pvk_raw = read_all(fd, 1.0)
+    pvk = strip_csi(pvk_raw)
     expect("[preview]" in pvk or "[error] preview" in pvk,
            "v5 `p` in sidebar focus previews the highlighted row")
-    os.write(fd, b"\x1b[B\r")
+    expect("selection cleared" in pvk and
+           "\x1b[27m" not in pvk_raw[pvk_raw.find("selection cleared"):],
+           "p clears the selection after preview (no highlighted row)")
+    os.write(fd, b"p")
+    expect("no sidebar row selected" in strip_csi(read_all(fd, 0.5)),
+           "p with no selection hints instead of typing into the composer")
+    os.write(fd, b"\x1b[B")
+    expect("\x1b[27m" in read_all(fd, 0.5), "Down re-selects a row after deselect")
+    os.write(fd, b"\r")
     picked = read_all(fd, 1.0)
     expect("[sidebar] inserted:" in strip_csi(picked),
            "Enter on a focused sidebar row inserts the path")
