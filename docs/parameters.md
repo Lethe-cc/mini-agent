@@ -1,6 +1,6 @@
 # mini-agent 参数使用大纲
 
-> **文档性质**：使用者参数参考（大纲式索引）。所有条目按当前源码核对（v0.8.0，v1–v7 + 014–016 命令面）；日常快速查看以 `mini-agent --help` 为准，本文补充语义、默认值、持久化范围与出处。
+> **文档性质**：使用者参数参考（大纲式索引）。所有条目按当前源码核对（v0.8.0，v1–v7 + 014–017 命令面）；日常快速查看以 `mini-agent --help` 为准，本文补充语义、默认值、持久化范围与出处。
 >
 > **来源**：[cli_main.cpp](../src/cli_main.cpp)、[config.hpp](../include/mini_agent/config.hpp)、[config.cpp](../src/config.cpp)、[tui.cpp](../src/tui.cpp)、[tools.cpp](../src/tools.cpp)、[session.cpp](../src/session.cpp)、[log.cpp](../src/log.cpp)。设计与取舍见文末[参考](#7-参考)。
 
@@ -112,7 +112,7 @@ mini-agent --help | --version
 | `--provider` / `--model` | 同 `ask` | — | v6 档案/模型覆盖，仅本次进程（[§2.2](#22-ask--一次性问答)） |
 | `--mcp` / `--debug` / `--log-level` | 同 `ask` | — | — |
 
-- **默认复用（v4.15）**：不带 `--session/--new/--temp` 时，扫描最近 ≤12 个会话，取第一个 workspace 戳匹配且未被锁定的复用；没有匹配才新建。损坏/不可读的会话跳过。
+- **默认复用（v4.15）**：不带 `--session/--new/--temp` 时，扫描最近 ≤12 个会话，取第一个 workspace 戳匹配且未被锁定的复用；没有匹配才新建。损坏/不可读的会话跳过。**无戳的旧会话**仅当本次启动也未设 workspace 时才匹配（继承旧启动 cwd，不认领新 workspace）。
 - 恢复时 workspace 优先级：显式 `--cwd` > 会话内的 workspace 戳 > config/env > 进程 cwd。
 - stdin 与 stdout 都是 TTY → TUI（[§5](#5-tui-斜杠命令与按键)）；否则**行模式**：每行一个问题，仅识别 `/exit`（其余 `/xxx` 原样发给模型），每轮落盘（temp 除外），EOF（Ctrl-D）退出并打印保存/丢弃信息。
 - 未配置且非 TTY → 退出 2；未配置但 TTY → 进 TUI 走 `/provider /login /model` 配置流。
@@ -176,7 +176,7 @@ mini-agent --help | --version
 | `MINI_AGENT_WORKSPACE` | 目录路径 | config `workspace`，否则进程 cwd | v3 文件/git 工具根目录（`--cwd` 可再覆盖） |
 | `MINI_AGENT_TOOL_APPROVAL` | `ask / allowlist / off` | config `tool_approval`（默认 `ask`） | TUI 审批档位；非法值忽略、保留文件值。对 `ask` 子命令无效（那边由 `--tools` 决定） |
 | `MINI_AGENT_NO_MCP` | 任意非空 | 未设置 | 清空全部 `mcp_servers`（排障开关） |
-| `MINI_AGENT_CONTEXT_WINDOW` | 正整数 | 活动档案 `context_window`（0=未知） | 状态栏 token 用量百分比的分母；非法值忽略 |
+| `MINI_AGENT_CONTEXT_WINDOW` | 正整数 | 活动档案 `context_window`（0=未知） | 状态栏 token 用量百分比的**分母**（分子为 017 计量，见 [§5.1.1](#511-context-参数详解010017)）；非法值忽略 |
 | `MINI_AGENT_REASONING_EFFORT` | 字符串 | 活动档案 `reasoning_effort`（空=不发） | 原样透传请求体 `reasoning_effort` 字段，不做取值校验（服务端说了算） |
 | `MINI_AGENT_LOG` | 路径 / `off` | `/tmp/mini-agent-<uid>.log` | 元数据日志（0600，追加不清空）；`off` 关闭 |
 | `MINI_AGENT_LOG_LEVEL` | `info / debug / trace` | `info` | 抓包阶梯（[§3.2](#32-日志与抓包)）；非法值忽略；优先于 `MINI_AGENT_DEBUG` |
@@ -380,7 +380,7 @@ Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定�
 | `/sidebar` | `on \| off` | 仅会话 | 文件树 + git 变更侧栏 |
 | `/sysinfo` | `on \| off` | 仅会话 | user@host · cwd · 时钟信息行 |
 | `/version` | — | — | 构建身份三行：版本 · commit（未提交改动带 `-dirty`）· UTC 构建时间；与 CLI `version` 子命令一致，任何状态可用 |
-| `/help` | — | — | 命令摘要；提示符含义：`?` 未配置、`~` 探测中、`>` 就绪、`!` key 被拒、`x` 不可达 |
+| `/help` | — | — | 命令摘要；提示符含义：`?` 未配置（暗）/已配置未探测（黄）、`~` 探测中、`>` 就绪、`!` key 被拒、`x` 不可达 |
 
 ## 6. 内置工具参数速查
 
@@ -396,7 +396,7 @@ Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定�
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
-| `read_file` | `path`(必填), `from_line`, `to_line` | 带行号读取 |
+| `read_file` | `path`(必填), `from_line`, `to_line`（均 1-based，可省略） | 带行号读取 |
 | `write_file` | `path`, `content`（均必填） | 父目录必须已存在；生成 diff 审批预览 |
 | `edit_file` | `path`, `old_str`, `new_str`(必填), `replace_all`(默认 false) | 默认要求恰好 1 处匹配否则拒绝（fail-closed）；`replace_all` 要求 ≥1 处并全部替换；生成 diff 预览 |
 | `list_dir` | `path`(默认 workspace 根) | 目录清单 |
