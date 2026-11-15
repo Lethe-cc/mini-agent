@@ -535,23 +535,31 @@ def main():
     expect("\x1b[7m" in focus_raw, "sidebar focus highlights a row")
     expect("p=preview" in strip_csi(focus_raw),
            "v5 sidebar focus entry shows the key legend (p=preview)")
+    # 018 browser: rows are [header, ./, ../, <entries>]; step past ./ and ../
+    # onto a deterministic file so p/Enter act on a file, not a nav row.
+    open(os.path.join(os.getcwd(), "000_smoke_preview.txt"), "w").write("preview me\n")
+    os.write(fd, b"\x1b[B\x1b[B")
+    read_all(fd, 0.3)
     os.write(fd, b"p")
     pvk_raw = read_all(fd, 1.0)
     pvk = strip_csi(pvk_raw)
     expect("[preview]" in pvk or "[error] preview" in pvk,
            "v5 `p` in sidebar focus previews the highlighted row")
-    expect("selection cleared" in pvk and
-           "\x1b[27m" not in pvk_raw[pvk_raw.find("selection cleared"):],
-           "p clears the selection after preview (no highlighted row)")
-    os.write(fd, b"p")
-    expect("no sidebar row selected" in strip_csi(read_all(fd, 0.5)),
-           "p with no selection hints instead of typing into the composer")
-    os.write(fd, b"\x1b[B")
-    expect("\x1b[27m" in read_all(fd, 0.5), "Down re-selects a row after deselect")
+    expect("selection cleared" in pvk and "pane open" in pvk,
+           "p clears the selection and opens the pane (018)")
+    # 018: the pane is modal now -- Esc closes it, Ctrl-F re-focuses sidebar.
+    os.write(fd, b"\x1b")
+    expect("[preview] closed:" in strip_csi(read_all(fd, 0.5)),
+           "018 Esc closes the pane opened from the sidebar")
+    os.write(fd, b"\x06")
+    expect("\x1b[27m" in read_all(fd, 0.5), "Ctrl-F re-focuses the sidebar after the pane")
+    os.write(fd, b"\x1b[B\x1b[B")
+    read_all(fd, 0.3)
     os.write(fd, b"\r")
     picked = read_all(fd, 1.0)
     expect("[sidebar] inserted:" in strip_csi(picked),
            "Enter on a focused sidebar row inserts the path")
+    os.remove(os.path.join(os.getcwd(), "000_smoke_preview.txt"))
     os.write(fd, b"\x08" * 40)  # clear the inserted path from the composer
     read_all(fd, 0.3)
     os.write(fd, b"/sidebar off\r")
@@ -560,6 +568,22 @@ def main():
             for s in [strip_csi(part.rstrip("\r"))]  # pty ONLCR adds the CR
             if display_width(s) > 80]
     expect(not over, f"no written row exceeds 80 columns ({len(over)} violations)")
+
+    # 018: opening the pane mid-stream is gated (aborted turn never enters
+    # storage, so the exact history-count assertion below stays valid).
+    os.write(fd, b"/sidebar on\r")
+    read_all(fd, 0.5)
+    os.write(fd, b"gate-test\r")
+    time.sleep(0.2)  # mid-stream
+    os.write(fd, b"\x06")  # Ctrl-F: sidebar focus
+    os.write(fd, b"\x1b[B\x1b[B")  # onto a file (past ./ ../)
+    os.write(fd, b"p")
+    gate = strip_csi(read_all(fd, 0.5))
+    expect("[info] preview needs an idle turn" in gate,
+           "018 pane open gated during streaming")
+    os.write(fd, b"\x1b")  # leave sidebar focus
+    os.write(fd, b"\x1b")  # abort the turn (keeps history count intact)
+    read_all(fd, 2.0)
 
     # Lone Esc interrupts the in-flight request (2026-11-02 request;
     # design 5.6 rule 5 "esc-to-interrupt"). Aborted turns never enter
@@ -570,6 +594,24 @@ def main():
     esc_out = read_all(fd, 3.0)
     expect("[interrupted] You: esc-interrupt" in esc_out,
            "lone Esc aborts the streaming turn")
+
+    # 018 browser: `i` inserts a directory path for the model (Enter now enters
+    # dirs); Enter on "../" navigates and keeps focus. Placed last so the async
+    # rescan cannot disturb the earlier history-count assertion.
+    os.write(fd, b"/sidebar on\r")
+    read_all(fd, 0.5)
+    os.write(fd, b"\x06")   # focus (sel = ./)
+    os.write(fd, b"\x1b[B")  # ../
+    os.write(fd, b"i")      # insert dir path
+    ins = strip_csi(read_all(fd, 0.5))
+    expect("[sidebar] inserted:" in ins, "018 i inserts a directory path for the model")
+    os.write(fd, b"\x08" * 40)
+    read_all(fd, 0.3)
+    os.write(fd, b"\x06")   # re-focus (sel = ./)
+    os.write(fd, b"\x1b[B")  # ../
+    os.write(fd, b"\r")     # enter parent
+    nav = strip_csi(read_all(fd, 0.7))
+    expect("[sidebar] cd " in nav, "018 Enter on ../ navigates to the parent dir")
 
     os.write(fd, b"\x03\x03")  # double Ctrl-C -> quit
     exit_out = read_all(fd, 2.0)
@@ -695,7 +737,28 @@ def main():
     py_out = read_all(afd, 2.0)
     expect("[preview] main.py" in strip_csi(py_out), "v5 /preview shows the code file")
     expect("\x1b[36mdef\x1b[0m" in py_out, "v5 code preview highlights keyword cyan")
+    expect("(L1–L2 of 2)" in strip_csi(py_out), "018 pane header shows the visible range")
+    os.write(afd, b"\x1b")
+    expect("[preview] closed: main.py" in strip_csi(read_all(afd, 0.5)),
+           "018 Esc closes the pane")
     os.remove(ws_dir + "/main.py")
+    # 018: scrollable pane on a longer file; body lives in the live region,
+    # not the transcript (after close, new frames carry no body lines).
+    open(ws_dir + "/long.txt", "w").write("".join(f"line {i}\n" for i in range(1, 31)))
+    os.write(afd, b"/preview long.txt\r")
+    lo = strip_csi(read_all(afd, 1.0))
+    expect("(L1–L" in lo and "of 30)" in lo, "018 pane opens with range header")
+    os.write(afd, b"\x1b[B")
+    expect("(L2–L" in strip_csi(read_all(afd, 0.5)), "018 Down scrolls the pane")
+    os.write(afd, b"\x1b[<65;10;10M")  # SGR mouse wheel down
+    expect("(L5–L" in strip_csi(read_all(afd, 0.5)), "018 mouse wheel down scrolls the pane")
+    os.write(afd, b"\x1b[<64;10;10M")  # SGR mouse wheel up
+    expect("(L2–L" in strip_csi(read_all(afd, 0.5)), "018 mouse wheel up scrolls the pane")
+    os.write(afd, b"\x1b")
+    closed_long = strip_csi(read_all(afd, 0.5))
+    expect("[preview] closed: long.txt" in closed_long and "line 15" not in closed_long,
+           "018 Esc closes; body never entered the transcript")
+    os.remove(ws_dir + "/long.txt")
     # v3.1 runtime approval switch: query shows current policy; switching
     # to off persists + warns; the NEXT tool call then runs WITHOUT an
     # approval block (status row carries the auto-tools marker instead).

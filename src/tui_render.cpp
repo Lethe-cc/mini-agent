@@ -874,6 +874,27 @@ std::string compose_footer(std::string_view left, std::string_view right, std::s
     return head + info;
 }
 
+std::size_t pane_visible_rows(std::size_t term_rows) {
+    // 018: footer + composer + pane header + two rows of margin.
+    return term_rows > 10 ? term_rows - 5 : 5;
+}
+
+std::size_t pane_scroll_clamp(std::size_t scroll, std::size_t total, std::size_t visible) {
+    const std::size_t max_scroll = total > visible ? total - visible : 0;
+    return scroll > max_scroll ? max_scroll : scroll;
+}
+
+std::string pane_header(std::string_view path, std::size_t scroll, std::size_t visible,
+                        std::size_t total, std::size_t cols) {
+    const std::size_t first = total == 0 ? 0 : scroll + 1;
+    const std::size_t last = std::min(total, scroll + visible);
+    std::string out = "[preview] " + sanitize_display(path) + " (L" + std::to_string(first) +
+                      "\xe2\x80\x93L" + std::to_string(last) + " of " + std::to_string(total) +
+                      ") \xc2\xb7 \xe2\x86\x91/\xe2\x86\x93/wheel \xc2\xb7 Esc close \xc2\xb7 "
+                      "Shift+drag copy";
+    return md::clip(std::move(out), cols > 1 ? cols - 1 : 1);
+}
+
 std::string sysinfo_line(bool colors, const std::string& user, const std::string& host,
                          const std::string& cwd, const std::string& clock) {
     // v4.12 (design 007 §v4.12): bottom system-info row. Pure so the

@@ -53,8 +53,8 @@ cmake --install build/linux-gcc-debug     # ~/.local/bin/mini-agent
 ## 5. 工作区与编码
 
 - 会话绑定 workspace：启动 `--cwd <dir>` 或 TUI `/cwd <dir>`；文件五工具（read/write/edit/list/search）限制在 workspace 内（软边界），`run_bash` 同步 chdir。
-- 侧栏：`/sidebar on` 看目录树 + git 改动；Ctrl-F 聚焦、方向键选择、Enter 插入路径、`p` 预览。
-- `/preview <path>`：给人看的文件预览（不进模型上下文）。
+- 侧栏：`/sidebar on` 看当前目录 + git 改动；Ctrl-F 聚焦后是单级浏览器：↑/↓ 选择、Enter 进入目录（`.`/`..` 导航）或插入文件、`i` 插入选中项（含目录）给模型、`p` 预览。预览 pane 里滚轮/↑↓ 滚动、Shift+拖拽复制、Esc 关闭。
+- `/preview <path>`：给人看的文件预览（不进模型上下文）。018 起是**可关可滚的预览 pane**：↑/↓/PgUp/PgDn 滚动、Esc 关闭，转录只留 open/closed 标记，不再灌几百行正文；侧栏 `p` 同样开 pane。回合流式期间不开（提示等空闲）。
 - 编辑审批看 diff：`+`绿/`-`红，批准即按预览落盘（执行前重读校验，不一致即拒绝）。
 
 ## 6. 会话管理

@@ -3341,6 +3341,28 @@ void test_context_017() {
           "first compaction has no previous-summary block");
 }
 
+// 018 (design 018 §4.1): preview pane geometry pure helpers.
+void test_pane_helpers() {
+    using mini_agent::tui::pane_header;
+    using mini_agent::tui::pane_scroll_clamp;
+    using mini_agent::tui::pane_visible_rows;
+    check(pane_visible_rows(24) == 19, "pane visible rows: 24 -> 19");
+    check(pane_visible_rows(8) == 5, "pane visible rows floor 5 on tiny terminals");
+    check(pane_scroll_clamp(100, 30, 19) == 11, "scroll clamps to the last page");
+    check(pane_scroll_clamp(0, 5, 19) == 0, "file shorter than the pane: no scroll");
+    check(pane_scroll_clamp(3, 30, 19) == 3, "in-range scroll untouched");
+    const auto h = pane_header("a.txt", 0, 19, 30, 80);
+    check(mini_agent::md::display_width(h) <= 79 &&
+              h.find("(L1\xe2\x80\x93L19 of 30)") != std::string::npos,
+          "pane header: first page range + cols-1 width guard");
+    const auto h2 = pane_header("a.txt", 11, 19, 30, 80);
+    check(h2.find("(L12\xe2\x80\x93L30 of 30)") != std::string::npos,
+          "pane header: last page range");
+    const auto h3 = pane_header("a.txt", 0, 19, 0, 80);
+    check(h3.find("(L0\xe2\x80\x93L0 of 0)") != std::string::npos,
+          "pane header: empty file degenerate range");
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -3394,6 +3416,7 @@ int main() {
     test_context_compact();
     test_session_markdown_export();
     test_context_017();
+    test_pane_helpers();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

@@ -786,9 +786,18 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     bool sidebar_stale = false; // refresh requested while a scan ran
     struct SidebarResult {
         std::vector<std::string> rows; // pre-tinted? no: plain, render tints
-        // Parallel to rows: selectable entries carry the ABSOLUTE path;
-        // headers/blanks are empty (skipped by the focus navigation).
+        // Parallel to rows: selectable entries carry the workspace-RELATIVE
+        // path (relative to `root` below); headers/blanks are empty (skipped
+        // by the focus navigation).
         std::vector<std::string> paths;
+        // The workspace root the scan ran against. Preview resolves paths
+        // against THIS root (not the live config.workspace) so a listed file
+        // always previews even if the workspace is rebound mid-scan.
+        std::string root;
+        // Repo toplevel for the git "changed:" entries (stored absolute).
+        std::string repo_root;
+        // The directory the browser list was scanned from.
+        std::string browse;
         std::string error; // workspace unreadable etc.
     } sidebar_result;
     // v4.14: sidebar focus mode (Ctrl-F): arrow keys walk selectable rows,
@@ -796,6 +805,36 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // into rows/paths; navigation skips non-selectable entries.
     bool sidebar_focus = false;
     std::size_t sidebar_sel = 0;
+    // 018: single-level browser current dir (empty = workspace root). Enter on
+    // a directory / "." / ".." navigates; the git "changed:" section is unaffected.
+    std::string sidebar_browse;
+    // 018 (design 018): preview pane -- a closable, scrollable view rendered
+    // in the live region (extra_rows); the transcript only gets open/closed
+    // marker lines. Main-thread only, same discipline as screen/logger.
+    struct PreviewPaneState {
+        bool open = false;
+        std::string path;
+        std::string body;
+        std::vector<std::string> lines;
+        std::size_t scroll = 0;
+        std::size_t rendered_cols = 0;
+    } preview_pane;
+    // 018: SGR mouse reporting, enabled only while the pane is open so normal
+    // terminal text-selection is unaffected the rest of the time. 1000=button
+    // events, 1006=SGR encoding; wheel up/down arrive as button 64/65.
+    auto set_preview_mouse = [](bool on) {
+        const char* seq = on ? "\x1b[?1000h\x1b[?1006h" : "\x1b[?1000l\x1b[?1006l";
+        ::fwrite(seq, 1, std::strlen(seq), stdout);
+        ::fflush(stdout);
+    };
+    auto close_preview_pane = [&] {
+        if (!preview_pane.open)
+            return;
+        preview_pane.open = false;
+        set_preview_mouse(false);
+        screen.commit(tint(colors_enabled(), "2", "[preview] closed: " + preview_pane.path));
+        logger->event("preview_close", {{"path", preview_pane.path}});
+    };
     std::atomic<bool> reasoning_live{false};
     // Completed tool rows for THIS turn, kept for the panel even after
     // drain_tool_events commits them to history (the panel is the turn's
@@ -899,6 +938,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     };
 
     auto start_turn = [&](const std::string& text) {
+        close_preview_pane(); // 018: streaming needs the live region
         if (worker.joinable())
             worker.join();
         config_snapshot = config; // refresh after join, before worker start
@@ -1127,14 +1167,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         sidebar_running = true;
         const std::string root =
             config.workspace.empty() ? std::filesystem::current_path().string() : config.workspace;
-        sidebar_worker = std::thread([&, root] {
+        const std::string browse = sidebar_browse.empty() ? root : sidebar_browse;
+        sidebar_worker = std::thread([&, root, browse] {
             SidebarResult r;
             try {
                 std::error_code ec;
-                const std::filesystem::path base(root);
+                const std::filesystem::path base(browse);
                 if (!std::filesystem::is_directory(base, ec)) {
-                    r.error = "not a directory: " + root;
+                    r.error = "not a directory: " + browse;
                 } else {
+                    std::string toplevel; // repo root, filled by run_git_status
                     auto run_git_status = [&]() -> std::vector<std::string> {
                         // Alternating [display, path, display, path, ...].
                         std::vector<const char*> argv = {"git",
@@ -1151,6 +1193,24 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         spec.workspace = root;
                         spec.timeout_seconds = 5;
                         auto out = run_subprocess(spec, [] { return false; });
+                        // git reports paths relative to the repo TOPLEVEL, not
+                        // the workspace (workspace may be a subdir like build/).
+                        // Keep EVERY changed entry (the list is repo-scoped) but
+                        // store it ABSOLUTE so preview resolves against the repo
+                        // root instead of the workspace subdir.
+                        {
+                            std::vector<const char*> targv = {
+                                "git", "-C", root.c_str(), "rev-parse", "--show-toplevel", nullptr};
+                            SubprocessSpec ts;
+                            ts.exec_path = "git";
+                            ts.argv = &targv;
+                            ts.workspace = root;
+                            ts.timeout_seconds = 5;
+                            toplevel = run_subprocess(ts, [] { return false; }).text;
+                            while (!toplevel.empty() &&
+                                   (toplevel.back() == '\n' || toplevel.back() == '\r'))
+                                toplevel.pop_back();
+                        }
                         std::vector<std::string> lines;
                         std::istringstream in(out.text);
                         std::string line;
@@ -1160,11 +1220,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                 continue;
                             std::string code = line.substr(0, 2);
                             std::string file = line.substr(3);
+                            if (!file.empty() && file.front() == '"')
+                                continue; // quoted (non-ASCII) path: skip
                             const auto glyph = sidebar_status_glyph(code);
-                            if (!glyph.empty()) {
-                                lines.push_back(glyph + " " + file);
-                                lines.push_back(file);
-                            }
+                            if (glyph.empty())
+                                continue;
+                            std::string stored = file;
+                            if (!toplevel.empty())
+                                stored = (std::filesystem::path(toplevel) / file).string();
+                            lines.push_back(glyph + " " + file); // readable, repo-relative
+                            lines.push_back(stored);             // absolute for resolution
                         }
                         return lines;
                     };
@@ -1177,48 +1242,39 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         rows.push_back(std::move(text));
                         paths.push_back(std::move(path));
                     };
-                    std::function<void(const std::filesystem::path&, int, std::size_t&)> walk =
-                        [&](const std::filesystem::path& dir, int depth, std::size_t& count) {
-                            if (depth > 2 || rows.size() >= 18 || count > 400)
-                                return;
-                            std::vector<std::string> names;
-                            for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
-                                if (ec)
-                                    break;
-                                const std::string name = e.path().filename().string();
-                                if (name.front() == '.' || name == "node_modules" ||
-                                    name == "build" || name == "__pycache__" || name == "target" ||
-                                    name == "venv")
-                                    continue;
-                                names.push_back(name);
-                                ++count;
-                            }
-                            std::sort(names.begin(), names.end());
-                            for (const auto& name : names) {
-                                if (rows.size() >= 18)
-                                    break;
-                                const auto child = dir / name;
-                                const bool is_dir = std::filesystem::is_directory(child, ec);
-                                const auto rel = std::filesystem::relative(child, base, ec);
-                                const std::string rel_str = ec ? std::string() : rel.string();
-                                add(std::string(static_cast<std::size_t>(depth) * 2, ' ') +
-                                        (is_dir ? name + "/" : name),
-                                    rel_str);
-                                if (is_dir)
-                                    walk(child, depth + 1, count);
-                            }
-                        };
-                    std::size_t count = 0;
-                    add(sanitize_display(std::filesystem::path(root).filename().empty()
-                                             ? root
-                                             : std::filesystem::path(root).filename().string()),
-                        std::string()); // header row: not selectable
-                    walk(base, 1, count);
-                    if (count > 400)
-                        add("... (large tree, listing capped)", std::string());
+                    // 018: single-level browser of `browse` (replaces the old
+                    // 2-level tree). "." and ".." are selectable navigation rows;
+                    // Enter on a directory enters it, on a file inserts the path.
+                    // Entries are stored ABSOLUTE; the git changed: section below
+                    // stays repo-scoped and unchanged.
+                    std::vector<std::string> names;
+                    for (const auto& e : std::filesystem::directory_iterator(base, ec)) {
+                        if (ec)
+                            break;
+                        const std::string name = e.path().filename().string();
+                        if (name.front() == '.')
+                            continue; // hidden; ./ and ../ added explicitly
+                        names.push_back(name);
+                    }
+                    std::sort(names.begin(), names.end());
+                    add(sanitize_display(base.string()), std::string()); // header
+                    add("./", base.string());
+                    add("../", base.parent_path().string());
+                    for (const auto& name : names) {
+                        if (rows.size() >= 24) {
+                            add("... (listing capped)", std::string());
+                            break;
+                        }
+                        const auto child = base / name;
+                        const bool is_dir = std::filesystem::is_directory(child, ec);
+                        add(is_dir ? name + "/" : name, child.string());
+                    }
                     r.rows = rows;
                     r.paths = paths;
-                    auto changed_pairs = run_git_status(); // pairs: display, path
+                    r.root = root;
+                    r.browse = base.string();
+                    auto changed_pairs = run_git_status(); // pairs: display, path; fills toplevel
+                    r.repo_root = toplevel; // must be read AFTER run_git_status fills it
                     if (!changed_pairs.empty()) {
                         r.rows.push_back("");
                         r.paths.push_back("");
@@ -1243,6 +1299,20 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             sidebar_result = std::move(r);
             sidebar_done = true;
         });
+    };
+
+    // 018: browser navigation -- enter a directory (or "."/"..") and rescan,
+    // keeping sidebar focus so the user can keep walking. Files are handled by
+    // the caller (insert / preview), not here.
+    auto enter_sidebar_dir = [&](const std::string& dir) {
+        std::error_code ec;
+        const auto canon = std::filesystem::weakly_canonical(dir, ec);
+        if (ec || !std::filesystem::is_directory(canon, ec))
+            return;
+        sidebar_browse = canon.string();
+        sidebar_sel = 0;
+        start_sidebar();
+        screen.commit("[sidebar] cd " + sanitize_display(sidebar_browse));
     };
 
     auto start_models_fetch = [&](bool force) {
@@ -1371,34 +1441,47 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // involving the model. Markdown renders; everything else shows verbatim.
     // Read-only, bounded to the session workspace -- the same rule the file
     // tools enforce (ADR 007). Shared by /preview and the sidebar `p` key.
-    auto preview_workspace_file = [&](const std::string& path_raw) {
+    // 018 (design 018): loader extracted from 011's preview_workspace_file;
+    // validation semantics (workspace bounds, regular file, binary reject)
+    // unchanged. The body is kept so the pane can re-render on resize.
+    auto load_preview_body = [&](const std::string& path_raw, std::string* body, std::string* err,
+                                 const std::string& root_override) -> bool {
         std::filesystem::path resolved;
         std::string bounds_error;
-        const std::string root = config.workspace.empty()
-                                     ? std::filesystem::current_path().string()
-                                     : std::filesystem::weakly_canonical(config.workspace).string();
+        const std::string root =
+            !root_override.empty()
+                ? root_override
+                : (config.workspace.empty()
+                       ? std::filesystem::current_path().string()
+                       : std::filesystem::weakly_canonical(config.workspace).string());
         if (!resolve_within_workspace(root, path_raw, &resolved, &bounds_error)) {
-            screen.commit("[error] preview " + sanitize_display(path_raw) + ": " +
-                          sanitize_display(bounds_error));
-            return;
+            *err = "preview " + sanitize_display(path_raw) + ": " + sanitize_display(bounds_error);
+            return false;
         }
         std::error_code ec;
         if (!std::filesystem::is_regular_file(resolved, ec)) {
-            screen.commit("[error] preview: not a regular file: " + sanitize_display(path_raw));
-            return;
+            *err = "preview: not a regular file: " + sanitize_display(path_raw);
+            return false;
         }
         std::ifstream stream(resolved, std::ios::binary);
         if (!stream) {
-            screen.commit("[error] preview: cannot open: " + sanitize_display(path_raw));
-            return;
+            *err = "preview: cannot open: " + sanitize_display(path_raw);
+            return false;
         }
         std::ostringstream buffer;
         buffer << stream.rdbuf();
-        const std::string body = buffer.str();
-        if (body.find('\0') != std::string::npos) {
-            screen.commit("[error] preview: binary file: " + sanitize_display(path_raw));
-            return;
+        *body = buffer.str();
+        if (body->find('\0') != std::string::npos) {
+            *err = "preview: binary file: " + sanitize_display(path_raw);
+            return false;
         }
+        return true;
+    };
+    // 011 rendering pipeline (md / highlight / sanitize, 500-line code cap),
+    // now producing a line vector for the pane instead of committing.
+    auto render_preview_lines = [&](const std::string& body, const std::string& path_raw,
+                                    std::size_t cols) -> std::vector<std::string> {
+        std::vector<std::string> out;
         std::string lower = path_raw;
         for (auto& c : lower)
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1406,15 +1489,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             lower.size() >= 3 &&
             (lower.compare(lower.size() - 3, 3, ".md") == 0 ||
              (lower.size() >= 9 && lower.compare(lower.size() - 9, 9, ".markdown") == 0));
-        screen.commit("[preview] " + sanitize_display(path_raw));
+        const std::size_t width = cols > 1 ? cols - 1 : 1;
         if (markdown) {
             std::string pline;
-            std::istringstream pr(md::render(body, cols_now() > 1 ? cols_now() - 1 : 1));
+            std::istringstream pr(md::render(body, width));
             while (std::getline(pr, pline))
-                screen.commit(pline.empty() ? std::string(" ") : pline);
+                out.push_back(pline.empty() ? std::string(" ") : pline);
         } else {
-            // v5 (design 011 5.6): recognized code files highlight; colors
-            // gate like every other styled path.
             const auto lang = hl::language_for_path(path_raw);
             const bool lit = !lang.empty() && colors_enabled();
             std::string pline;
@@ -1423,15 +1504,40 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             std::size_t shown = 0;
             while (std::getline(pr, pline) && shown < 500) {
                 const auto safe = sanitize_display(pline);
-                if (lit)
-                    screen.commit(hl::highlight_line(safe, lang, hstate));
-                else
-                    screen.commit("  " + safe);
+                out.push_back(lit ? hl::highlight_line(safe, lang, hstate) : "  " + safe);
                 ++shown;
             }
             if (!pr.eof())
-                screen.commit("  ... truncated (file longer than 500 lines)");
+                out.push_back("  ... truncated (file longer than 500 lines)");
         }
+        return out;
+    };
+    auto open_preview_pane = [&](const std::string& path_raw,
+                                 const std::string& root_override = "") -> bool {
+        // 018 gate: the live region belongs to streaming/compact/approval.
+        if (streaming || compact_running || approval_pending()) {
+            screen.commit("[info] preview needs an idle turn · wait or Ctrl-C");
+            return false;
+        }
+        std::string body, err;
+        if (!load_preview_body(path_raw, &body, &err, root_override)) {
+            screen.commit("[error] " + err);
+            return false;
+        }
+        close_preview_pane(); // replacing an open pane leaves a closed marker
+        preview_pane.open = true;
+        preview_pane.path = path_raw;
+        preview_pane.body = std::move(body);
+        preview_pane.lines = render_preview_lines(preview_pane.body, path_raw, cols_now());
+        preview_pane.scroll = 0;
+        preview_pane.rendered_cols = cols_now();
+        sidebar_focus = false; // 018: the pane takes over from sidebar focus
+        set_preview_mouse(true);
+        screen.commit("[preview] " + sanitize_display(path_raw) + " · " +
+                      std::to_string(preview_pane.lines.size()) + " lines · Esc closes");
+        logger->event("preview_open",
+                      {{"path", path_raw}, {"lines", std::to_string(preview_pane.lines.size())}});
+        return true;
     };
     // v7 (design 013 §5.4): any persisting command auto-creates the default
     // profile when none exists, keeping first-run friction at zero. The
@@ -2235,6 +2341,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 // for models without advertised metadata.
                 const auto caps = caps_for_model();
                 if (!caps.reasoning_efforts.empty()) {
+                    close_preview_pane(); // 018: menu takes over the live region
                     reasoning_choices = caps.reasoning_efforts;
                     reasoning_menu_open = true;
                     for (const auto& row : reasoning_menu_rows(
@@ -2368,6 +2475,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             std::string note;
             tool_registry = build_tool_registry(config, &note);
             config_snapshot = config;
+            sidebar_browse.clear(); // 018: browser resets to the new workspace
             start_sidebar(); // v4.13: tree belongs to the new boundary
             screen.commit("[ok] workspace=" + sanitize_display(config.workspace) +
                           " · tools rebound · " +
@@ -2382,7 +2490,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit("usage: /preview <path> (workspace-bounded; .md renders)");
                 return true;
             }
-            preview_workspace_file(std::string(arg));
+            open_preview_pane(std::string(arg));
             return true;
         }
         if (line == "/tools") {
@@ -2454,6 +2562,31 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             history_draft = composer;
     };
 
+    // 018: insert the highlighted entry (file OR directory) as a workspace-
+    // relative path and leave focus. Enter uses this for files; `i` uses it for
+    // any entry, so a directory can still be handed to the model now that Enter
+    // navigates into it. Defined here (after mark_edited) for scope.
+    auto insert_sidebar_selection = [&]() -> bool {
+        if (sidebar_sel >= sidebar_result.paths.size() || sidebar_result.paths[sidebar_sel].empty())
+            return false;
+        const std::string& rawp = sidebar_result.paths[sidebar_sel];
+        std::string rel = rawp;
+        if (!rel.empty() && rel.front() == '/') {
+            std::error_code rec;
+            const auto ws = config.workspace.empty() ? std::filesystem::current_path()
+                                                     : std::filesystem::path(config.workspace);
+            const auto r = std::filesystem::relative(std::filesystem::path(rel), ws, rec);
+            if (!rec)
+                rel = r.string();
+        }
+        utf8_insert(composer, cursor, rel);
+        mark_edited();
+        screen.commit("[sidebar] inserted: " + sanitize_display(rel) +
+                      " · edit freely, Enter sends as usual");
+        sidebar_focus = false;
+        return true;
+    };
+
     for (;;) {
         struct pollfd pfd{STDIN_FILENO, POLLIN, 0};
         const int ready = ::poll(&pfd, 1, static_cast<int>(options.frame_ms));
@@ -2483,7 +2616,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     continue; // held: swallowed without touching composer
                 }
                 if (c == 0x03) { // Ctrl-C
-                    if (streaming || compact_running) {
+                    if (preview_pane.open) {
+                        close_preview_pane(); // 018: modal close, no escalation
+                    } else if (streaming || compact_running) {
                         if (abort_requested.load()) {
                             // already interrupted, waiting on worker: quit
                             goto done;
@@ -2504,6 +2639,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 } else if (c == 0x0C) { // Ctrl-L
                     screen.clear_live();
                 } else if (c == 0x06 && show_sidebar) { // Ctrl-F: sidebar focus (v4.14)
+                    close_preview_pane();               // 018: modal switch closes the pane
                     sidebar_focus = !sidebar_focus;
                     if (sidebar_focus) {
                         sidebar_sel = 0;
@@ -2515,8 +2651,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             }
                         }
                         // v5: make the preview key discoverable on entry.
-                        screen.commit("[hint] sidebar: Up/Down select · p=preview+unselect · "
-                                      "Enter=insert · Esc=leave");
+                        screen.commit("[hint] sidebar: ↑/↓ · Enter=enter · i=insert · "
+                                      "p=preview · Esc=leave");
                     }
 
                 } else if (c == 0x1B) { // ESC: edit sequences or interrupt
@@ -2541,6 +2677,21 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             // has no rows yet (falling through to history
                             // recall could auto-send a stale message).
                             const bool nav = sidebar_focus;
+                            // 018: while the pane is open, navigation keys
+                            // scroll it (modal, same precedence as sidebar).
+                            const bool pane = preview_pane.open;
+                            auto scroll_by = [&](long long delta) {
+                                const std::size_t vis =
+                                    pane_visible_rows(static_cast<std::size_t>(term_rows()));
+                                const std::size_t cur = preview_pane.scroll;
+                                const std::size_t next =
+                                    delta < 0 ? (cur > static_cast<std::size_t>(-delta)
+                                                     ? cur - static_cast<std::size_t>(-delta)
+                                                     : 0)
+                                              : cur + static_cast<std::size_t>(delta);
+                                preview_pane.scroll =
+                                    pane_scroll_clamp(next, preview_pane.lines.size(), vis);
+                            };
                             auto move_sel = [&](int delta) {
                                 const auto& paths = sidebar_result.paths;
                                 if (paths.empty())
@@ -2566,13 +2717,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                             };
                             switch (fin) {
                             case 'A':
-                                if (nav)
+                                if (pane)
+                                    scroll_by(-1);
+                                else if (nav)
                                     move_sel(-1);
                                 else
                                     hist_up();
                                 break;
                             case 'B':
-                                if (nav)
+                                if (pane)
+                                    scroll_by(+1);
+                                else if (nav)
                                     move_sel(+1);
                                 else
                                     hist_down();
@@ -2584,15 +2739,53 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                 cursor = utf8_prev(composer, cursor);
                                 break;
                             case 'H':
-                                cursor = 0;
+                                if (pane)
+                                    preview_pane.scroll = 0;
+                                else
+                                    cursor = 0;
                                 break;
                             case 'F':
-                                cursor = composer.size();
+                                if (pane)
+                                    preview_pane.scroll = pane_scroll_clamp(
+                                        preview_pane.lines.size(), preview_pane.lines.size(),
+                                        pane_visible_rows(static_cast<std::size_t>(term_rows())));
+                                else
+                                    cursor = composer.size();
                                 break;
+                            case 'M':
+                            case 'm': {
+                                // 018: SGR mouse (\x1b[<btn;x;y M/m). Only the
+                                // wheel (64/65) acts, and only while the pane is
+                                // open; all other mouse events are swallowed so
+                                // they never leak into the composer.
+                                const std::string_view mp(buf + esc + 2,
+                                                          static_cast<std::size_t>(j - esc - 2));
+                                if (pane && !mp.empty() && mp.front() == '<') {
+                                    const auto semi = mp.find(';');
+                                    const long long btn = std::strtoll(
+                                        std::string(mp.substr(1, semi == std::string_view::npos
+                                                                     ? std::string_view::npos
+                                                                     : semi - 1))
+                                            .c_str(),
+                                        nullptr, 10);
+                                    if (btn == 64)
+                                        scroll_by(-3);
+                                    else if (btn == 65)
+                                        scroll_by(+3);
+                                }
+                                break;
+                            }
                             case '~': {
                                 const std::string_view params(
                                     buf + esc + 2, static_cast<std::size_t>(j - esc - 2));
-                                if (params == "3") {
+                                if (params == "5" || params == "6") {
+                                    if (pane) {
+                                        const long long page =
+                                            static_cast<long long>(pane_visible_rows(
+                                                static_cast<std::size_t>(term_rows())));
+                                        scroll_by(params == "5" ? -page : page);
+                                    }
+                                } else if (params == "3") {
                                     if (utf8_erase_at(composer, cursor))
                                         mark_edited();
                                 } else if (params == "1") {
@@ -2606,6 +2799,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                                 break; // swallow other CSI (paste marks, F-keys)
                             }
                         }
+                    } else if (preview_pane.open) {
+                        close_preview_pane(); // 018: lone Esc closes the pane
                     } else if (sidebar_focus) {
                         // v4.14: lone ESC leaves the sidebar focus first
                         // (before the interrupt chain -- focus is modal UI,
@@ -2630,6 +2825,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         screen.commit("[cancel] model menu dismissed; /models re-lists");
                     }
                 } else if (c == '\r' || c == '\n') {
+                    close_preview_pane(); // 018: Enter closes, then normal semantics
                     if (sidebar_focus) {
                         // Modal Enter: insert the highlighted path, or just
                         // leave focus when the scan has nothing selectable
@@ -2637,16 +2833,18 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                         // Enter (no accidental send of a half-built line).
                         if (sidebar_sel < sidebar_result.paths.size() &&
                             !sidebar_result.paths[sidebar_sel].empty()) {
-                            // v4.14: pick the highlighted file/dir -- insert the
-                            // workspace-relative path at the caret, leave focus
-                            // so the composer keys behave normally again.
-                            const std::string& rel = sidebar_result.paths[sidebar_sel];
-                            utf8_insert(composer, cursor, rel); // advances cursor
-                            mark_edited();
-                            screen.commit("[sidebar] inserted: " + sanitize_display(rel) +
-                                          " · edit freely, Enter sends as usual");
+                            const std::string& rawp = sidebar_result.paths[sidebar_sel];
+                            std::error_code dec;
+                            if (std::filesystem::is_directory(rawp, dec)) {
+                                // 018: Enter on a dir / "." / ".." navigates and
+                                // keeps focus so the user can keep browsing.
+                                enter_sidebar_dir(rawp);
+                            } else {
+                                insert_sidebar_selection(); // file: insert + leave focus
+                            }
+                        } else {
+                            sidebar_focus = false;
                         }
-                        sidebar_focus = false;
                     } else if (secret_input) {
                         secret_input = false;
                         if (!composer.empty()) {
@@ -2766,14 +2964,38 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     if (sidebar_focus && c == 'p') {
                         if (sidebar_sel < sidebar_result.paths.size() &&
                             !sidebar_result.paths[sidebar_sel].empty()) {
-                            preview_workspace_file(sidebar_result.paths[sidebar_sel]);
-                            sidebar_sel = static_cast<std::size_t>(-1);
-                            screen.commit("[sidebar] selection cleared · Up/Down re-selects, "
-                                          "Esc leaves");
+                            // 018: resolve against the sidebar's own scan root
+                            // (repo root for absolute changed entries) so the
+                            // listed file always previews; only clear/announce on
+                            // success.
+                            const std::string& sp = sidebar_result.paths[sidebar_sel];
+                            std::error_code dec;
+                            if (std::filesystem::is_directory(sp, dec)) {
+                                enter_sidebar_dir(sp); // p on a dir enters it too
+                            } else {
+                                // 018: resolve against the repo root for repo
+                                // entries, else the browsed dir; only clear the
+                                // selection / announce when it actually opened.
+                                const std::string& rr = sidebar_result.repo_root;
+                                const std::string proot =
+                                    (!rr.empty() && sp.rfind(rr + "/", 0) == 0)
+                                        ? rr
+                                        : sidebar_result.browse;
+                                if (open_preview_pane(sp, proot)) {
+                                    sidebar_sel = static_cast<std::size_t>(-1);
+                                    screen.commit("[sidebar] selection cleared · pane open · "
+                                                  "Esc closes, Ctrl-F re-focuses");
+                                }
+                            }
                         } else {
                             screen.commit("[hint] no sidebar row selected · Up/Down selects, "
                                           "p previews");
                         }
+                    } else if (sidebar_focus && c == 'i') {
+                        // 018: insert the highlighted path (file OR dir) for the
+                        // model; Enter now navigates into dirs, so `i` is the
+                        // explicit "give this path to the model" key.
+                        insert_sidebar_selection();
                     } else {
                         utf8_insert(composer, cursor, std::string_view(&buf[i], 1));
                         mark_edited();
@@ -2860,6 +3082,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     login_fields.emplace_back("http_status", std::to_string(probe.http_status));
                 logger->event("login", login_fields);
             }
+            close_preview_pane(); // 018: menu takes over the live region
             model_menu_open = !model_choices.empty();
             if (model_menu_open) {
                 // `<- current` tags the active combination's label.
@@ -3295,6 +3518,26 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 extra_rows = approval_rows(snapshot.name, snapshot.arguments_json,
                                            approval_expanded, snapshot_preview);
             }
+            // 018: the preview pane owns the extra-rows slot when idle
+            // (streaming/approval cannot coexist with it; menus close it).
+            // Scroll/resize change extra_rows, busting the render cache.
+            if (preview_pane.open && !streaming && !approval_pending()) {
+                if (preview_pane.rendered_cols != cols_now()) {
+                    preview_pane.lines =
+                        render_preview_lines(preview_pane.body, preview_pane.path, cols_now());
+                    preview_pane.rendered_cols = cols_now();
+                }
+                const std::size_t vis = pane_visible_rows(static_cast<std::size_t>(term_rows()));
+                preview_pane.scroll =
+                    pane_scroll_clamp(preview_pane.scroll, preview_pane.lines.size(), vis);
+                extra_rows.clear();
+                extra_rows.push_back(pane_header(preview_pane.path, preview_pane.scroll, vis,
+                                                 preview_pane.lines.size(), cols_now()));
+                const std::size_t end =
+                    std::min(preview_pane.lines.size(), preview_pane.scroll + vis);
+                for (std::size_t k = preview_pane.scroll; k < end; ++k)
+                    extra_rows.push_back(preview_pane.lines[k]);
+            }
             // v4.12: bottom system-info row (user@host · cwd · clock).
             // Gathered per frame: the clock is the only fast-changing part
             // and row-level diffing keeps the repaint cost at one row per
@@ -3352,6 +3595,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
 done:
     exiting = true;
     abort_requested = true;
+    set_preview_mouse(false); // 018: restore normal mouse/selection on exit
     if (worker.joinable())
         worker.join();
     if (models_worker.joinable())

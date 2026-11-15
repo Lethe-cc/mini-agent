@@ -210,6 +210,16 @@ std::string sidebar_status_glyph(std::string_view xy);
 // hide the state words. On tiny terminals the info still wins.
 std::string compose_footer(std::string_view left, std::string_view right, std::size_t cols);
 
+// 018 (design 018 §4.1): preview pane geometry -- pure, unit-tested.
+// Visible body rows for a terminal of term_rows (footer/composer/header
+// overhead reserved, floor 5); scroll offset clamped to the last page;
+// one-line pane header with the visible range, clipped to cols-1 (v7.2
+// autowrap guard).
+std::size_t pane_visible_rows(std::size_t term_rows);
+std::size_t pane_scroll_clamp(std::size_t scroll, std::size_t total, std::size_t visible);
+std::string pane_header(std::string_view path, std::size_t scroll, std::size_t visible,
+                        std::size_t total, std::size_t cols);
+
 // v4.12: one bottom system-info row: "user@host · cwd · clock" (dim when
 // colors on). Pure: the caller gathers the values (USER/getpwuid,
 // gethostname, workspace-or-cwd with $HOME abbreviated to ~, local
