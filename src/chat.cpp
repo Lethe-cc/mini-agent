@@ -172,7 +172,7 @@ std::optional<Chat> chat_from_json(std::string_view text, std::string* error) {
     return chat;
 }
 
-Chat build_compact_request(const Chat& history) {
+Chat build_compact_request(const Chat& history, std::string_view previous_summary) {
     // 015 (design 015 §4C): bounded transcript so the summary request
     // itself cannot overflow the window it is meant to relieve.
     constexpr std::size_t kPerMessageChars = 1500;
@@ -215,12 +215,31 @@ Chat build_compact_request(const Chat& history) {
         request.add(Message{history.messages().front()});
     Message instruction;
     instruction.role = Role::User;
-    instruction.content =
-        "This is a context-compaction request. Summarize the conversation transcript below "
-        "so it can replace the full history. Preserve: the user's goals, decisions made, "
-        "files and paths touched, code changes, tool outcomes, and open tasks. Be concise "
-        "but specific. Output only the summary, no preamble.\n\n--- transcript ---\n" +
-        transcript;
+    // 017 (design 017 §2.2): structured handoff checkpoint with the
+    // opencode discipline (no restating setup the next agent receives
+    // separately, unanswered questions verbatim, workflow state, exact
+    // paths/errors) plus Zed's Pitfalls section. Iterative compaction
+    // merges into the previous checkpoint instead of re-summarizing it.
+    std::string text =
+        "This is a context-compaction request. Summarize the transcript below into a "
+        "structured handoff checkpoint for another agent resuming the work. Use EXACTLY "
+        "these sections (omit only truly empty ones):\n"
+        "## Goal\n## Constraints & Preferences\n## Progress (Done / In Progress / Blocked)\n"
+        "## Key Decisions\n## Next Steps\n## Pitfalls (approaches tried that failed -- do not "
+        "retry them)\n## Critical Context\n"
+        "Rules: do not restate the system prompt or repository conventions (the next agent "
+        "receives them separately); carry forward unanswered user questions verbatim; "
+        "preserve workflow state (uncommitted/committed/pushed); preserve exact file paths, "
+        "symbols, commands and error strings; do not mention the compaction itself. Output "
+        "only the summary, no preamble.\n";
+    if (!previous_summary.empty()) {
+        text += "An existing checkpoint follows in <previous-summary> tags: merge the new "
+                "transcript into it. Newer history wins; drop information that is stale or "
+                "resolved.\n<previous-summary>\n" +
+                std::string(previous_summary) + "\n</previous-summary>\n";
+    }
+    text += "\n--- transcript ---\n" + transcript;
+    instruction.content = std::move(text);
     request.add(std::move(instruction));
     return request;
 }

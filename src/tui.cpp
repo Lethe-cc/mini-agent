@@ -7,6 +7,7 @@
 // composer, status) is redrawn in place. No alternate screen, no full diff.
 #include "mini_agent/tui.hpp"
 
+#include "mini_agent/context.hpp"
 #include "mini_agent/highlight.hpp"
 #include "mini_agent/tui_bridge.hpp"
 
@@ -609,6 +610,10 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         std::string summary;
         std::string error;
         bool aborted = false;
+        // 017 (design 017 §2.2): retained tail + prune/NUDGE metadata.
+        std::vector<Message> tail;
+        std::size_t pruned = 0;
+        bool nudged = false;
     } compact_result;
     // v4.2 (design 010 §11): capability metadata from the last successful
     // /models fetch (main-thread only; the worker fills models_result.caps).
@@ -634,12 +639,13 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // (main-thread only, written after worker join). When no provider ever
     // reported usage, the ctx reading falls back to a character estimate
     // of the outgoing chat, recomputed lazily at turn boundaries.
-    long long status_context_tokens = 0;
     long long status_completion_tokens = 0;
-    bool status_context_estimated = false;
-    bool status_usage_reported = false;
-    long long estimated_chat_tokens = 0;
-    bool estimate_dirty = true;
+    // 017 (design 017 §2.1): provider-billed anchor (baseline = chat size
+    // minus the final assistant reply at commit), overflow synthesis and
+    // the one-shot pressure hint. All cleared by reset_usage_readings.
+    std::optional<UsageAnchor> usage_anchor;
+    long long exceeded_tokens = 0;
+    bool pressure_hint_consumed = false;
     // v4.2: reasoning ACTUALLY observed in responses (status preference).
     bool status_reasoning_seen = false;
     std::string status_reasoning_actual;
@@ -659,48 +665,61 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 return cap;
         return {};
     };
+    auto effective_window = [&]() -> long long {
+        long long window = config.current.context_window;
+        // v4.2.1: config stays authoritative, but an unset window falls
+        // back to the gateway's advertised context_length (cached caps).
+        if (window <= 0)
+            window = caps_for_model().context_length;
+        // v4.7 (design 010 §18): pi-style static catalog last.
+        if (window <= 0) {
+            if (const auto limits = lookup_models_dev(config.current.base_url, config.current.model))
+                window = limits->context;
+        }
+        return window;
+    };
     auto context_reading = [&]() -> StatusInputs {
         StatusInputs inputs;
-        inputs.context_window = config.current.context_window;
-        // v4.2.1: config stays authoritative, but an unset window falls
-        // back to the gateway's advertised context_length (cached caps)
-        // so the ctx reading gets its /max denominator without extra
-        // config work on OpenRouter-style gateways.
-        if (inputs.context_window <= 0)
-            inputs.context_window = caps_for_model().context_length;
-        // v4.7 (design 010 §18): pi-style static catalog last -- gateways
-        // without context_length metadata (DashScope token-plan) still get
-        // a denominator when base_url+model match a models.dev row. The
-        // catalog never overwrites config: it only fills the display gap.
-        if (inputs.context_window <= 0) {
-            if (const auto limits = lookup_models_dev(config.current.base_url, config.current.model))
-                inputs.context_window = limits->context;
-        }
+        inputs.context_window = effective_window();
         inputs.reasoning_effort = config.current.reasoning_effort;
         inputs.completion_tokens = status_completion_tokens;
         inputs.reasoning_seen = status_reasoning_seen;
         inputs.reasoning_actual = status_reasoning_actual;
-        if (status_usage_reported && status_context_tokens > 0) {
-            inputs.context_tokens = status_context_tokens;
-            inputs.context_estimated = status_context_estimated;
-        } else {
-            if (estimate_dirty) {
-                estimated_chat_tokens = estimate_context_tokens(chat_to_json(session.chat));
-                estimate_dirty = false;
-            }
-            inputs.context_tokens = estimated_chat_tokens;
-            inputs.context_estimated = true;
-        }
+        // 017: THE single reading (anchor+tail / full estimate / exceeded
+        // synthesis) -- status, /context and the hint all consume this.
+        const auto reading =
+            mini_agent::context_reading(session.chat, usage_anchor, exceeded_tokens);
+        inputs.context_tokens = reading.used;
+        inputs.context_estimated = reading.estimated;
+        inputs.context_exceeded = reading.exceeded;
+        inputs.breakdown = reading.breakdown;
         return inputs;
+    };
+    // 017 (design 017 §2.1): one commit line per threshold crossing; the
+    // hint never auto-compacts (015 decision). Re-arms below threshold.
+    auto maybe_pressure_hint = [&] {
+        const auto inputs = context_reading();
+        const long long threshold = pressure_threshold(inputs.context_window);
+        if (threshold <= 0)
+            return;
+        if (inputs.context_tokens >= threshold) {
+            if (!pressure_hint_consumed) {
+                pressure_hint_consumed = true;
+                screen.commit("[hint] context at " +
+                              std::to_string(inputs.context_tokens * 100 / inputs.context_window) +
+                              "% of window · consider /compact (history stays until you run it)");
+            }
+        } else {
+            pressure_hint_consumed = false;
+        }
     };
     // v4: switching models invalidates every usage reading (the window and
     // all prior counts belong to the old route).
     auto reset_usage_readings = [&] {
-        status_context_tokens = 0;
         status_completion_tokens = 0;
-        status_usage_reported = false;
-        status_context_estimated = false;
-        estimate_dirty = true;
+        usage_anchor.reset(); // 017: prefix changed, the anchor is void
+        exceeded_tokens = 0;
+        pressure_hint_consumed = false;
         status_reasoning_seen = false; // v4.2: evidence belongs to the old model
         status_reasoning_actual.clear();
         reasoning_menu_open = false;
@@ -1806,9 +1825,32 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 screen.commit("[info] nothing to compact (fewer than 2 messages)");
                 return true;
             }
+            // 017: if the whole history fits the retained-tail budget there
+            // is nothing to summarize -- compacting would only add an empty
+            // checkpoint (same guard family as "cannot reclaim, do not run").
+            const std::size_t keep_from = find_retained_tail(session.chat.messages(), 20000);
+            std::size_t region_non_system = 0;
+            for (std::size_t i = 0; i < keep_from; ++i) {
+                if (session.chat.messages()[i].role != Role::System)
+                    ++region_non_system;
+            }
+            if (region_non_system == 0) {
+                screen.commit("[info] nothing to compact (history fits the retained tail budget)");
+                return true;
+            }
             if (!config.complete()) {
                 screen.commit("[error] LLM not configured ·" + config_next_hint(config));
                 return true;
+            }
+            // 017 (design 017 §2.2): verbatim backup BEFORE any replacement;
+            // a failed backup aborts the compact (history stays untouched).
+            if (!temp_mode) {
+                std::string backup_err;
+                if (!store.save_backup(session, &backup_err)) {
+                    screen.commit("[error] compact backup failed: " + backup_err +
+                                  " (history unchanged)");
+                    return true;
+                }
             }
             const AppConfig snapshot = config; // thread boundary
             const Chat history = session.chat; // thread boundary
@@ -1819,15 +1861,51 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             logger->event("compact", {{"status", "start"},
                                       {"before", std::to_string(history.messages().size())}});
             screen.commit("[info] compacting " + std::to_string(history.messages().size()) +
-                          " messages into a summary (Ctrl-C/Esc cancels)...");
+                          " messages (recent turns kept verbatim, original backed up; "
+                          "Ctrl-C/Esc cancels)...");
             compact_worker = std::thread([&, snapshot, history] {
                 CompactResult r;
                 try {
+                    // 017: cut the retained tail at a turn boundary, prune
+                    // old verbose tool output in the summarize region, and
+                    // carry an old marked summary as previous-summary.
+                    const auto& msgs = history.messages();
+                    const std::size_t cut = find_retained_tail(msgs, 20000);
+                    r.tail.assign(msgs.begin() + static_cast<std::ptrdiff_t>(cut), msgs.end());
+                    Chat region;
+                    std::string previous;
+                    const std::string kMarker = "[conversation summary]\n";
+                    for (std::size_t i = 0; i < cut; ++i) {
+                        if (msgs[i].role == Role::User && msgs[i].content.rfind(kMarker, 0) == 0) {
+                            previous = msgs[i].content.substr(kMarker.size());
+                            continue;
+                        }
+                        region.add(msgs[i]);
+                    }
+                    const auto pruned = prune_tool_outputs(region.messages(), 4);
+                    r.pruned = pruned.pruned;
+                    Chat pruned_chat;
+                    pruned_chat.replace(pruned.messages);
                     OpenAiProvider provider(snapshot.to_provider());
-                    const Chat request = build_compact_request(history);
+                    const Chat request = build_compact_request(pruned_chat, previous);
                     // No tools, no UI deltas: the summary is not a turn.
                     r.summary = provider.complete(
                         request, [](std::string_view) {}, [&] { return abort_requested.load(); });
+                    // 017: one NUDGE retry when the template was ignored.
+                    if (!abort_requested.load() && !summary_has_template(r.summary)) {
+                        r.nudged = true;
+                        Chat nudge = request;
+                        nudge.add(Message{Role::User,
+                                          "Template reminder: return the summary as text using "
+                                          "the exact section headings (## Goal, ## Progress, "
+                                          "## Next Steps, ...). Do not call tools.",
+                                          {},
+                                          {}});
+                        r.summary = provider.complete(
+                            nudge, [](std::string_view) {}, [&] { return abort_requested.load(); });
+                        if (!summary_has_template(r.summary))
+                            r.error = "summary did not follow the required template";
+                    }
                 } catch (const ProviderError& e) {
                     r.error = e.what();
                 } catch (const std::exception& e) {
@@ -2055,19 +2133,33 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                              std::to_string(inputs.context_window);
                 screen.commit("context_window=" + shown +
                               "; usage /context <tokens> | /context probe | /context off");
-                screen.commit("ctx reading: " +
-                              (inputs.context_tokens > 0
-                                   ? (inputs.context_estimated ? "~" : "") +
-                                         format_token_count(inputs.context_tokens) + " tokens (" +
-                                         std::to_string(inputs.context_tokens) + ")" +
-                                         (inputs.context_window > 0
-                                              ? " = " +
-                                                    std::to_string(inputs.context_tokens * 100 /
-                                                                   inputs.context_window) +
-                                                    "% of window"
-                                              : std::string())
-                                   : std::string("(no data yet)")) +
-                              (status_usage_reported ? " · provider-reported" : " · estimated"));
+                screen.commit(
+                    "ctx reading: " + std::string(inputs.context_exceeded ? "EXCEEDED " : "") +
+                    (inputs.context_tokens > 0
+                         ? (inputs.context_estimated ? "~" : "") +
+                               format_token_count(inputs.context_tokens) + " tokens (" +
+                               std::to_string(inputs.context_tokens) + ")" +
+                               (inputs.context_window > 0
+                                    ? " = " +
+                                          std::to_string(inputs.context_tokens * 100 /
+                                                         inputs.context_window) +
+                                          "% of window"
+                                    : std::string())
+                         : std::string("(no data yet)")) +
+                    (inputs.context_estimated ? " · estimated" : " · provider-anchored"));
+                // 017 (design 017 §2.1): per-class breakdown + pressure.
+                screen.commit("breakdown (estimated): system ~" +
+                              format_token_count(inputs.breakdown.system) + " · conversation ~" +
+                              format_token_count(inputs.breakdown.conversation) +
+                              " · tool output ~" +
+                              format_token_count(inputs.breakdown.tool_output));
+                if (inputs.context_exceeded)
+                    screen.commit("[warn] last request overflowed the window · reading "
+                                  "synthesized until the next successful turn");
+                if (const long long threshold = pressure_threshold(inputs.context_window);
+                    threshold > 0)
+                    screen.commit("pressure: /compact hint at >= " + format_token_count(threshold) +
+                                  " tokens (window - max(15%, 16k))");
             } else if (arg == "off" || arg == "0") {
                 active_profile_for_edit()->context_window = 0;
                 config.refresh_current(); // v7: per-profile metadata
@@ -2800,6 +2892,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 summary.role = Role::User;
                 summary.content = "[conversation summary]\n" + compact_result.summary;
                 next.push_back(std::move(summary));
+                // 017: the retained tail follows the summary verbatim.
+                next.insert(next.end(), compact_result.tail.begin(), compact_result.tail.end());
                 session.chat.replace(std::move(next));
                 std::string err;
                 if (!temp_mode && !store.save(session, &err)) {
@@ -2811,9 +2905,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                               {{"status", "ok"},
                                {"before", std::to_string(before)},
                                {"after", std::to_string(session.chat.messages().size())},
+                               {"pruned", std::to_string(compact_result.pruned)},
+                               {"retained", std::to_string(compact_result.tail.size())},
+                               {"nudged", compact_result.nudged ? "1" : "0"},
                                {"summary_chars", std::to_string(compact_result.summary.size())}});
                 screen.commit("[ok] compacted " + std::to_string(before) +
-                              " messages into a summary");
+                              " messages into a "
+                              "summary + " +
+                              std::to_string(compact_result.tail.size()) + " retained · " +
+                              std::to_string(compact_result.pruned) + " tool outputs pruned" +
+                              (compact_result.nudged ? " · nudged" : ""));
+                maybe_pressure_hint();
             }
             // Drain the steering queue exactly like a turn commit.
             if (!exiting && !pending.empty()) {
@@ -2911,14 +3013,16 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 // = session sum. Turns without a usage chunk leave the
                 // estimate fallback in play (context_estimated flips).
                 if (!result.usage.empty()) {
-                    if (result.usage.prompt_tokens > 0) {
-                        status_context_tokens = result.usage.prompt_tokens;
-                        status_context_estimated = false;
+                    if (result.usage.prompt_tokens > 0 && !session.chat.messages().empty()) {
+                        // 017: the billed last request contained everything
+                        // except the final assistant reply (run_turn commits
+                        // it after the last round) -> anchor baseline.
+                        usage_anchor = UsageAnchor{session.chat.messages().size() - 1,
+                                                   result.usage.prompt_tokens};
                     }
                     status_completion_tokens += result.usage.completion_tokens;
-                    status_usage_reported = true;
                 }
-                estimate_dirty = true;
+                exceeded_tokens = 0; // a successful turn clears the synthesis
                 // v4.2.1: the reading reflects the LAST successful turn
                 // only (no sticky "on"): fold the fresh evidence wholesale,
                 // clearing it when this turn showed none.
@@ -2946,6 +3050,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     logger->event("session_save", {{"status", "error"}, {"error", err}});
                 }
                 start_sidebar(); // v4.13: the turn may have changed files
+                maybe_pressure_hint(); // 017: one hint line per crossing
             } else if (result.aborted) {
                 logger->event("turn",
                               {{"status", "aborted"}, {"elapsed_ms", std::to_string(elapsed_ms)}});
@@ -2965,11 +3070,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                     screen.commit("[hint] if this gateway does not support reasoning_effort, "
                                   "clear it with /reasoning off (config value is otherwise "
                                   "kept verbatim)");
-                // 015 (design 015 §4B): overflow-shaped 400 -> actionable
-                // guidance instead of a bare status line.
-                if (result.http_status == 400 && context_overflow_message(result.error))
+                // 015 (design 015 §4B) + 017: overflow-shaped 400 (and not
+                // a throttling rejection in overflow wording) -> actionable
+                // guidance + synthesized Exceeded reading (Zed discipline).
+                if (result.http_status == 400 && !overflow_excluded(result.error) &&
+                    context_overflow_message(result.error)) {
+                    const long long synthesized = std::max(
+                        parse_overflow_tokens(result.error).value_or(0), effective_window());
+                    if (synthesized > 0)
+                        exceeded_tokens = synthesized;
                     screen.commit("[hint] context window exceeded · /compact summarizes "
-                                  "history into one message, or /session new starts fresh");
+                                  "history (recent turns kept verbatim, original backed "
+                                  "up), or /session new starts fresh");
+                }
                 if (tools_active)
                     screen.commit("[note] tools already ran this turn; their side "
                                   "effects were not rolled back");

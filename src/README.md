@@ -23,6 +23,7 @@ mini-agent v1 的全部 C++ 实现。构建目标见根目录 `CMakeLists.txt`�
 
 
 | `chat.cpp` | `include/mini_agent/chat.hpp` | `Message`/`Chat` 模型与 JSON 序列化（`schema_version`、Role 含 Tool 预留位） |
+| `context.cpp` | `include/mini_agent/context.hpp` | 017 纯函数核心：单一读数 `context_reading`（锚点+尾部/全量估算/Exceeded 合成）、breakdown、压力阈值、保留尾部切点、tool output 机械剪枝、摘要模板校验、溢出排除集与 token 解析 |
 
 
 

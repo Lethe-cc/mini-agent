@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "mini_agent/config.hpp"
+#include "mini_agent/context.hpp"
 #include "mini_agent/provider.hpp"
 #include "mini_agent/session.hpp"
 
@@ -248,6 +249,10 @@ struct StatusInputs {
     long long context_window = 0;    // config; 0 = unset
     long long completion_tokens = 0; // session sum (0 = nothing reported yet)
     std::string reasoning_effort;    // config; empty = unset
+    // 017 (design 017 §2.1): per-class estimates + overflow synthesis,
+    // folded from the single context_reading() core function.
+    ContextBreakdown breakdown;
+    bool context_exceeded = false;
     // v4.2 (design 010 §11): reasoning ACTUALLY observed in responses.
     // v4.2.1 refresh semantics: reflects the LAST successful turn only.
     // Display preference: echoed level > configured level confirmed by

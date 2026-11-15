@@ -88,9 +88,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
         # 015: the /compact summary request (instruction prefix).
-        if last_user.startswith("This is a context-compaction request"):
+        # 017: summaries must carry the structured template; a NUDGEFLOW
+        # transcript gets prose first and the template only after the
+        # client's NUDGE retry (last user message = the reminder).
+        if last_user.startswith("This is a context-compaction request") or \
+                last_user.startswith("Template reminder"):
+            wants_nudge = any("NUDGEFLOW" in (m.get("content") or "") for m in req_msgs)
+            if wants_nudge and last_user.startswith("This is a context-compaction request"):
+                body = "a prose-only summary without any headings"
+            else:
+                body = ("## Goal\nCOMPACT-SUMMARY: goals and files preserved\n"
+                        "## Next Steps\ncontinue the work")
             for chunk in (
-                {"choices": [{"delta": {"content": "COMPACT-SUMMARY: goals and files preserved"}}]},
+                {"choices": [{"delta": {"content": body}}]},
                 {"choices": [{"delta": {}, "finish_reason": "stop"}]},
             ):
                 self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
@@ -912,8 +922,16 @@ def main():
     read_all(cfd, 0.8)
 
     def cmp_send(keys, marker, tries=16):
-        os.write(cfd, keys)
+        # 017: large payloads go in chunks with output drained between
+        # writes -- a single big os.write can deadlock the pty (child
+        # blocks writing its echo while the master blocks on input).
+        data = memoryview(keys)
         out = ""
+        while len(data) > 4096:
+            os.write(cfd, data[:4096])
+            data = data[4096:]
+            out += read_all(cfd, 0.05)
+        os.write(cfd, data)
         for _ in range(tries):
             out += read_all(cfd, 0.5)
             if marker in out:
@@ -926,30 +944,63 @@ def main():
     cmp_send(f"/provider http://127.0.0.1:{PORT}/v1\r".encode(), "models (2)")
     cmp_send(b"/login pty-smoke-key\r", "login verified")
     cmp_send(b"/model mock-small\r", "mock-small")
-    cmp_send(b"first turn\r", "tok0")
+    cmp_send(b"first turn " + b"x" * 90000 + b"\r", "tok0", tries=24)
     cmp_send(b"second turn\r", "tok0")
     compacted = cmp_send(b"/compact\r", "[ok] compacted")
-    expect("[ok] compacted" in compacted and "messages into a summary" in compacted,
-           "compact: history replaced by the summary")
-    sess_files = glob.glob(cmp_root + "/sess/*.json")
-    expect(len(sess_files) == 1, "compact: one session file")
+    expect("[ok] compacted" in compacted and "retained" in compacted,
+           "compact: summary + retained tail reported")
+    all_files = glob.glob(cmp_root + "/sess/*.json")
+    sess_files = [f for f in all_files if not f.endswith(".pre-compact.json")]
+    backups = [f for f in all_files if f.endswith(".pre-compact.json")]
+    expect(len(sess_files) == 1 and len(backups) == 1,
+           "compact: one session file + one pre-compact backup")
+    expect(os.stat(backups[0]).st_mode & 0o777 == 0o600,
+           "compact: backup is 0600")
+    backup_doc = json.load(open(backups[0]))
+    expect(any("first turn" in m.get("content", "")
+               for m in backup_doc.get("messages", [])),
+           "compact: backup preserves the original transcript")
     sess_doc = json.load(open(sess_files[0]))
     sess_msgs = sess_doc.get("messages", [])
-    # The default system prompt survives; everything else is exactly the
-    # marked summary (no transcript leftovers).
-    expect(len(sess_msgs) == 2 and sess_msgs[0].get("role") == "system" and
+    # 017: system + marked summary + the retained tail verbatim (the last
+    # whole turn survives; the summarized-away first turn does not).
+    expect(sess_msgs[0].get("role") == "system" and
            "[conversation summary]" in sess_msgs[1].get("content", "") and
            "COMPACT-SUMMARY" in sess_msgs[1].get("content", "") and
-           all("first turn" not in m.get("content", "") and
-               "second turn" not in m.get("content", "") for m in sess_msgs),
-           "compact: persisted history is system prompt + marked summary only")
+           any(m.get("role") == "user" and "second turn" in m.get("content", "")
+               for m in sess_msgs[2:]) and
+           all("first turn" not in m.get("content", "") for m in sess_msgs),
+           "compact: system + marked summary + verbatim retained tail")
     after = cmp_send(b"after compact\r", "tok0")
     expect("You: after compact" in after, "compact: the next turn works")
+    degenerate = cmp_send(b"/compact\r", "nothing to compact")
+    expect("retained tail budget" in degenerate,
+           "compact: small history is a no-op (budget guard)")
     overflow = cmp_send(b"OVERFLOW too long\r", "[hint] context window exceeded", tries=20)
     expect("[hint] context window exceeded" in overflow and "/compact" in overflow,
            "overflow: 400 renders the actionable /compact hint")
     expect("maximum context length is 8192" in overflow,
            "overflow: the gateway error message is surfaced")
+    # 017: the meter synthesizes an Exceeded reading after the rejection.
+    ctx_out = cmp_send(b"/context\r", "ctx reading:")
+    expect("EXCEEDED" in ctx_out,
+           "overflow: meter synthesizes Exceeded instead of stale usage")
+    expect("breakdown (estimated)" in ctx_out,
+           "context: breakdown row present")
+    # 017: NUDGE path -- prose summary first, template after the reminder.
+    # NUDGEFLOW must land in the summarize region (before the last turn).
+    cmp_send(b"NUDGEFLOW turn " + b"y" * 90000 + b"\r", "tok0", tries=24)
+    cmp_send(b"post nudge turn\r", "tok0")
+    nudged = cmp_send(b"/compact\r", "[ok] compacted")
+    expect("nudged" in nudged, "compact: NUDGE retry reported")
+    # 017: pressure hint fires once per crossing (window 20k -> hint at
+    # >= 3616 estimated tokens; a 20k-char message crosses it).
+    cmp_send(b"/context 20000\r", "[ok] config saved")
+    hinted = cmp_send(b"LONG " + b"x" * 20000 + b"\r", "tok0", tries=24)
+    expect("[hint] context at" in hinted, "pressure: one hint line on crossing")
+    quiet = cmp_send(b"short turn\r", "tok0")
+    expect("[hint] context at" not in quiet,
+           "pressure: hint not repeated while above threshold")
     os.write(cfd, b"\x03\x03")
     time.sleep(0.4)
     try:

@@ -103,6 +103,12 @@ class SessionStore {
 
     bool remove(const std::string& id, std::string* error);
 
+    // 017 (design 017 §2.2): pre-compaction transcript backup, written as
+    // <id>.pre-compact.json (0600, atomic, same discipline as save).
+    // Overwrites any older backup (only the latest is kept, Q1 default);
+    // remove() deletes it alongside the session. Does not touch meta.
+    bool save_backup(const Session& session, std::string* error);
+
     // Simple lock: <id>.lock held via O_EXCL create with pid inside.
     // Stale locks (dead pid) are reclaimed. Returns false if held elsewhere.
     bool try_lock(const std::string& id, std::string* error);
@@ -111,6 +117,7 @@ class SessionStore {
   private:
     std::filesystem::path path_for(const std::string& id) const;
     std::filesystem::path lock_path_for(const std::string& id) const;
+    std::filesystem::path backup_path_for(const std::string& id) const;
     std::filesystem::path root_;
 };
 

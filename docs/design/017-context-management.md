@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 状态：**草案 / 待人工评审**（2026-11-15）。验证计划见 §6，**尚未执行**，不得视为已实现。
+- 状态：**已实现**（2026-11-15；验证见 §6，偏差 D1–D3 见 §7）；待人工评审。
 - 关联任务：维护者 2026-11-15 批准的六家调研结论落地（[context-compaction-survey.md](../references/context-compaction-survey.md) §5 采纳清单 1–9）。
 - 核对日期：2026-11-15，基于 main `e704c5e`。
 - 上游决策：015（手动 /compact、自动压缩非目标）、014（只重试瞬时错误）、010（窗口判定链）。本设计不推翻三者。
@@ -70,6 +70,11 @@ else (否)
   :no-op / 错误行\n历史不动;
   stop
 endif
+if (摘要区非空？\n历史未整体落在保留预算内) then (是)
+else (否)
+  :no-op：history fits\nthe retained tail budget;
+  stop
+endif
 :备份原始转录\nsessions/{id}.pre-compact.json · 0600\n覆盖旧备份（仅留最新）;
 :切点：保留尾部 =\n近期 user 消息 ≤20k（估算）\n+ 最后一轮完整问答；\n切在回合边界，绝不孤儿 tool_result;
 :机械剪枝：保护窗外旧 tool output\n重复结果留最新全文、旧副本一行摘要\n（不花模型调用）;
@@ -130,9 +135,15 @@ stop
 - Q2：压力阈值是否要 env/配置旋钮（默认否，硬编码 max(15%,16k)，同 014 旋钮哲学需要时再加）。
 - Q3：§2.3 摘要播种新会话本期做还是后续（默认后续，017 主体不含）。
 
-## 6. 验证计划（未执行）
+## 6. 验证（2026-11-15 已执行）
 
-- 单测：锚点失效三路径；breakdown 分类（tool 消息归属）；切点不孤儿 tool_result（含切在回合中间的扩展用例）；剪枝保护窗逐字节不动；排除集（throttling 文案不判溢出）；阈值数学（小/大窗口）；NUDGE 一次重试。
-- pty TUI smoke：/compact 后下一回合可见保留尾部；备份文件存在且 0600；mock 首次返回无模板摘要 → NUDGE 路径；溢出 400 后 meter 显示 Exceeded 而非陈旧值；越线提示行只出现一次。
-- 双环境（常规 + `USER=runner-az1234` 宽环境，v7.2 纪律）；四 preset CTest；`check.py --require-initialized`。
-- 结果回填本节后经人工评审再实现（workflows/implement-feature.md）。
+- 单测：`test_context_017` 28 断言——锚点失效三路径；breakdown 分类（tool 消息归属）；切点不孤儿 tool_result（含切在回合中间的扩展用例）；剪枝保护窗逐字节不动；排除集（throttling 文案不判溢出）；阈值数学（小/大窗口）；NUDGE 模板校验；两种溢出 token 解析；previous-summary 迭代请求。
+- pty TUI smoke：**180 PASS / 0 FAIL**，常规与 `USER=runner-az1234` 宽环境各一遍（v7.2 纪律）。新增断言：备份存在且 0600、备份含原始转录、持久化 = system+摘要+逐字尾部、小历史 no-op（预算守卫）、NUDGE 重试上报、溢出后 /context 显示 EXCEEDED、breakdown 行、越线提示一次且不重复。
+- pty CLI smoke：ALL PASS（溢出排除集接入 CLI 提示路径）。
+- 四 preset（gcc/clang × debug/release）CTest 3/3；`scripts/check.py --require-initialized` PASS。
+
+## 7. 偏差
+
+- **D1**：/compact 增加退化守卫——历史整体落在 20k 保留预算内时 no-op（"nothing to compact (history fits the retained tail budget)"），避免产出空摘要；§2.2 流程图已同步。
+- **D2**：`parse_overflow_tokens` 除 Anthropic "prompt is too long: N" 外也解析 OpenAI/LiteLLM "resulted in N tokens" 形态（设计原文只提 Anthropic 形态；mock 与真实网关常见后者）。
+- **D3**：pty smoke `cmp_send` 改分块写 + 中间 drain——单次大 `os.write` 会与子进程输出互锁死锁 pty；测试工程修正，无产品影响。

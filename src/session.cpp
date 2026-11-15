@@ -135,6 +135,10 @@ std::filesystem::path SessionStore::lock_path_for(const std::string& id) const {
     return root_ / (id + ".json.lock");
 }
 
+std::filesystem::path SessionStore::backup_path_for(const std::string& id) const {
+    return root_ / (id + ".pre-compact.json");
+}
+
 bool SessionStore::ensure_root(std::string* error) {
     if (root_.empty()) {
         if (error)
@@ -345,7 +349,7 @@ std::vector<std::string> SessionStore::list(std::string* error) {
         }
         const auto name = entry.path().filename().string();
         if (entry.is_regular_file() && name.size() > 5 && ends_with(name, ".json") &&
-            !ends_with(name, ".json.lock")) {
+            !ends_with(name, ".json.lock") && !ends_with(name, ".pre-compact.json")) {
             ids.push_back(name.substr(0, name.size() - 5));
         }
     }
@@ -369,7 +373,7 @@ std::vector<std::string> SessionStore::list_by_recency(std::string* error) {
         }
         const auto name = entry.path().filename().string();
         if (!entry.is_regular_file() || name.size() <= 5 || !ends_with(name, ".json") ||
-            ends_with(name, ".json.lock"))
+            ends_with(name, ".json.lock") || ends_with(name, ".pre-compact.json"))
             continue;
         std::error_code mec;
         const auto mtime = entry.last_write_time(mec);
@@ -411,6 +415,57 @@ bool SessionStore::remove(const std::string& id, std::string* error) {
     }
     std::error_code lock_ec;
     std::filesystem::remove(lock_path_for(id), lock_ec);
+    // 017: the pre-compaction backup belongs to the session; rm/prune
+    // take it along (Q1 default: only the latest backup is kept).
+    std::error_code backup_ec;
+    std::filesystem::remove(backup_path_for(id), backup_ec);
+    return true;
+}
+
+bool SessionStore::save_backup(const Session& session, std::string* error) {
+    // 017 (design 017 §2.2): same atomic-write discipline as save()
+    // (tmp + fsync + chmod 0600 + rename), but without touching meta --
+    // the backup is a verbatim snapshot of the pre-compaction state.
+    if (!session_id_is_safe(session.meta.id)) {
+        if (error)
+            *error = "unsafe session id";
+        return false;
+    }
+    const auto final_path = backup_path_for(session.meta.id);
+    const auto tmp_path = final_path.string() + ".tmp." + generate_session_id();
+    {
+        const int fd = ::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (fd < 0) {
+            if (error)
+                *error = "cannot create backup temp file: " + std::string(strerror(errno));
+            return false;
+        }
+        const std::string payload = session_to_json(session.meta, session.chat);
+        const ssize_t written = ::write(fd, payload.data(), payload.size());
+        const bool ok = written == static_cast<ssize_t>(payload.size());
+        if (ok && ::fsync(fd) != 0) {
+            // best effort
+        }
+        ::close(fd);
+        if (!ok) {
+            ::unlink(tmp_path.c_str());
+            if (error)
+                *error = "short write on backup temp file";
+            return false;
+        }
+        if (::chmod(tmp_path.c_str(), 0600) != 0) {
+            ::unlink(tmp_path.c_str());
+            if (error)
+                *error = "cannot chmod 0600 backup temp file";
+            return false;
+        }
+    }
+    if (::rename(tmp_path.c_str(), final_path.c_str()) != 0) {
+        ::unlink(tmp_path.c_str());
+        if (error)
+            *error = "backup atomic rename failed: " + std::string(strerror(errno));
+        return false;
+    }
     return true;
 }
 

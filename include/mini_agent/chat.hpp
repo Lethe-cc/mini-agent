@@ -74,12 +74,16 @@ std::string chat_to_json(const Chat& chat);
 // return nullopt with *error set (no silent drops, design 007 section 5.5).
 std::optional<Chat> chat_from_json(std::string_view text, std::string* error);
 
-// 015 (design 015 §4C): build the summary request for /compact. Keeps the
-// leading System message (if any) and adds ONE User message: a fixed
-// summarization instruction plus a bounded transcript of the history
-// (each message capped at 1500 chars; over 60000 chars total the middle
-// is dropped, head and tail kept). Pure + test-visible; the caller sends
-// it through a normal completion WITHOUT tools.
-Chat build_compact_request(const Chat& history);
+// 015 (design 015 §4C), upgraded by 017 (design 017 §2.2): build the
+// summary request for /compact. Keeps the leading System message (if
+// any) and adds ONE User message: a structured handoff instruction
+// (opencode discipline + Zed Pitfalls) plus a bounded transcript of the
+// history (each message capped at 1500 chars; over 60000 chars total the
+// middle is dropped, head and tail kept). When previous_summary is non-
+// empty it is carried in <previous-summary> tags with merge instructions
+// (iterative compaction; newer history wins, stale info may be dropped).
+// Pure + test-visible; the caller sends it through a normal completion
+// WITHOUT tools.
+Chat build_compact_request(const Chat& history, std::string_view previous_summary = "");
 
 } // namespace mini_agent

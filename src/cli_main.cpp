@@ -194,9 +194,11 @@ void print_provider_error(const mini_agent::ProviderError& error) {
         break;
     }
     std::cerr << prefix << error.what() << '\n';
-    // 015 (design 015 §4B): an overflow-shaped 400 gets the same guidance
-    // as the TUI hint (the CLI has no /compact; point at the TUI command).
+    // 015 (design 015 §4B) + 017: an overflow-shaped 400 (not a throttling
+    // rejection in overflow wording) gets the same guidance as the TUI
+    // hint (the CLI has no /compact; point at the TUI command).
     if (error.kind() == mini_agent::ProviderErrorKind::HttpStatus && error.http_status() == 400 &&
+        !mini_agent::overflow_excluded(error.what()) &&
         mini_agent::context_overflow_message(error.what())) {
         std::cerr << "hint: context window exceeded · run the TUI and use /compact to "
                      "summarize the session history, or start a fresh session\n";

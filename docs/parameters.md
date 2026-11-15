@@ -62,7 +62,7 @@ mini-agent                       # 等价于 run（v4.9）
 mini-agent ask [旗标] "问题"|-   # 一次性问答，stdout 只有回复
 mini-agent run [旗标]            # 会话（TTY→TUI；非 TTY→行模式）
 mini-agent session list          # 列出会话 id（新→旧）
-mini-agent session rm ID|前缀    # 删除会话（含锁文件）
+mini-agent session rm ID|前缀    # 删除会话（含锁文件与压缩备份）
 mini-agent session export ID [--format md|json] [--out PATH]   # 导出（016）
 mini-agent session prune --older-than DAYS [--dry-run]         # 清理（016）
 mini-agent mcp list [--mcp …]    # 生效 MCP server 清单（脱敏；无需 LLM 配好）
@@ -123,7 +123,7 @@ mini-agent --help | --version
 | 命令 | 行为 | 失败 |
 | --- | --- | --- |
 | `session list` | stdout 逐行打印会话 id（新→旧） | 存储目录不可用 → 1 |
-| `session rm ID\|前缀` | 删除会话文件与锁文件（v4.14.1 支持唯一前缀） | 歧义 → 列候选退出 2；不存在 → 1；缺参数 → 2 |
+| `session rm ID\|前缀` | 删除会话文件、锁文件与 017 压缩备份（`.pre-compact.json`，v4.14.1 支持唯一前缀） | 歧义 → 列候选退出 2；不存在 → 1；缺参数 → 2 |
 | `session export ID\|前缀 [--format md\|json] [--out PATH]` | 导出会话（[设计 016](design/016-session-lifecycle.md)）：md = 元信息头 + 逐消息转录（tool_calls 为 fenced json）；json = 盘上格式（放回 sessions/ 即可重新导入）；默认 stdout，`--out` 写文件 **0600**（正文属隐私，分享前自查） | 歧义 → 2；不存在/IO → 1；非法 --format → 2 |
 | `session prune --older-than DAYS [--dry-run]` | 按文件 mtime（=最后使用，与 run 复用同语义）清理久未使用的会话；阈值必填（DAYS≥0，无默认）；活锁会话跳过（`skipped (in use)`）；`--dry-run` 只列不删 | 缺阈值/非法选项 → 2；IO → 1 |
 
@@ -288,7 +288,7 @@ v6 起支持多 provider 档案，v7 起档案必须命名（[§4.4](#44-多-pro
 | `/model` | `<provider>/<model>` | ✅ | 限定名且档案存在：原子切换 URL+key+model，写会话元数据 `meta.provider`；前缀未知则按字面 id（模型名可含 `/`）。切换均重置用量读数；env 覆盖生效时只写盘并 `[warn]` 本进程不生效 |
 | `/models` | — | — | 聚合拉取所有配置齐全档案的 `GET /models`（env-only 无档案时拉当前生效值；env 覆盖态额外拉生效路由）：顺序执行、每档案连接 5s/总 15s 上限；多来源时菜单项带 `provider/` 前缀，`<- current` 标当前。数字选择器：Enter 选定（同时切档案）、Esc 收起；各档案鉴权探测独立更新提示符 |
 | `/reasoning` | `[值\|off]` | ✅ | 原样透传 `reasoning_effort`；不带参数打开缓存档位选择器（low/medium/high/off 为常见提示）；服务端 400 时提示、不自动回退 |
-| `/context` | `[tokens\|off\|0\|probe]` | ✅（probe 除外） | 设置/清除 `context_window`；不带参数显示当前值或目录建议值；`probe` 显式发一次超大请求探测上限（需配置齐全，≤30s，绝不自动触发） |
+| `/context` | `[tokens\|off\|0\|probe]` | ✅（probe 除外） | 设置/清除 `context_window`；不带参数显示当前值或目录建议值 + **017 读数**：ctx reading（锚点+尾部估算，溢出后合成 `EXCEEDED`）、三行 breakdown（system/conversation/tool output，估算）、pressure 行（提示阈值 = window − max(15%,16k)，小窗口禁用）；`probe` 显式发一次超大请求探测上限（需配置齐全，≤30s，绝不自动触发） |
 
 Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定）模型 id，`/provider ` 补 `add/rm/list`。`/config` 会显示 `providers=N active=…`，env 覆盖生效时附 `env override in effect`。
 
@@ -298,7 +298,7 @@ Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定�
 | --- | --- | --- | --- |
 | `/sessions` | — | — | 列出会话，标注当前 |
 | `/session` | `<id\|前缀> \| new` | 会话切换 | 需回合空闲；唯一前缀可用（歧义列候选）；保存并解锁旧会话→加载并锁定新会话（失败回滚）；temp 会话经 `new` 保持 temp，恢复旧会话则结束 temp |
-| `/compact` | — | 会话历史 | 手动上下文压缩（[设计 015](design/015-context-compact.md)）：需回合空闲且 ≥2 条非系统消息；独立 worker 请求摘要（有界转录：每条 ≤1500 字符、总量 ≤60000 字符保头保尾），成功后历史替换为系统提示 + 一条 `[conversation summary]` 标记的 User 消息并保存；失败/中断（Ctrl-C/Esc）历史不动；有损操作，日志仅元数据 |
+| `/compact` | — | 会话历史 | 手动上下文压缩（[设计 015](design/015-context-compact.md) + [017](design/017-context-management.md)）：需回合空闲、≥2 条非系统消息、且摘要区非空（历史整体落在保留尾部预算内时 no-op）；先写原始转录备份 `<id>.pre-compact.json`（0600、仅留最新、备份失败即中止）；切点保留尾部（近期 user 消息 ≤20k 估算 + 最后一轮完整问答，回合边界切、不孤儿 tool_result）；摘要区先机械剪枝旧 tool output（保护窗 4 条逐字不动；重复结果留最新全文）；结构化迭代摘要（旧摘要作 previous-summary 合并；模板校验不过 NUDGE 重试一次）；成功后历史 = 系统提示 + 标记摘要 + 保留尾部；失败/中断历史不动；有损操作，日志仅元数据（before/after/pruned/retained/nudged） |
 | `/cwd` | `[path]` | 会话戳 | 查询/重绑 workspace（须为已存在目录）；重绑会话戳、系统提示、工具注册表与侧栏 |
 | `/preview` | `<path>` | — | workspace 内文件预览（`.md` 渲染；正文走 UI 通道，不进模型上下文，v5） |
 | `/exit` | — | — | 保存并退出（temp 丢弃） |

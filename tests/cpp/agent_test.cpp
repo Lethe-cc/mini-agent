@@ -15,6 +15,7 @@
 
 #include "mini_agent/chat.hpp"
 #include "mini_agent/config.hpp"
+#include "mini_agent/context.hpp"
 #include "mini_agent/diff.hpp"
 #include "mini_agent/highlight.hpp"
 #include "mini_agent/log.hpp"
@@ -3231,6 +3232,115 @@ void test_session_markdown_export() {
           "empty session exports the header alone");
 }
 
+// 017 (design 017 §3/§6): anchor reading, breakdown, threshold math,
+// retained-tail invariants, mechanical prune, template gate, exclusions.
+void test_context_017() {
+    using mini_agent::Chat;
+    using mini_agent::Message;
+    using mini_agent::Role;
+    using mini_agent::UsageAnchor;
+    Chat chat;
+    chat.add(Message{Role::System, "system prompt", {}, {}});
+    chat.add(Message{Role::User, "first question", {}, {}});
+    chat.add(Message{Role::Assistant, "first answer", {}, {}});
+    chat.add(Message{Role::User, "second question", {}, {}});
+    chat.add(Message{Role::Assistant, "second answer", {}, {}});
+    const auto full = mini_agent::context_reading(chat, std::nullopt);
+    check(full.estimated && full.used > 0 && !full.exceeded, "no anchor -> full estimate");
+    check(full.breakdown.system > 0 && full.breakdown.conversation > 0 &&
+              full.breakdown.tool_output == 0,
+          "breakdown classes system/conversation");
+    const auto anchored = mini_agent::context_reading(chat, UsageAnchor{3, 1000});
+    check(!anchored.estimated && anchored.used > 1000 && anchored.used < 1000 + full.used,
+          "anchor + tail: billed base plus estimated tail only");
+    const auto bad = mini_agent::context_reading(chat, UsageAnchor{99, 1000});
+    check(bad.estimated, "baseline beyond history invalidates anchor");
+    const auto exc = mini_agent::context_reading(chat, UsageAnchor{3, 1000}, 50000);
+    check(exc.exceeded && exc.used == 50000, "exceeded synthesis wins over anchor");
+    Chat tchat;
+    tchat.add(Message{Role::User, "q", {}, {}});
+    Message tool;
+    tool.role = Role::Tool;
+    tool.content = "output";
+    tool.tool_call_id = "c1";
+    tchat.add(tool);
+    const auto tr = mini_agent::context_reading(tchat, std::nullopt);
+    check(tr.breakdown.tool_output > 0 && tr.breakdown.conversation > 0,
+          "tool messages land in tool_output class");
+    check(mini_agent::pressure_threshold(128000) == 128000 - 19200, "128k window reserves 15%");
+    check(mini_agent::pressure_threshold(20000) == 20000 - 16384,
+          "20k window reserves the 16k floor");
+    check(mini_agent::pressure_threshold(8000) == 0 && mini_agent::pressure_threshold(0) == 0,
+          "tiny/unset window disables the hint");
+    const auto cut = mini_agent::find_retained_tail(chat.messages(), 1);
+    check(cut == 3 && chat.messages()[cut].role == Role::User,
+          "tiny budget keeps only the last whole turn at a user boundary");
+    const auto cut_big = mini_agent::find_retained_tail(chat.messages(), 1000000);
+    check(cut_big == 1, "huge budget retains every turn");
+    Chat pchat;
+    pchat.add(Message{Role::User, "old", {}, {}});
+    pchat.add(Message{Role::Assistant, "old a", {}, {}});
+    pchat.add(Message{Role::User, "new", {}, {}});
+    Message call;
+    call.role = Role::Assistant;
+    call.tool_calls.push_back(mini_agent::ToolCall{"c1", "read_file", "{}"});
+    pchat.add(call);
+    Message res;
+    res.role = Role::Tool;
+    res.content = "body";
+    res.tool_call_id = "c1";
+    pchat.add(res);
+    pchat.add(Message{Role::Assistant, "final", {}, {}});
+    const auto pcut = mini_agent::find_retained_tail(pchat.messages(), 1);
+    check(pcut == 2, "cut never lands inside a tool round");
+    std::vector<Message> pm;
+    const std::string verbose(700, 'x');
+    pm.push_back(Message{Role::Tool, verbose, "c0", {}});
+    pm.push_back(Message{Role::User, "u", {}, {}});
+    pm.push_back(Message{Role::Tool, verbose, "c1", {}});
+    pm.push_back(Message{Role::Tool, std::string(700, 'y'), "c2", {}});
+    pm.push_back(Message{Role::User, "protected", {}, {}});
+    pm.push_back(Message{Role::Tool, verbose, "c3", {}});
+    const auto pr = mini_agent::prune_tool_outputs(pm, 2);
+    check(pr.pruned == 2, "older dup + distinct verbose pruned");
+    check(pr.messages[0].content.find("[pruned tool output") == 0 &&
+              pr.messages[0].content.find("duplicate") != std::string::npos,
+          "older duplicate becomes a one-line note");
+    check(pr.messages[2].content == verbose, "newest duplicate keeps full body");
+    check(pr.messages[3].content.find("[pruned tool output") == 0, "non-duplicate verbose pruned");
+    check(pr.messages[4] == pm[4] && pr.messages[5] == pm[5],
+          "protected window byte-for-byte intact");
+    check(mini_agent::summary_has_template("## Goal\nx\n## Next Steps\ny"),
+          "two headings pass the template gate");
+    check(!mini_agent::summary_has_template("just some prose summary"),
+          "prose-only summary fails the gate");
+    check(mini_agent::overflow_excluded("ThrottlingException: Too many tokens, wait"),
+          "throttling wording excluded from overflow");
+    check(!mini_agent::overflow_excluded("maximum context length is 8192 tokens"),
+          "real overflow not excluded");
+    check(mini_agent::parse_overflow_tokens("prompt is too long: 213462 tokens > 200000 maximum")
+                  .value_or(0) == 213462,
+          "anthropic overflow token count parsed");
+    check(!mini_agent::parse_overflow_tokens("context_length_exceeded").has_value(),
+          "other wordings yield no count");
+    check(mini_agent::parse_overflow_tokens(
+              "This model's maximum context length is 8192 tokens. However, your messages "
+              "resulted in 9000 tokens.")
+                  .value_or(0) == 9000,
+          "openai 'resulted in N tokens' form parsed");
+    Chat hist;
+    hist.add(Message{Role::User, "hello", {}, {}});
+    const auto req = mini_agent::build_compact_request(hist, "OLD CHECKPOINT");
+    const auto& instr = req.messages().back().content;
+    check(instr.find("<previous-summary>") != std::string::npos &&
+              instr.find("OLD CHECKPOINT") != std::string::npos &&
+              instr.find("## Pitfalls") != std::string::npos,
+          "compact request: previous-summary merge + Pitfalls template");
+    const auto req0 = mini_agent::build_compact_request(hist);
+    check(req0.messages().back().content.find("<previous-summary>") == std::string::npos,
+          "first compaction has no previous-summary block");
+}
+
 int main() {
     test_role_round_trip();
     test_chat_json_round_trip();
@@ -3283,6 +3393,7 @@ int main() {
     test_provider_retry_helpers();
     test_context_compact();
     test_session_markdown_export();
+    test_context_017();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

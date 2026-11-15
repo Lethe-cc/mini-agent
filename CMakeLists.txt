@@ -69,6 +69,7 @@ string(TIMESTAMP MINI_AGENT_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
 
 add_library(agent_core STATIC
     src/chat.cpp
+    src/context.cpp
     src/config.cpp
     src/diff.cpp
     src/highlight.cpp
