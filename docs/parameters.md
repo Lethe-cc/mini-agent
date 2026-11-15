@@ -288,9 +288,30 @@ v6 起支持多 provider 档案，v7 起档案必须命名（[§4.4](#44-多-pro
 | `/model` | `<provider>/<model>` | ✅ | 限定名且档案存在：原子切换 URL+key+model，写会话元数据 `meta.provider`；前缀未知则按字面 id（模型名可含 `/`）。切换均重置用量读数；env 覆盖生效时只写盘并 `[warn]` 本进程不生效 |
 | `/models` | — | — | 聚合拉取所有配置齐全档案的 `GET /models`（env-only 无档案时拉当前生效值；env 覆盖态额外拉生效路由）：顺序执行、每档案连接 5s/总 15s 上限；多来源时菜单项带 `provider/` 前缀，`<- current` 标当前。数字选择器：Enter 选定（同时切档案）、Esc 收起；各档案鉴权探测独立更新提示符 |
 | `/reasoning` | `[值\|off]` | ✅ | 原样透传 `reasoning_effort`；不带参数打开缓存档位选择器（low/medium/high/off 为常见提示）；服务端 400 时提示、不自动回退 |
-| `/context` | `[tokens\|off\|0\|probe]` | ✅（probe 除外） | 设置/清除 `context_window`；不带参数显示当前值或目录建议值 + **017 读数**：ctx reading（锚点+尾部估算，溢出后合成 `EXCEEDED`）、三行 breakdown（system/conversation/tool output，估算）、pressure 行（提示阈值 = window − max(15%,16k)，小窗口禁用）；`probe` 显式发一次超大请求探测上限（需配置齐全，≤30s，绝不自动触发） |
+| `/context` | `[tokens\|off\|0\|probe]` | ✅（含 probe 探到的值；env-only 仅本进程） | 设置/清除/探测 `context_window`（分母）；不带参数另显 **017 读数**（分子与 breakdown，见下表后详解）。逐参数语义见 [§5.1.1](#511-context-参数详解010017) |
 
 Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定）模型 id，`/provider ` 补 `add/rm/list`。`/config` 会显示 `providers=N active=…`，env 覆盖生效时附 `env override in effect`。
+
+#### 5.1.1 /context 参数详解（010/017）
+
+`/context` 管理的是 **ctx 读数的分母**（上下文窗口）；分子（已用 token）由 017 计量独立提供，两者独立生效。
+
+| 形态 | 意义 | 持久化 | 失败行为 |
+| --- | --- | --- | --- |
+| （无参数） | **查询**：显示当前 `context_window` 配置值；未设置时显示目录建议值并提示 `set it: /context <N>`。另显 017 读数：ctx reading（锚点+尾部估算；无锚点时全量估算带 `~`；溢出后 `EXCEEDED`）、breakdown 三行（system / conversation / tool output，估算）、pressure 行（提示阈值） | 只读 | — |
+| `<tokens>`（正整数，如 `128000`） | **手动写死**窗口 = 该值，作为 `ctx%` 分母。config 是权威来源：明确知道模型窗口时直接写，覆盖目录猜测 | ✅ 活动档案 | 非正整数 → `[error]`，不写 |
+| `off` 或 `0` | **清除**窗口设置（两写法等价）：状态行只显 token 数、不带百分比；分母回退目录链 | ✅ 写 0 | — |
+| `probe` | **显式探测**：发一次 `max_tokens` 超大请求，从网关拒绝文案解析权威上限（三形态白名单）。需 base_url+key+model 齐全；≤30s；**绝不自动触发**（花一次请求，由用户决定） | ✅ 探到的值自动写入活动档案；env-only 无档案时仅本进程 | 配置不齐 → `[error]`；解析不出白名单形态 → `[error] probe failed`，**不写任何值（不猜）** |
+
+**分母优先级链**：`config.context_window`（手动/probe 写入）> gateway `/models` 元数据 `context_length` > models.dev 静态目录（base_url+model 匹配）。`<tokens>`/`probe` 往第一级写值；`off` 清空第一级让后两级兜底。DashScope token-plan 这类不暴露元数据的网关 probe 可能探不到，直接 `<tokens>` 写死。
+
+**probe 的三种结果**：总窗口（window）与输入上限（input cap）会写入分母；输出上限（output cap）**只报告不写**（分母是 prompt 侧）。探测在独立 worker 执行，不阻塞 TUI。
+
+**分子语义（017）**：provider 账单锚点 + 锚点后消息的尾部估算（锚点 = 最后一次成功请求的 prompt_tokens，基线 = 提交时历史长度−1）；无账单时全量字符类估算（`~` 前缀）。模型/会话切换、/compact 均使锚点失效。撞窗 400（且非 throttling 文案）后合成 `EXCEEDED` 读数（max(解析出的请求 token 数, 窗口)），直到下一成功回合清除。
+
+**压力提示**：阈值 = `window − max(15%×window, 16384)`；窗口 ≤16384 或未设置时禁用。占用越线时一次性 commit `[hint] context at N% … consider /compact`（只提示不自动压缩），回落到阈值下重新武装；/context 的 pressure 行显示该阈值。
+
+记忆口诀：**无参=看，数字=写死，off/0=清空，probe=问网关**。
 
 ### 5.2 会话与工作区
 
