@@ -27,51 +27,85 @@
 
 ### 2.1 计量与每回合判定（单一读数函数）
 
-```mermaid
-flowchart TD
-  U["provider 回合成功<br/>usage 更新"] --> A{"锚点有效？<br/>usage 非零 且 锚点之后<br/>无前缀变更（compact/换会话）"}
-  A -- 是 --> B["used = 锚点 input_tokens<br/>+ 尾部估算（锚点后消息 bytes/4）"]
-  A -- 否 --> C["used = 全量估算<br/>system + 全部消息"]
-  B --> R["统一读数 context_reading()<br/>status / /context / 提示 共用"]
-  C --> R
-  R --> D["breakdown：system 估算 ·<br/>conversation（非 tool 消息）·<br/>tool output（role=tool）"]
-  R --> E{"used ≥ window − max(15%,16k)？"}
-  E -- 是 --> F["越线时一次性 commit 提示行<br/>+ /context 与 status 百分比着色<br/>不自动压缩"]
-  E -- 否 --> G["正常显示"]
-  H["provider 400 且命中溢出模式<br/>且不在排除集（rate-limit/throttling）"] --> I["合成 Exceeded 读数<br/>used = max(解析出的 N, window)<br/>下一成功回合清除"]
-  I --> J["错误行 + /compact 提示（015 既有）"]
+```plantuml
+@startuml context-reading
+title 计量与每回合判定（单一读数函数）
+
+start
+:provider 回合成功\nusage 更新;
+if (锚点有效？\nusage 非零 且 锚点之后\n无前缀变更（compact/换会话）) then (是)
+  :used = 锚点 input_tokens\n+ 尾部估算（锚点后消息 bytes/4）;
+else (否)
+  :used = 全量估算\nsystem + 全部消息;
+endif
+:统一读数 context_reading()\nstatus / /context / 提示 共用;
+:breakdown：system 估算 ·\nconversation（非 tool 消息）·\ntool output（role=tool）;
+if (used ≥ window − max(15%,16k)？) then (是)
+  :越线时一次性 commit 提示行\n+ /context 与 status 百分比着色\n不自动压缩;
+else (否)
+  :正常显示;
+endif
+stop
+
+start
+:provider 400 且命中溢出模式\n且不在排除集（rate-limit/throttling）;
+:合成 Exceeded 读数\nused = max(解析出的 N, window)\n下一成功回合清除;
+:错误行 + /compact 提示（015 既有）;
+stop
+@enduml
 ```
 
 锚点存储：`usage_anchor = {baseline_msg_count, input_tokens}`，每次 `complete_chat` 成功记录当时 `chat.messages().len()`；`Chat::replace` / 会话加载即失效（pi 时间戳失效的 index 版，适配现有 Message 无时间戳的 schema）。估算沿用现有 `estimate_context_tokens`（bytes/4），**不引入第二估算器**。
 
 ### 2.2 /compact 管道（失败任何一步 → 历史不动）
 
-```mermaid
-flowchart TD
-  S["/compact"] --> G1{"回合空闲 且<br/>非系统消息 ≥ 2？"}
-  G1 -- 否 --> N1["no-op / 错误行<br/>历史不动"]
-  G1 -- 是 --> BK["备份原始转录<br/>sessions/&lt;id&gt;.pre-compact.json · 0600<br/>覆盖旧备份（仅留最新）"]
-  BK --> CUT["切点：保留尾部 =<br/>近期 user 消息 ≤20k（估算）<br/>+ 最后一轮完整问答；<br/>切在回合边界，绝不孤儿 tool_result"]
-  CUT --> PR["机械剪枝：保护窗外旧 tool output<br/>重复结果留最新全文、旧副本一行摘要<br/>（不花模型调用）"]
-  PR --> SUM["摘要请求：有界转录（015 既有上限）<br/>+ 旧 [conversation summary] 作为<br/>previous-summary 迭代合并<br/>结构化模板 + opencode 纪律 + Pitfalls"]
-  SUM --> V{"摘要非空 且<br/>命中模板标题？"}
-  V -- 否·首次 --> NU["NUDGE 提醒重试一次"]
-  NU --> V
-  V -- 否·二次 --> ER["错误行：历史不动<br/>备份保留"]
-  V -- 是 --> REP["历史替换 = system<br/>+ 标记摘要 + 保留尾部（剪枝后）"]
-  REP --> SV["持久化会话 + compact 元数据日志<br/>（before/after/pruned/retained，零正文）"]
-  SV --> OK["完成行：before→after 读数"]
+```plantuml
+@startuml compact-pipeline
+title /compact 管道（失败任何一步 → 历史不动）
+
+start
+:/compact;
+if (回合空闲 且\n非系统消息 ≥ 2？) then (是)
+else (否)
+  :no-op / 错误行\n历史不动;
+  stop
+endif
+:备份原始转录\nsessions/{id}.pre-compact.json · 0600\n覆盖旧备份（仅留最新）;
+:切点：保留尾部 =\n近期 user 消息 ≤20k（估算）\n+ 最后一轮完整问答；\n切在回合边界，绝不孤儿 tool_result;
+:机械剪枝：保护窗外旧 tool output\n重复结果留最新全文、旧副本一行摘要\n（不花模型调用）;
+:构造摘要请求：有界转录（015 既有上限）\n+ 旧 [conversation summary] 作为\nprevious-summary 迭代合并\n结构化模板 + opencode 纪律 + Pitfalls;
+while (摘要非空 且\n命中模板标题？) is (否)
+  if (已 NUDGE 过？) then (是)
+    :错误行：历史不动\n备份保留;
+    stop
+  else (否)
+    :NUDGE 提醒重试一次\n重发摘要请求;
+  endif
+endwhile (是)
+:历史替换 = system\n+ 标记摘要 + 保留尾部（剪枝后）;
+:持久化会话 + compact 元数据日志\n（before/after/pruned/retained，零正文）;
+:完成行：before→after 读数;
+stop
+@enduml
 ```
 
 与 015 的差异：015 全量替换为单条摘要；017 保留尾部 + 先剪枝 + 迭代摘要 + 备份。015 的 worker/join-then-read 纪律、中断（Ctrl-C/Esc）历史不动、有界转录上限全部沿用。
 
 ### 2.3 可选：摘要播种新会话（Q3 待确认）
 
-```mermaid
-flowchart TD
-  N["/session new --from-summary"] --> X{"当前会话存在<br/>[conversation summary]？"}
-  X -- 否 --> Y["等同 /session new"]
-  X -- 是 --> Z["新会话历史 = system + 该摘要<br/>旧会话保存且可恢复<br/>（与备份互补的逃生舱）"]
+```plantuml
+@startuml seeded-session
+title 可选：摘要播种新会话（Q3 待确认）
+
+start
+:/session new --from-summary;
+if (当前会话存在\n[conversation summary]？) then (是)
+  :新会话历史 = system + 该摘要\n旧会话保存且可恢复\n（与备份互补的逃生舱）;
+else (否)
+  :等同 /session new;
+endif
+stop
+@enduml
 ```
 
 ## 3. 关键契约

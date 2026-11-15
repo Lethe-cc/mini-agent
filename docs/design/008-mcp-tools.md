@@ -83,26 +83,27 @@ v1 明确排除 tool calling，只做了格式预留（`Role::Tool`、`Message.t
 
 ### 5.1 数据流
 
-```mermaid
-sequenceDiagram
-    participant U as 用户(TUI/CLI)
-    participant L as run_turn(循环)
-    participant P as OpenAiProvider
-    participant R as ToolRegistry
-    participant M as McpClient(Transport: stdio/HTTP)
-    U->>L: 输入
-    loop 直到最终文本或轮数上限
-        L->>P: complete_chat(chat, tools_json)
-        P-->>L: text + tool_calls
-        alt 有 tool_calls
-            L->>U: 审批请求(y/n/a)
-            U-->>L: 允许/拒绝
-            L->>R: 顺序执行
-            R-->>M: tools/call (远端工具)
-            L->>L: 追加 Assistant(tool_calls) + Tool 消息
-        end
-    end
-    L-->>U: 最终 assistant 文本，整回合落盘
+```plantuml
+@startuml mcp-turn-flow
+actor "用户(TUI/CLI)" as U
+participant "run_turn(循环)" as L
+participant "OpenAiProvider" as P
+participant "ToolRegistry" as R
+participant "McpClient(Transport: stdio/HTTP)" as M
+U -> L: 输入
+loop 直到最终文本或轮数上限
+  L -> P: complete_chat(chat, tools_json)
+  P --> L: text + tool_calls
+  alt 有 tool_calls
+    L -> U: 审批请求(y/n/a)
+    U --> L: 允许/拒绝
+    L -> R: 顺序执行
+    R --> M: tools/call (远端工具)
+    L -> L: 追加 Assistant(tool_calls) + Tool 消息
+  end
+end
+L --> U: 最终 assistant 文本，整回合落盘
+@enduml
 ```
 
 ### 5.2 模块与文件布局（规划中，均为新文件/新增字段）
