@@ -69,14 +69,16 @@ CLI：
 | cli_ask.cpp / cli_run.cpp / cli_session.cpp / cli_mcp.cpp | 各子命令 |
 | cli_common.cpp | print_provider_error/provider_with_retry_log/apply_*_flags |
 
-## 5. 分阶段计划（低→高风险）
+## 5. 分阶段计划（低→高风险）与当前进度
 
-- **P1 纯函数抽取**：provider_parse、md_geometry、workspace、subprocess。零状态、补单测。门禁：unit+四 preset。
-- **P2 类/子命令抽取**：tools_bash/file/git、tools_registry、session_serde/store、config_file/env、cli_*。机械移动。门禁：unit+pty+四 preset。
-- **P3 TUI 状态对象 + screen 抽取**：建 TuiState，移 RawMode/LiveScreen 到 tui_screen。门禁：pty 双环境（帧记账敏感）。
-- **P4 TUI 逻辑拆分**：slash/sidebar/turn/input 逐块移出。门禁：pty 双环境 + 四 preset + check.py。
+- **P1 纯函数抽取** —— **已完成**（提交 `04b36f1`）：`md_geometry`、`subprocess`、`workspace`、`provider_parse`。零状态、行为保持；四 preset CTest 3/3 + pty TUI 195 PASS + CLI ALL PASS + check.py。
+- **P2 类/子命令抽取** —— **部分完成**（提交 `a879bcd`）：CLI 拆为 `cli_common`/`cli_commands`/`cli_main`（1115→86 行）+ `session_serde`。**tools_file/git/bash/registry 与 config_file/env 拆分暂缓**（与匿名命名空间助手耦合，需随 P3 一起谨慎处理）。
+- **P3 TUI 状态对象 + screen 抽取** —— **待实施**。 naive 行范围移动会破坏嵌套匿名命名空间平衡（已验证并回退）；需先建 `TuiState`/显式头文件契约再移 `LiveScreen`/`RawMode`。门禁：pty 双环境。
+- **P4 TUI 逻辑拆分** —— **待实施**（slash/sidebar/turn/input），依赖 P3 的 TuiState。
 
-每阶段一个提交；P3/P4 内部可再细拆小提交。任何阶段测试不绿即回退该阶段。
+每阶段一个提交；任何阶段测试不绿即回退该阶段。
+
+**已知无关问题**：宽 USER 环境下 pty 冒烟在 approval 段停滞（92 PASS 后），在**未改动的 HEAD** 上同样复现 → 系先前提交引入的独立缺陷，与本拆分无关，需另行修复。
 
 ## 6. 风险与缓解
 
