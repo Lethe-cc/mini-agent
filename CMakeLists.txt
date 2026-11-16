@@ -76,15 +76,19 @@ add_library(agent_core STATIC
     src/highlight.cpp
     src/log.cpp
     src/md.cpp
+    src/md_geometry.cpp
     src/loop.cpp
     src/project.cpp
     src/provider_openai.cpp
+    src/provider_parse.cpp
     src/session.cpp
     src/mcp_rpc.cpp
     src/mcp_stdio.cpp
     src/mcp_http.cpp
     src/models_dev.cpp
+    src/subprocess.cpp
     src/tools.cpp
+    src/workspace.cpp
     src/tui.cpp
     src/tui_render.cpp
     third_party/md4c/md4c.c
