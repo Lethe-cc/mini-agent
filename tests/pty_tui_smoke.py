@@ -1065,6 +1065,13 @@ def main():
     cmp_send(b"post nudge turn\r", "tok0")
     nudged = cmp_send(b"/compact\r", "[ok] compacted")
     expect("nudged" in nudged, "compact: NUDGE retry reported")
+    # 010 §21: /context accepts decimal K/M suffixes (20K == 20000); a
+    # garbage suffix is rejected with unit examples and writes nothing.
+    cmp_send(b"/context 20K\r", "[ok] config saved")
+    k_read = cmp_send(b"/context\r", "ctx reading:")
+    expect("(20000)" in k_read, "context: 20K parsed as decimal 20000")
+    bad_unit = cmp_send(b"/context 12x\r", "[error] /context expects a positive token count")
+    expect("128K" in bad_unit, "context: rejection message shows unit examples")
     # 017: pressure hint fires once per crossing (window 20k -> hint at
     # >= 3616 estimated tokens; a 20k-char message crosses it).
     cmp_send(b"/context 20000\r", "[ok] config saved")

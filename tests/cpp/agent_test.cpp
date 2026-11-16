@@ -2628,6 +2628,32 @@ void test_v47_models_dev_catalog() {
           "empty catalog -> miss");
 }
 
+void test_v418_parse_token_count() {
+    // §21: /context accepts decimal K/M suffixes; plain digits stay exact.
+    const auto parse = mini_agent::tui::parse_token_count;
+    check(parse("131072") == 131072, "plain digits exact");
+    check(parse("1") == 1, "single token");
+    check(parse("128K") == 128000 && parse("128k") == 128000, "K/k decimal 1000");
+    check(parse("1M") == 1000000 && parse("1m") == 1000000, "M/m decimal 1000000");
+    check(parse("1.5M") == 1500000, "fractional M scales to integer tokens");
+    check(parse("0.5k") == 500, "fractional k scales to integer tokens");
+    check(parse("0.007k") == 7, "float noise tolerated, not a fraction");
+    check(parse("1000000") == 1000000, "large plain value keeps strtoll precision");
+    // Rejections: 0 means invalid, the caller writes nothing.
+    check(parse("") == 0, "empty -> invalid");
+    check(parse("0") == 0 && parse("-5") == 0 && parse("0k") == 0, "non-positive -> invalid");
+    check(parse("abc") == 0 && parse("12x") == 0, "garbage -> invalid");
+    check(parse("128KB") == 0, "B after K is trailing garbage");
+    check(parse("1.5") == 0, "bare fraction is not a token count");
+    check(parse("1.0001k") == 0, "fractional token result -> invalid");
+    check(parse("0x10K") == 0, "hex shape -> invalid");
+    check(parse("1e3K") == 0, "exponent shape -> invalid");
+    check(parse("K") == 0, "suffix alone -> invalid");
+    check(parse(".5M") == 500000, "leading-dot fraction still scales");
+    check(parse("99999999999999999999") == 0, "plain overflow -> invalid");
+    check(parse("99999999999999999999M") == 0, "scaled overflow -> invalid");
+}
+
 void test_v411_turn_panel() {
     namespace T = mini_agent::tui;
     // Idle-ish: header only (caller decides visibility; rows always lead
@@ -3414,6 +3440,7 @@ int main() {
     test_v42_capabilities_and_menu();
     test_v43_probe_parse();
     test_v47_models_dev_catalog();
+    test_v418_parse_token_count();
     test_v413_session_prefix();
     test_v415_session_recency();
     test_v410_arg_completion();

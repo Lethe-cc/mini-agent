@@ -15,9 +15,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -805,6 +808,59 @@ std::string format_token_count(long long n) {
     else
         std::snprintf(buf, sizeof(buf), "%.1fG", static_cast<double>(n) / 1000000000.0);
     return std::string(buf);
+}
+
+long long parse_token_count(std::string_view text) {
+    // /context argument (design 010 §21): decimal K/M suffixes, the same
+    // ladder format_token_count displays. 0 = invalid, caller rejects.
+    if (text.empty())
+        return 0;
+    long long multiplier = 1;
+    const char suffix = text.back();
+    if (suffix == 'k' || suffix == 'K')
+        multiplier = 1000;
+    else if (suffix == 'm' || suffix == 'M')
+        multiplier = 1000000;
+    if (multiplier > 1)
+        text.remove_suffix(1);
+    if (text.empty())
+        return 0;
+    const std::string num(text);
+    char* end = nullptr;
+    if (multiplier == 1) {
+        // Plain digits: exact strtoll, no float precision loss. Full
+        // consumption rejects trailing garbage ("12x", bare "1.5").
+        errno = 0;
+        const long long value = std::strtoll(num.c_str(), &end, 10);
+        if (errno == ERANGE || end != num.c_str() + num.size() || value <= 0)
+            return 0;
+        return value;
+    }
+    // Suffix path: digits + at most one '.' only -- strtod would otherwise
+    // swallow hex/inf/nan shapes ("0x10K" is not a token count).
+    bool dot = false;
+    bool digit = false;
+    for (const char c : num) {
+        if (c == '.') {
+            if (dot)
+                return 0;
+            dot = true;
+        } else if (c >= '0' && c <= '9') {
+            digit = true;
+        } else {
+            return 0;
+        }
+    }
+    if (!digit)
+        return 0;
+    const double scaled = std::strtod(num.c_str(), nullptr) * static_cast<double>(multiplier);
+    const double rounded = std::round(scaled);
+    // Fractional tokens are not a window; tolerate only float noise
+    // (0.007k is 7, 1.0001k is not an integer).
+    if (rounded <= 0 || rounded > static_cast<double>(std::numeric_limits<long long>::max()) ||
+        std::fabs(scaled - rounded) > 1e-9 * std::max(1.0, scaled))
+        return 0;
+    return static_cast<long long>(rounded);
 }
 
 std::string sidebar_status_glyph(std::string_view xy) {

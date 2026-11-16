@@ -2238,7 +2238,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                              std::to_string(inputs.context_window) + ") · set it: /context " +
                              std::to_string(inputs.context_window);
                 screen.commit("context_window=" + shown +
-                              "; usage /context <tokens> | /context probe | /context off");
+                              "; usage /context <tokens|128K|1M> | /context probe | /context off");
                 screen.commit(
                     "ctx reading: " + std::string(inputs.context_exceeded ? "EXCEEDED " : "") +
                     (inputs.context_tokens > 0
@@ -2313,9 +2313,12 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                 });
                 screen.commit("[info] probing context window (one oversized request)...");
             } else {
-                const long long parsed_window = std::strtoll(std::string(arg).c_str(), nullptr, 10);
+                // §21: decimal K/M suffixes (128K=128000, 1M=1000000);
+                // plain digits stay exact. 0 = invalid, nothing written.
+                const long long parsed_window = parse_token_count(arg);
                 if (parsed_window <= 0) {
-                    screen.commit("[error] /context expects a positive token count");
+                    screen.commit("[error] /context expects a positive token count "
+                                  "(e.g. 131072, 128K, 1M)");
                     return true;
                 }
                 active_profile_for_edit()->context_window = parsed_window;

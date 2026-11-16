@@ -214,7 +214,9 @@ ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1
 
 dump 行头其实一直带时间，但形态是裸 epoch 毫秒（`=== REQUEST 1794123708734ms ===`），肉眼不可读、等于没有。`debug_dump` 行头改为本地时区可读格式 `2026-11-08 22:02:33.106`（同一 wall clock，仅格式化；aux 截断路径共用）。验证：真实 ask 请求 dump 头为 `=== REQUEST 2026-11-08 22:02:33.106 ===`；agent_test/CTest/strict-project/cpp_format 通过（无测试断言旧 `ms ===` 形态）。
 
-## 21. v4.18 修订（2026-11-16 维护者需求：每次构建自动获取 models.dev 最新数据）
+## 21. v4.18 修订（2026-11-16 维护者需求：每次构建自动获取 models.dev 最新数据；/context 支持 K/M 单位）
+
+### 21.1 构建期目录自动刷新
 
 把 §18 的"手动刷新 + vendored 快照"数据层调整为**构建期 best-effort 自动刷新**；运行时查询层、兜底链排位与"目录永不写 config"语义全部不变：
 
@@ -225,6 +227,16 @@ dump 行头其实一直带时间，但形态是裸 epoch 毫秒（`=== REQUEST 1
 - 运行时仍零网络：刷新只发生在构建期；目录依旧仅作 ctx 分母显示兜底（config > caps > catalog，§18 接入点不变）。
 
 验证（2026-11-16，linux-gcc-debug / GCC）：`check.py --strict-project` 全过（构建期实抓 8092 行活目录进 build 树，CTest 3/3，密封后的 catalog 测试不依赖活数据）；离线证明（https_proxy 指向拒绝端口 + `--best-effort`）exit 0 不写文件；坏 JSON best-effort exit 0 / 严格模式 exit 1；1 行小目录触发护栏 best-effort exit 0；活目录连跑两次 mtime 不变、第三次构建仅 `[1/1]` 刷新步零重编译；OFF 选项 scratch 构建无 generated 目录、走 vendored 头、agent_test 全过。未验证组合：clang/Release preset 本轮未跑（改动仅为构建接线与纯函数重构，无编译器相关代码）。
+
+### 21.2 /context 十进制 K/M 单位
+
+维护者同日第二需求：`/context` 参数支持 M/K 大小。取舍与形态：
+
+- **十进制语义（维护者选定）**：`K`=1000、`M`=1000000，与 models.dev 十进制条目（如 1000000）及状态栏 `format_token_count` 显示阶梯同口径；128K=128000（非 131072，精确值直接写纯数字）。大小写不限，支持小数（`1.5M`=1500000），结果必须是整数 token（`1.0001k` 拒绝，仅容忍浮点噪声）。
+- **解析层**：新增纯函数 `mini_agent::tui::parse_token_count`（tui_render.cpp，与 `format_token_count` 同址）：纯数字走 `strtoll` 精确路径（无浮点精度损失）；带后缀路径预校验字符集（仅数字+至多一个小数点，拒绝 strtod 会吞的 hex/inf/nan 形态）后缩放；非法（空/非正/尾随杂字符/小数 token/溢出）一律返 0，调用方不写任何值——沿用失败关闭惯例。
+- **接入点**：仅 `/context <tokens>` 分支（原 `strtoll` 替换）；错误文案带单位示例（`e.g. 131072, 128K, 1M`），usage 行改 `<tokens|128K|1M>`。**config 文件与 env 入口不变**（仍严格正整数，非法值失败关闭/忽略）：单位是 TUI 交互便利，不是配置 schema 变更。`off`/`0`/`probe`/无参分支与目录建议（仍发纯数字）不变。
+
+验证（2026-11-16，linux-gcc-debug / GCC）：`test_v418_parse_token_count`（纯数字/大小写 K/M/小数缩放/浮点噪声/前导点/非法与溢出拒绝共 20 断言）通过；PTY 冒烟新增 `/context 20K` → config 保存且 readout 显 `(20000)`、`/context 12x` → 带单位示例的拒绝文案，全量 195 PASS / 0 FAIL；agent_test 全量、CTest 3/3、strict-project 通过。
 
 ## 最终核对
 

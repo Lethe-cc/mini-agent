@@ -75,7 +75,7 @@ mini-agent session prune --older-than 30 [--dry-run]             ← 清理久�
 - `/compact`：把更早的历史浓缩成一条结构化摘要，**最近几轮逐字保留**（017）；压缩前原始转录自动备份为 `<id>.pre-compact.json`（0600，`session rm/prune` 会一并清理）。有损——旧 tool output 先机械剪枝、细节进摘要；失败/中断历史不动。适合“继续当前任务但减负”。历史太小（整体落在保留预算内）时 no-op。
 - `/session new`：彻底重新开始。
 
-状态行 `ctx` 段显示上下文占用（017 起为 provider 账单锚点 + 尾部估算；设过 `/context <tokens>` 或模型目录有窗口值时带百分比；≥70% 黄、≥90% 红）；占用越过 `window − max(15%,16k)` 时一次性提示 consider /compact（只提示不自动）；撞窗 400 后读数合成 EXCEEDED 直到下一成功回合。`/context` 不带参数可看 system/conversation/tool output 三行 breakdown。
+状态行 `ctx` 段显示上下文占用（017 起为 provider 账单锚点 + 尾部估算；设过 `/context <tokens>`（支持十进制 K/M 后缀，如 `128K`、`1M`）或模型目录有窗口值时带百分比；≥70% 黄、≥90% 红）；占用越过 `window − max(15%,16k)` 时一次性提示 consider /compact（只提示不自动）；撞窗 400 后读数合成 EXCEEDED 直到下一成功回合。`/context` 不带参数可看 system/conversation/tool output 三行 breakdown。
 
 ## 7. 韧性与排障
 

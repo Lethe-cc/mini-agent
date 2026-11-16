@@ -288,7 +288,7 @@ v6 起支持多 provider 档案，v7 起档案必须命名（[§4.4](#44-多-pro
 | `/model` | `<provider>/<model>` | ✅ | 限定名且档案存在：原子切换 URL+key+model，写会话元数据 `meta.provider`；前缀未知则按字面 id（模型名可含 `/`）。切换均重置用量读数；env 覆盖生效时只写盘并 `[warn]` 本进程不生效 |
 | `/models` | — | — | 聚合拉取所有配置齐全档案的 `GET /models`（env-only 无档案时拉当前生效值；env 覆盖态额外拉生效路由）：顺序执行、每档案连接 5s/总 15s 上限；多来源时菜单项带 `provider/` 前缀，`<- current` 标当前。数字选择器：Enter 选定（同时切档案）、Esc 收起；各档案鉴权探测独立更新提示符 |
 | `/reasoning` | `[值\|off]` | ✅ | 原样透传 `reasoning_effort`；不带参数打开缓存档位选择器（low/medium/high/off 为常见提示）；服务端 400 时提示、不自动回退 |
-| `/context` | `[tokens\|off\|0\|probe]` | ✅（含 probe 探到的值；env-only 仅本进程） | 设置/清除/探测 `context_window`（分母）；不带参数另显 **017 读数**（分子与 breakdown，见下表后详解）。逐参数语义见 [§5.1.1](#511-context-参数详解010017) |
+| `/context` | `[tokens\|off\|0\|probe]` | ✅（含 probe 探到的值；env-only 仅本进程） | 设置/清除/探测 `context_window`（分母）；`<tokens>` 支持十进制 K/M 后缀（`128K`=128000、`1M`=1000000，见 §5.1.1）；不带参数另显 **017 读数**（分子与 breakdown，见下表后详解）。逐参数语义见 [§5.1.1](#511-context-参数详解010017) |
 
 Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定）模型 id，`/provider ` 补 `add/rm/list`。`/config` 会显示 `providers=N active=…`，env 覆盖生效时附 `env override in effect`。
 
@@ -299,7 +299,7 @@ Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定�
 | 形态 | 意义 | 持久化 | 失败行为 |
 | --- | --- | --- | --- |
 | （无参数） | **查询**：显示当前 `context_window` 配置值；未设置时显示目录建议值并提示 `set it: /context <N>`。另显 017 读数：ctx reading（锚点+尾部估算；无锚点时全量估算带 `~`；溢出后 `EXCEEDED`）、breakdown 三行（system / conversation / tool output，估算）、pressure 行（提示阈值） | 只读 | — |
-| `<tokens>`（正整数，如 `128000`） | **手动写死**窗口 = 该值，作为 `ctx%` 分母。config 是权威来源：明确知道模型窗口时直接写，覆盖目录猜测 | ✅ 活动档案 | 非正整数 → `[error]`，不写 |
+| `<tokens>`（正整数，如 `128000`；v4.18 起可带十进制 K/M 后缀，大小写不限：`128K`/`128k`=128000、`1M`/`1m`=1000000、`1.5M`=1500000） | **手动写死**窗口 = 该值，作为 `ctx%` 分母。config 是权威来源：明确知道模型窗口时直接写，覆盖目录猜测。纯数字精确解析；带后缀时结果必须是整数 token（`1.0001k` 拒绝）。**单位仅限 TUI 入口**：config 文件与 `MINI_AGENT_CONTEXT_WINDOW` 仍只收纯数字（非法值失败关闭/忽略，不变） | ✅ 活动档案 | 非法（非正、尾随杂字符如 `12x`/`128KB`、小数 token、溢出）→ `[error]`，不写 |
 | `off` 或 `0` | **清除**窗口设置（两写法等价）：状态行只显 token 数、不带百分比；分母回退目录链 | ✅ 写 0 | — |
 | `probe` | **显式探测**：发一次 `max_tokens` 超大请求，从网关拒绝文案解析权威上限（三形态白名单）。需 base_url+key+model 齐全；≤30s；**绝不自动触发**（花一次请求，由用户决定） | ✅ 探到的值自动写入活动档案；env-only 无档案时仅本进程 | 配置不齐 → `[error]`；解析不出白名单形态 → `[error] probe failed`，**不写任何值（不猜）** |
 

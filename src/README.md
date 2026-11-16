@@ -55,7 +55,7 @@ mini-agent v1 的全部 C++ 实现。构建目标见根目录 `CMakeLists.txt`�
 
 
 
-| `tui.cpp` | `tui.hpp` | 自绘 TUI（ADR 003）：termios RAII、poll ≤50ms 帧循环、live 块行级 diff + CSI 2026 同步输出、UTF-8 光标编辑 + ↑/↓ 历史、斜杠命令与 Tab 补全菜单；模型选取（`/provider`+`/login` 后自动列模型、`/models` 重列、编号选择，见 007 §5.6 规则 7）与分批配置提示 `config_next_hint`（规则 8）、登录状态展示 `auth_status_line` / `AuthProbe`（规则 9）与提示符连通标志 `connection_state` / `prompt_marker`（输入提示符即标志，规则 10）；v4 底部状态栏用量段 `status_usage_segments`（ctx 已占用/最大、out、reasoning，按 ctx% 70%/90% 黄红阈值着色，估算带 `~`；无配置时状态行与 v3 字节一致）、`/context` `/reasoning` `/debug` 命令与模型切换读数复位（v4.3 增 `/context probe` 后台一次性探测，结果写 config）；v4.2（010 §11）：models worker 一次 GET 同产 ids+caps 缓存、`/reasoning` 无参时按当前模型 caps 出编号档位菜单（`reasoning_menu_rows`，选档复用 `model_choice`）、状态栏 reasoning 实测值（echo>on>配置）优先 |
+| `tui.cpp` | `tui.hpp` | 自绘 TUI（ADR 003）：termios RAII、poll ≤50ms 帧循环、live 块行级 diff + CSI 2026 同步输出、UTF-8 光标编辑 + ↑/↓ 历史、斜杠命令与 Tab 补全菜单；模型选取（`/provider`+`/login` 后自动列模型、`/models` 重列、编号选择，见 007 §5.6 规则 7）与分批配置提示 `config_next_hint`（规则 8）、登录状态展示 `auth_status_line` / `AuthProbe`（规则 9）与提示符连通标志 `connection_state` / `prompt_marker`（输入提示符即标志，规则 10）；v4 底部状态栏用量段 `status_usage_segments`（ctx 已占用/最大、out、reasoning，按 ctx% 70%/90% 黄红阈值着色，估算带 `~`；无配置时状态行与 v3 字节一致）、`/context` `/reasoning` `/debug` 命令与模型切换读数复位（v4.3 增 `/context probe` 后台一次性探测，结果写 config；v4.18 §21 增 `/context` 十进制 K/M 后缀，纯函数 `parse_token_count` 在 tui_render.cpp）；v4.2（010 §11）：models worker 一次 GET 同产 ids+caps 缓存、`/reasoning` 无参时按当前模型 caps 出编号档位菜单（`reasoning_menu_rows`，选档复用 `model_choice`）、状态栏 reasoning 实测值（echo>on>配置）优先 |
 
 
 

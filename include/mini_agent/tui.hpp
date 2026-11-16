@@ -294,6 +294,13 @@ std::vector<std::string> reasoning_menu_rows(const std::vector<std::string>& eff
 // decimal k, <1G one-decimal M, else one-decimal G. Pi-style ladder.
 std::string format_token_count(long long n);
 
+// Inverse convenience for /context arguments (design 010 §21): plain
+// digits parse exactly; an optional case-insensitive K/M suffix scales
+// decimally (128K = 128000, 1M = 1000000, 1.5M = 1500000). Returns 0 on
+// anything invalid: empty, non-positive, trailing garbage, fractional
+// token results, overflow. TUI-only -- config file/env stay strict integers.
+long long parse_token_count(std::string_view text);
+
 // Interactive TUI over one session. Owns the raw-mode/termios lifecycle and
 // the request worker; exits with an exit code. Persists per-turn saves via
 // store (atomic + lock already provided). Returns process exit code.
