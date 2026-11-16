@@ -13,7 +13,7 @@ CI/质量门禁调用的脚本仍在 `scripts/`，被自动化测试引用的 mo
 | [diff_fuzz.cpp](diff_fuzz.cpp) | `src/diff.cpp` 的属性级 fuzz（2026-11-05 复查产物）：随机小文件对 20 万轮，断言未截断 diff 可逐 hunk 重放 OLD→NEW、@@ 起点单调、计数与行种类一致。非 CTest 目标，改动 diff.cpp 后手动编译运行（文件头有命令）。 |
 | [diff_demo.py](diff_demo.py) | v3 审批 diff 预览的**可复现验证工具**：内置 mock（CODEFIX 剧本）+ 一次性 git 工作区 + 真 pty，`auto` 模式自动跑 deny/allow 两遍并断言（拒绝→文件不动、允许→落盘与 diff 一致、commit 落库、日志无正文），`interactive` 模式把 y/N 交给你本人敲。非质量门禁。 |
 | [mcp_probe.py](mcp_probe.py) | Streamable HTTP MCP 客户端探针：对任意 MCP server 手动做握手、列工具、调工具、发原始 JSON-RPC。与 `src/mcp_http.cpp` 使用同样的头规则（`Mcp-Session-Id`、`MCP-Protocol-Version`、`Accept`）和 JSON/SSE 双响应解析，可用来排查 mini-agent 连不上某个 HTTP MCP server 的问题。 |
-| [refresh_models_dev.py](refresh_models_dev.py) | 重新生成内嵌 models.dev 窗口目录头（v4.7，设计 010 §18；v4.18 §21 起 CMake 每次构建自动调用）：抓 https://models.dev/api.json（MIT，显式 UA）裁剪为 TSV；`--input file.json` 离线重解析；`--output PATH` 指定生成路径（构建期指向 build 树，源树 vendored 快照不动）；`--best-effort` 失败只警告 exit 0（构建永不因此破坏）；内容不变跳过写入；行数 <1000 拒写（上游 schema 漂移护栏）。非质量门禁。 |
+| [refresh_models_dev.py](refresh_models_dev.py) | 重新生成内嵌 models.dev 窗口目录头（v4.7，设计 010 §18；v4.18 §21/§21.3 起 CMake 每次构建自动调用，直接写回源树 vendored 头）：抓 https://models.dev/api.json（MIT，显式 UA）裁剪为 TSV；`--input file.json` 离线重解析；`--output PATH` 指定生成路径（CMake 传源树绝对路径）；`--best-effort` 失败只警告 exit 0、不写文件（构建永不因此破坏）；内容不变跳过写入；行数 <1000 拒写（上游 schema 漂移护栏）。非质量门禁。 |
 | [cold_start_check.py](cold_start_check.py) | 冷启动计时门禁（project-context 成功标准 #1 的脚本化测量）：`--version` 纯启动代理 + 管道 `ask` 打即时 loopback mock 的全就绪路径，各 N 次取中位数断言 ≤100ms（默认 15 次，`--runs`/`--budget-ms` 可调）。非 quality_commands；CI `smoke` job 门禁。 |
 
 ## mcp_probe.py 快速上手

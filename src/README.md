@@ -43,7 +43,7 @@ mini-agent v1 的全部 C++ 实现。构建目标见根目录 `CMakeLists.txt`�
 
 
 
-| `models_dev.cpp` | `models_dev.hpp` | v4.7（010 §18）：内嵌 models.dev v1 窗口目录快照（`models_dev_data.hpp`，由 `tools/refresh_models_dev.py` 生成，TSV raw-string；v4.18 §21 起 CMake 每次构建 best-effort 刷新到 build 树，失败回退 vendored 快照）查表 `lookup_models_dev(base_url, model)`：首次调用解析进静态表、`base\tmodel\t` 前缀二分 + 精确 key 校验（前缀邻居不误命中）、未命中 nullopt；`lookup_models_dev_tsv` 为同逻辑测试缝（每次解析、不缓存）；仅作 ctx 分母显示兜底（config > caps > catalog），永不写 config |
+| `models_dev.cpp` | `models_dev.hpp` | v4.7（010 §18）：内嵌 models.dev v1 窗口目录快照（`models_dev_data.hpp`，由 `tools/refresh_models_dev.py` 生成，TSV raw-string；v4.18 §21/§21.3 起 CMake 每次构建 best-effort 刷新、直接写回本源树头文件，失败保持上一次成功内容）查表 `lookup_models_dev(base_url, model)`：首次调用解析进静态表、`base\tmodel\t` 前缀二分 + 精确 key 校验（前缀邻居不误命中）、未命中 nullopt；`lookup_models_dev_tsv` 为同逻辑测试缝（每次解析、不缓存）；仅作 ctx 分母显示兜底（config > caps > catalog），永不写 config |
 
 
 

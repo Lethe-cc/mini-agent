@@ -238,6 +238,16 @@ dump 行头其实一直带时间，但形态是裸 epoch 毫秒（`=== REQUEST 1
 
 验证（2026-11-16，linux-gcc-debug / GCC）：`test_v418_parse_token_count`（纯数字/大小写 K/M/小数缩放/浮点噪声/前导点/非法与溢出拒绝共 20 断言）通过；PTY 冒烟新增 `/context 20K` → config 保存且 readout 显 `(20000)`、`/context 12x` → 带单位示例的拒绝文案，全量 195 PASS / 0 FAIL；agent_test 全量、CTest 3/3、strict-project 通过。
 
+### 21.3 v4.18.1（同日维护者追问：刷新直接写回源树 vendored 头，不要 build 树副本）
+
+维护者选定单一权威文件形态，推翻 §21.1 的 build 树生成 + include 遮蔽接线：
+
+- **形态**：custom target 改传源树绝对路径 `--output ${CMAKE_CURRENT_SOURCE_DIR}/include/mini_agent/models_dev_data.hpp`（绝对路径必需：target 工作目录在 build 树，脚本相对缺省会写错位置）；删除 `generated/` 目录与 `BEFORE PUBLIC` include 遮蔽。选项、best-effort、write-if-different、行数护栏、显式 UA 全部不变。
+- **语义变化（显式承认的取舍）**：vendored 头从"固定评审快照"变为"上一次成功抓取"；上游更新时 git status 会显示该头被修改（预期行为，随下次提交入库；目录更新频繁，今日实测 7158→8092 行）；失败时头保持上一次成功内容，离线构建仍永不破坏。write-if-different 保证内容不变时不脏树、不重编译。版本戳 `-dirty` 在 configure 时计算，构建中刷出的头变更下次 configure 才反映（既有行为，非本轮引入）。
+- **测试密封性不受影响**：§21.1 的 `lookup_models_dev_tsv` fixture 缝恰好是本形态的前提——精确断言从不依赖内嵌目录内容，头文件随活数据漂移也不会弄 flaky 测试。
+
+验证（2026-11-16，linux-gcc-debug / GCC）：源树头现为 8092 行活目录（对已提交 7158 行快照约 1900 行 diff，git 可见；写入路径与 §21.1 已验证的 --output 生成同一代码路径）；重新 configure+build 后刷新步报 unchanged，再跑一次构建仅 `[1/1]` 刷新步、头 mtime 不变、零重编译；CTest 3/3、strict-project 通过；离线 best-effort 路径复用 §21.1 已验证的脚本行为（不写文件 → 头保持原内容）。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

@@ -98,27 +98,27 @@ target_include_directories(agent_core PUBLIC
 target_compile_features(agent_core PUBLIC cxx_std_17)
 target_link_libraries(agent_core PUBLIC CURL::libcurl)
 
-# Build-time models.dev catalog refresh (design 010 §21): every build tries
-# to regenerate the catalog header INTO THE BUILD TREE; the vendored
-# include/mini_agent/models_dev_data.hpp stays untouched as the offline
-# fallback. --best-effort means a failed fetch/schema guard never breaks the
-# build: without a generated header the include path below simply resolves
-# to the vendored one (a later failure keeps the last good generated header).
+# Build-time models.dev catalog refresh (design 010 §21, §21.3): every build
+# tries to regenerate the VENDORED header in the source tree in place
+# (maintainer's choice: one authoritative file, no build-tree shadow copy).
+# --best-effort means a failed fetch/schema guard never breaks the build and
+# never writes: the header then simply stays at its last good content.
+# Write-if-different in the script keeps unchanged catalogs from dirtying
+# git status or triggering recompiles; upstream updates DO show up as a
+# modified header (expected, commit it along with the next change).
 if(MINI_AGENT_REFRESH_MODELS_DEV)
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
-        set(MODELS_DEV_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+        # Absolute --output is required: the custom target runs from the
+        # build dir, where the script's relative default would misfire.
         add_custom_target(models_dev_refresh ALL
             COMMAND "${Python3_EXECUTABLE}"
                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/refresh_models_dev.py"
-                    --output "${MODELS_DEV_GENERATED_DIR}/mini_agent/models_dev_data.hpp"
+                    --output "${CMAKE_CURRENT_SOURCE_DIR}/include/mini_agent/models_dev_data.hpp"
                     --best-effort
             VERBATIM)
+        message(STATUS "full update command: ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/refresh_models_dev.py --output ${CMAKE_CURRENT_SOURCE_DIR}/include/mini_agent/models_dev_data.hpp --best-effort")
         add_dependencies(agent_core models_dev_refresh)
-        # BEFORE: the generated dir holds only mini_agent/models_dev_data.hpp,
-        # so it shadows just that one header; everything else still resolves
-        # to the source include/ tree.
-        target_include_directories(agent_core BEFORE PUBLIC "${MODELS_DEV_GENERATED_DIR}")
     else()
         message(STATUS "models.dev refresh: Python3 not found, using the vendored catalog snapshot")
     endif()

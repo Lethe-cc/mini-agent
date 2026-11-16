@@ -8,9 +8,9 @@ side (src/models_dev.cpp) matches config.base_url + model against this table
 as the last fallback in the context-window chain.
 
 Since design 010 §21 (v4.18) CMake invokes this on EVERY build (option
-MINI_AGENT_REFRESH_MODELS_DEV, default ON) with --best-effort and --output
-pointing into the build tree; any failure keeps the vendored snapshot
-include/mini_agent/models_dev_data.hpp as the fallback. Manual usage:
+MINI_AGENT_REFRESH_MODELS_DEV, default ON) with --best-effort, writing the
+vendored header include/mini_agent/models_dev_data.hpp IN PLACE (§21.3);
+any failure leaves the header at its last good content. Manual usage:
 
     python3 tools/refresh_models_dev.py            # fetch + regenerate vendored
     python3 tools/refresh_models_dev.py --input f.json  # offline re-parse
