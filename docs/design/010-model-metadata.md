@@ -214,6 +214,18 @@ ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1
 
 dump 行头其实一直带时间，但形态是裸 epoch 毫秒（`=== REQUEST 1794123708734ms ===`），肉眼不可读、等于没有。`debug_dump` 行头改为本地时区可读格式 `2026-11-08 22:02:33.106`（同一 wall clock，仅格式化；aux 截断路径共用）。验证：真实 ask 请求 dump 头为 `=== REQUEST 2026-11-08 22:02:33.106 ===`；agent_test/CTest/strict-project/cpp_format 通过（无测试断言旧 `ms ===` 形态）。
 
+## 21. v4.18 修订（2026-11-16 维护者需求：每次构建自动获取 models.dev 最新数据）
+
+把 §18 的"手动刷新 + vendored 快照"数据层调整为**构建期 best-effort 自动刷新**；运行时查询层、兜底链排位与"目录永不写 config"语义全部不变：
+
+- **构建层**：CMake 选项 `MINI_AGENT_REFRESH_MODELS_DEV`（默认 ON）新增 `ALL` custom target `models_dev_refresh`，每次构建调 `tools/refresh_models_dev.py --output <build>/generated/mini_agent/models_dev_data.hpp --best-effort`；`target_include_directories(agent_core BEFORE PUBLIC <build>/generated)` 让生成头文件只遮蔽这一个头（目录里只有它），其余 include 仍解析到源树。**源树 vendored 快照永不被构建改写**（git status 干净，`-dirty` 版本戳不受影响）。
+- **失败语义（best-effort）**：网络失败/JSON 解析失败/行数 <1000 护栏 → 警告 + exit 0、不写文件；首次构建失败用 vendored 快照，后续失败保留上一次成功的生成头（永不比 vendored 旧）。Python3 缺失或选项 OFF → STATUS 提示 + vendored。离线/CI 构建永不因此破坏；`-DMINI_AGENT_REFRESH_MODELS_DEV=OFF` 显式回到纯快照行为。
+- **脚本增强**：`--output PATH`（缺省仍是 vendored 路径，手动用法不变）、`--best-effort`、write-if-different（内容一致跳过写入，目录不变时不触发重编译）；请求带显式 `User-Agent: mini-agent-catalog-refresh/1.0`（models.dev 对默认 Python-urllib UA 回 403，2026-11-16 实测）。
+- **测试密封性**：`test_v47_models_dev_catalog` 原断言 vendored 快照的精确行，构建期接活目录后会漂移。新增测试缝 `lookup_models_dev_tsv(tsv, base_url, model)`（每次调用解析、与生产路径共享同一 `match_rows` 二分 + 精确 key 校验），全部精确断言改跑固定 fixture，另补空 TSV 干净 miss 断言；`lookup_models_dev` 保留静态表缓存，行为不变。
+- 运行时仍零网络：刷新只发生在构建期；目录依旧仅作 ctx 分母显示兜底（config > caps > catalog，§18 接入点不变）。
+
+验证（2026-11-16，linux-gcc-debug / GCC）：`check.py --strict-project` 全过（构建期实抓 8092 行活目录进 build 树，CTest 3/3，密封后的 catalog 测试不依赖活数据）；离线证明（https_proxy 指向拒绝端口 + `--best-effort`）exit 0 不写文件；坏 JSON best-effort exit 0 / 严格模式 exit 1；1 行小目录触发护栏 best-effort exit 0；活目录连跑两次 mtime 不变、第三次构建仅 `[1/1]` 刷新步零重编译；OFF 选项 scratch 构建无 generated 目录、走 vendored 头、agent_test 全过。未验证组合：clang/Release preset 本轮未跑（改动仅为构建接线与纯函数重构，无编译器相关代码）。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

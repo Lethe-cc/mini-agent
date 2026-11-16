@@ -20,4 +20,12 @@ struct ModelsDevLimits {
 // Returns the catalog row for (base_url, model), or nullopt on miss.
 std::optional<ModelsDevLimits> lookup_models_dev(std::string_view base_url, std::string_view model);
 
+// Same matching over a caller-supplied sorted TSV (parses per call, no
+// cache): the test seam that keeps catalog assertions independent of the
+// embedded snapshot, which CMake may refresh from live models.dev data
+// (design 010 §21). Rows must be sorted by whole line, as the generator
+// emits them.
+std::optional<ModelsDevLimits>
+lookup_models_dev_tsv(std::string_view tsv, std::string_view base_url, std::string_view model);
+
 } // namespace mini_agent

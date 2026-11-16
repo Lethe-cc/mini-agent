@@ -58,6 +58,8 @@ cmake --install build/linux-gcc-debug
 
 不用 preset 的最小路径：`cmake -S . -B build && cmake --build build && cmake --install build`（仍需 CMake/Ninja 或改用 `-G "Unix Makefiles"` 免装 Ninja）。
 
+构建期 models.dev 目录刷新（设计 010 §21）：选项 `MINI_AGENT_REFRESH_MODELS_DEV`（默认 ON）使每次构建尝试抓最新 models.dev 目录生成到 `<build>/generated/`（需 Python3；源树 vendored 快照不被改写）。best-effort：离线/上游异常只警告，回退 vendored 快照或上一次成功的生成头，构建永不因此失败；`-DMINI_AGENT_REFRESH_MODELS_DEV=OFF` 完全关闭（纯快照，零网络）。
+
 本仓库已接入 C++ 业务（v1 已实现）。业务代码在 `src/` + `include/mini_agent/`，架构见 [系统架构](architecture.md)。
 
 | 命令 | 用途 |

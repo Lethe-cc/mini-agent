@@ -2,20 +2,24 @@
 """Refresh the embedded models.dev context-window catalog (v4.7, design 010 §18).
 
 Fetches the stable models.dev v1 catalog (https://models.dev/api.json, MIT)
-and regenerates include/mini_agent/models_dev_data.hpp: a compact TSV embedded
-as a raw string literal, one row per (provider base_url, model id, context,
-output). The C++ side (src/models_dev.cpp) matches config.base_url + model
-against this table as the last fallback in the context-window chain.
+and regenerates the catalog header: a compact TSV embedded as a raw string
+literal, one row per (provider base_url, model id, context, output). The C++
+side (src/models_dev.cpp) matches config.base_url + model against this table
+as the last fallback in the context-window chain.
 
-Manual dev tool, not a quality gate. Run when the catalog should catch up
-with new models:
+Since design 010 §21 (v4.18) CMake invokes this on EVERY build (option
+MINI_AGENT_REFRESH_MODELS_DEV, default ON) with --best-effort and --output
+pointing into the build tree; any failure keeps the vendored snapshot
+include/mini_agent/models_dev_data.hpp as the fallback. Manual usage:
 
-    python3 tools/refresh_models_dev.py            # fetch + regenerate
+    python3 tools/refresh_models_dev.py            # fetch + regenerate vendored
     python3 tools/refresh_models_dev.py --input f.json  # offline re-parse
+    python3 tools/refresh_models_dev.py --output out.hpp --best-effort
 """
 
 import argparse
 import json
+import os
 import sys
 import urllib.request
 
@@ -81,22 +85,43 @@ inline constexpr const char kModelsDevCatalogTsv[] = R"TSV({tsv})TSV";
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", help="use a saved api.json instead of fetching")
+    parser.add_argument("--output", default=HEADER, help="header path to (re)generate")
+    parser.add_argument("--best-effort", action="store_true",
+                        help="build mode: warn and exit 0 on any failure, never write")
     args = parser.parse_args()
-    if args.input:
-        with open(args.input, encoding="utf-8") as fh:
-            catalog = json.load(fh)
-    else:
-        with urllib.request.urlopen(URL, timeout=60) as resp:
-            catalog = json.load(resp)
-    rows = build_rows(catalog)
-    if len(rows) < 1000:
-        print(f"refusing to write: only {len(rows)} rows parsed (schema drift?)", file=sys.stderr)
+    try:
+        if args.input:
+            with open(args.input, encoding="utf-8") as fh:
+                catalog = json.load(fh)
+        else:
+            # models.dev 403s the default Python-urllib User-Agent; identify
+            # the tool explicitly (verified 2026-11-16).
+            req = urllib.request.Request(URL, headers={"User-Agent": "mini-agent-catalog-refresh/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                catalog = json.load(resp)
+        rows = build_rows(catalog)
+        if len(rows) < 1000:
+            raise ValueError(f"only {len(rows)} rows parsed (schema drift?)")
+    except Exception as exc:  # network, JSON, schema guard: one honest exit path
+        if args.best_effort:
+            print(f"models.dev refresh skipped ({exc}); keeping existing catalog",
+                  file=sys.stderr)
+            return 0
+        print(f"refusing to write: {exc}", file=sys.stderr)
         return 1
     tsv = "".join(f"{base}\t{mid}\t{ctx}\t{out}\n" for base, mid, ctx, out in rows)
     text = TSV_TEMPLATE.format(source=SOURCE_STAMP, count=len(rows), tsv=tsv)
-    with open(HEADER, "w", encoding="utf-8") as fh:
+    # Write-if-different: an unchanged catalog must not touch the mtime, or
+    # every build would recompile models_dev.cpp for nothing.
+    if os.path.exists(args.output):
+        with open(args.output, encoding="utf-8") as fh:
+            if fh.read() == text:
+                print(f"{args.output} unchanged: {len(rows)} rows")
+                return 0
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+    with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(text)
-    print(f"wrote {HEADER}: {len(rows)} rows, {len(tsv)} bytes TSV")
+    print(f"wrote {args.output}: {len(rows)} rows, {len(tsv)} bytes TSV")
     return 0
 
 

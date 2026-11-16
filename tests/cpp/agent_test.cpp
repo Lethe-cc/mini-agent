@@ -2590,33 +2590,42 @@ void test_v42_capabilities_and_menu() {
 }
 
 void test_v47_models_dev_catalog() {
-    // Hit: a (base_url, model) pair present in the generated snapshot.
-    const auto hit =
-        mini_agent::lookup_models_dev("http://127.0.0.1:1234/v1", "qwen/qwen3-coder-30b");
+    // §21: CMake may refresh the embedded catalog from live models.dev data
+    // at build time, so exact-row assertions run against a fixed fixture via
+    // the lookup_models_dev_tsv seam -- never against the embedded snapshot.
+    // Rows sorted by whole line, exactly as the generator emits them.
+    const std::string_view fixture =
+        "http://127.0.0.1:1234/v1\tqwen/qwen3-coder-30b\t262144\t65536\n"
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/"
+        "v1\tqwen3.8-flash\t1000000\t131072\n";
+    const auto lookup = [&](std::string_view url, std::string_view model) {
+        return mini_agent::lookup_models_dev_tsv(fixture, url, model);
+    };
+    // Hit: a (base_url, model) pair present in the fixture.
+    const auto hit = lookup("http://127.0.0.1:1234/v1", "qwen/qwen3-coder-30b");
     check(hit.has_value() && hit->context == 262144, "catalog row -> context window");
     check(hit->output == 65536, "catalog row -> output limit");
     // Trailing slashes on the configured base_url must not miss the row.
-    const auto slashed =
-        mini_agent::lookup_models_dev("http://127.0.0.1:1234/v1/", "qwen/qwen3-coder-30b");
+    const auto slashed = lookup("http://127.0.0.1:1234/v1/", "qwen/qwen3-coder-30b");
     check(slashed.has_value() && slashed->context == 262144, "base_url trailing slash trimmed");
     // Misses stay misses: unknown model, unknown url, empty inputs.
-    check(!mini_agent::lookup_models_dev("http://127.0.0.1:1234/v1", "no-such-model").has_value(),
+    check(!lookup("http://127.0.0.1:1234/v1", "no-such-model").has_value(),
           "unknown model -> miss");
-    check(!mini_agent::lookup_models_dev("http://gateway.invalid/v1", "qwen/qwen3-coder-30b")
-               .has_value(),
+    check(!lookup("http://gateway.invalid/v1", "qwen/qwen3-coder-30b").has_value(),
           "unknown base_url -> miss");
-    check(!mini_agent::lookup_models_dev("", "m").has_value(), "empty url -> miss");
-    check(!mini_agent::lookup_models_dev("https://x.test/v1", "").has_value(),
-          "empty model -> miss");
+    check(!lookup("", "m").has_value(), "empty url -> miss");
+    check(!lookup("https://x.test/v1", "").has_value(), "empty model -> miss");
     // Prefix-adjacent ids must not false-hit (binary search verifies exact key).
-    check(!mini_agent::lookup_models_dev("http://127.0.0.1:1234/v1", "qwen/qwen3-coder-30b-extra")
-               .has_value(),
+    check(!lookup("http://127.0.0.1:1234/v1", "qwen/qwen3-coder-30b-extra").has_value(),
           "id prefix never false-hits");
-    // The maintainer's real gateway row (models.dev alibaba-token-plan-cn).
-    const auto qwen = mini_agent::lookup_models_dev(
-        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "qwen3.8-flash");
+    // The maintainer's real gateway row shape (models.dev alibaba-token-plan-cn).
+    const auto qwen = lookup("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+                             "qwen3.8-flash");
     check(qwen.has_value() && qwen->context == 1000000 && qwen->output == 131072,
-          "token-plan-cn qwen3.8-flash row matches live catalog");
+          "token-plan-cn qwen3.8-flash row matches");
+    // Empty TSV is a clean miss, not a crash (first-build fetch failure path).
+    check(!mini_agent::lookup_models_dev_tsv("", "http://127.0.0.1:1234/v1", "m").has_value(),
+          "empty catalog -> miss");
 }
 
 void test_v411_turn_panel() {

@@ -14,9 +14,8 @@ struct Row {
     std::string_view line; // "base\tmodel\tcontext\toutput"
 };
 
-std::vector<Row> parse_rows() {
+std::vector<Row> parse_rows(std::string_view tsv) {
     std::vector<Row> out;
-    std::string_view tsv(kModelsDevCatalogTsv);
     std::size_t pos = 0;
     while (pos < tsv.size()) {
         const auto nl = tsv.find('\n', pos);
@@ -34,7 +33,7 @@ std::vector<Row> parse_rows() {
 // lexicographically unique prefix: binary search for it, then verify the
 // exact key before reading the numbers.
 const std::vector<Row>& table() {
-    static const std::vector<Row> cached = parse_rows();
+    static const std::vector<Row> cached = parse_rows(kModelsDevCatalogTsv);
     return cached;
 }
 
@@ -60,14 +59,14 @@ std::string trim_trailing_slash(std::string_view url) {
     return std::string(url);
 }
 
-} // namespace
-
-std::optional<ModelsDevLimits> lookup_models_dev(std::string_view base_url,
-                                                 std::string_view model) {
+// Shared matching: binary search for the "base\tmodel\t" prefix, then
+// verify the exact key before reading the numbers (id prefix neighbors
+// never false-hit).
+std::optional<ModelsDevLimits> match_rows(const std::vector<Row>& rows, std::string_view base_url,
+                                          std::string_view model) {
     if (base_url.empty() || model.empty())
         return std::nullopt;
     const std::string key = trim_trailing_slash(base_url) + '\t' + std::string(model) + '\t';
-    const auto& rows = table();
     const auto it = std::lower_bound(rows.begin(), rows.end(), key,
                                      [](const Row& row, const std::string& probe) {
                                          return row.line.compare(0, probe.size(), probe) < 0;
@@ -80,6 +79,18 @@ std::optional<ModelsDevLimits> lookup_models_dev(std::string_view base_url,
     if (limits.context <= 0)
         return std::nullopt;
     return limits;
+}
+
+} // namespace
+
+std::optional<ModelsDevLimits> lookup_models_dev(std::string_view base_url,
+                                                 std::string_view model) {
+    return match_rows(table(), base_url, model);
+}
+
+std::optional<ModelsDevLimits>
+lookup_models_dev_tsv(std::string_view tsv, std::string_view base_url, std::string_view model) {
+    return match_rows(parse_rows(tsv), base_url, model);
 }
 
 } // namespace mini_agent
