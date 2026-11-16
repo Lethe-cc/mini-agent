@@ -82,6 +82,7 @@ add_library(agent_core STATIC
     src/provider_openai.cpp
     src/provider_parse.cpp
     src/session.cpp
+    src/session_serde.cpp
     src/mcp_rpc.cpp
     src/mcp_stdio.cpp
     src/mcp_http.cpp
@@ -138,7 +139,7 @@ target_compile_definitions(agent_core PRIVATE
     MINI_AGENT_BUILD_TIME="${MINI_AGENT_BUILD_TIME}")
 starter_options(agent_core)
 
-add_executable(mini-agent src/cli_main.cpp)
+add_executable(mini-agent src/cli_main.cpp src/cli_common.cpp src/cli_commands.cpp)
 target_link_libraries(mini-agent PRIVATE agent_core)
 target_compile_definitions(mini-agent PRIVATE
     MINI_AGENT_VERSION="${PROJECT_VERSION}"
