@@ -74,7 +74,7 @@ CLI：
 - **P1 纯函数抽取** —— **已完成**（提交 `04b36f1`）：`md_geometry`、`subprocess`、`workspace`、`provider_parse`。零状态、行为保持；四 preset CTest 3/3 + pty TUI 195 PASS + CLI ALL PASS + check.py。
 - **P2 类/子命令抽取** —— **已完成**（CLI `a879bcd`；tools 拆分见后续提交）：CLI → `cli_common`/`cli_commands`/`cli_main`（1115→86）+ `session_serde`；tools → `tools_file`（FileRuntime）/`tools_git`（GitRuntime），tools.cpp 保留 registry+bash（1095→222）。**config_file/env 拆分暂缓**（config.cpp 777 行、env/file 合并高度耦合，价值低）。
 - **P3 TUI 状态对象 + screen 抽取** —— **screen 层已完成**：`tui_screen.hpp` 承载 RawMode/term size/tint/LiveScreen/split_ansi_paragraphs/steady_now（tui.cpp 3626→3195 行）；四 preset + pty 双环境（常规）验证。**TuiState 状态对象待建**，是 P4 的前提。
-- **P4 TUI 逻辑拆分** —— **进行中**：预览 body 加载/行渲染 → `tui_preview.cpp`；侧栏目录/git 扫描 → `tui_sidebar.cpp`（`SidebarResult`+`scan_sidebar`，参数化无状态；tui.cpp 3195→2988）。**TuiState + slash/turn/input 仍待实施**（run_loop 闭包共享状态，需先建状态对象）。
+- **P4 TUI 逻辑拆分** —— **进行中**：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`（均参数化无屏幕状态；tui.cpp 3195→2848）。**TuiState + slash/turn/input 仍待实施**（run_loop 闭包共享状态，需先建状态对象）。
 
 每阶段一个提交；任何阶段测试不绿即回退该阶段。
 

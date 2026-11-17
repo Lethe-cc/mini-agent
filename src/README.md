@@ -22,7 +22,8 @@ src/
 │   ├── tui_render.cpp      纯函数渲染/补全助手（单测经 tui.hpp）
 │   ├── tui_screen.hpp      RawMode / term size / LiveScreen / tint / 段落切分
 │   ├── tui_preview.cpp/.hpp 预览 body 加载 / 行渲染（参数化）
-│   └── tui_sidebar.cpp/.hpp 侧栏单级目录 + git changed 扫描（参数化）
+│   ├── tui_sidebar.cpp/.hpp 侧栏单级目录 + git changed 扫描（参数化）
+│   └── tui_workers.cpp/.hpp models 发现 / ctx probe / compact 摘要 worker（参数化）
 ├── core/       Agent 内核
 │   ├── chat.cpp            Message / Chat 模型 + JSON
 │   ├── loop.cpp            run_turn 纯函数式会话循环

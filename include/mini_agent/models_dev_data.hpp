@@ -6,7 +6,7 @@
 // models.dev v1 context-window catalog, compact TSV:
 //   base_url \t model_id \t context_tokens \t output_tokens(0=unknown)
 // Source: https://models.dev/api.json (MIT, anomalyco/models.dev)
-// Rows: 8120
+// Rows: 8129
 namespace mini_agent {
 
 #if defined(__clang__)
@@ -3893,6 +3893,7 @@ https://api.ofox.ai/v1	google/gemini-3.6-flash	1048576	65536
 https://api.ofox.ai/v1	google/gemini-3.7-flash	1048576	65536
 https://api.ofox.ai/v1	google/gemini-3.8-flash	1000000	65536
 https://api.ofox.ai/v1	google/gemini-4-argon	1048576	65536
+https://api.ofox.ai/v1	google/gemini-4-carbon	1048576	65536
 https://api.ofox.ai/v1	google/gemini-4-hydrogen	1048576	65536
 https://api.ofox.ai/v1	minimax/m2-her	65536	2048
 https://api.ofox.ai/v1	minimax/minimax-m2	204800	131072
@@ -3959,6 +3960,7 @@ https://api.ofox.ai/v1	qwen/qwen3.8-27b	1131072	131072
 https://api.ofox.ai/v1	qwen/qwen3.8-flash	1000000	131072
 https://api.ofox.ai/v1	qwen/qwen3.8-max	1000000	131072
 https://api.ofox.ai/v1	qwen/qwen3.8-max-0902	1000000	131072
+https://api.ofox.ai/v1	qwen/qwen4-max	1000000	262144
 https://api.ofox.ai/v1	volcengine/doubao-seed-2.0-code	256000	128000
 https://api.ofox.ai/v1	volcengine/doubao-seed-2.0-lite	256000	32000
 https://api.ofox.ai/v1	volcengine/doubao-seed-2.0-mini	256000	32000
@@ -5575,10 +5577,13 @@ https://gisoo.pro/api/v1	gpt-5.6-terra	1050000	128000
 https://gisoo.pro/api/v1	gpt-6-astra	1050000	128000
 https://go.fastrouter.ai/api/v1	anthropic/claude-fable-5	1000000	128000
 https://go.fastrouter.ai/api/v1	anthropic/claude-opus-4.1	200000	32000
+https://go.fastrouter.ai/api/v1	anthropic/claude-opus-4.7	1000000	128000
 https://go.fastrouter.ai/api/v1	anthropic/claude-opus-4.8	1000000	128000
 https://go.fastrouter.ai/api/v1	anthropic/claude-opus-5	1000000	128000
 https://go.fastrouter.ai/api/v1	anthropic/claude-opus-5.5	1000000	128000
 https://go.fastrouter.ai/api/v1	anthropic/claude-sonnet-4.6	1000000	64000
+https://go.fastrouter.ai/api/v1	anthropic/claude-sonnet-5	1000000	128000
+https://go.fastrouter.ai/api/v1	anthropic/claude-sonnet-5.5	1000000	128000
 https://go.fastrouter.ai/api/v1	bytedance/seedance-2	4096	0
 https://go.fastrouter.ai/api/v1	deepseek/deepseek-v4-pro	1000000	384000
 https://go.fastrouter.ai/api/v1	google/gemini-2.5-flash	1048576	65536
@@ -5600,12 +5605,16 @@ https://go.fastrouter.ai/api/v1	openai/gpt-4.1	1047576	32768
 https://go.fastrouter.ai/api/v1	openai/gpt-5	400000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-5-mini	400000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-5-nano	400000	128000
+https://go.fastrouter.ai/api/v1	openai/gpt-5.1	400000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-5.2	400000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-5.3-codex	400000	128000
+https://go.fastrouter.ai/api/v1	openai/gpt-5.4	1050000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-5.4-mini	400000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-5.4-nano	400000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-5.5	1050000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-5.5-pro	1050000	128000
+https://go.fastrouter.ai/api/v1	openai/gpt-5.6-sol	1050000	128000
+https://go.fastrouter.ai/api/v1	openai/gpt-6-astra	1050000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-6-luna	400000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-6-sol	400000	128000
 https://go.fastrouter.ai/api/v1	openai/gpt-image-2	128000	0
