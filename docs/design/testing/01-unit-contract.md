@@ -41,7 +41,8 @@ ctest --test-dir build/linux-gcc-debug -R "agent.core|starter.project_name" --ou
 ```
 
 四 preset（gcc/clang × debug/release）均跑；`--sanitizers` 时同套用例在
-ASan/UBSan 下复跑（CI `quality`）。
+ASan/UBSan 下复跑（CI `quality`）。`cpp_check.py` 默认 **models.dev refresh OFF**
+（`--refresh-models` 开启）以保证门禁构建快速、确定；vendored 快照为权威。
 
 ## 5. 扩展约定
 

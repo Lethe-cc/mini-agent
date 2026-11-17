@@ -33,7 +33,7 @@ plain `check()` 断言、无框架依赖；`main()` 顺序调用全部 `test_*`�
 侧栏单级浏览器/`p` 预览/pane 滚轮/Esc 关闭、审批 diff 行、`/context`（含 K/M）/
 `/compact`/`/reasoning`、模型菜单与多 provider 切换、日志红线（密钥/正文零泄露）。
 
-## 5. pty_cli_smoke（44 检查，mock_openai_server 子进程）· [详细设计](04-pty-cli-smoke.md)
+## 5. pty_cli_smoke（43 检查，mock_openai_server 子进程）· [详细设计](04-pty-cli-smoke.md)
 
 `ask` 流式/中断退出码 1/一次性不落 session、`run` line-mode、
 `session list|rm|export|prune`、`--provider/--model` 覆盖与未知 provider 退出码 2、

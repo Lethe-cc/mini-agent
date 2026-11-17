@@ -1,6 +1,6 @@
 # 04 · CLI pty 端到端冒烟设计
 
-载体：`tests/pty_cli_smoke.py`（44 检查）+ `tests/mock_openai_server.py`。
+载体：`tests/pty_cli_smoke.py`（43 检查）+ `tests/mock_openai_server.py`。
 大纲见 [README](README.md)。验证 CLI 子命令契约与退出码；CI `smoke` 门禁。
 
 ## 1. 进程模型（PtyProc）
@@ -9,7 +9,9 @@
   "stdin **或** stdout 是 tty" 门）；`stdin_pipe=True` 时 stdin 保持管道
   （line-mode `tty()==false`），从而可直接 `send_signal(SIGINT)` 复现 tty Ctrl-C
   的 handler 路径。
-- `pump(seconds)`：select 0.05s 切片抽干 master 累积 `buf`。
+- `pump(seconds, idle=0.3)`：**自适应**——首字节前最多等 `seconds`；一旦有数据，
+  空闲 0.3s 即返回（mock chunk 间隔 ≤0.1s，不会截断流），只砍输出 settle 后的
+  死尾。select 0.05s 切片抽干 master 累积 `buf`。实测整套 ~11s（旧固定窗口 ~53s）。
 - `wait_exit()`：**进程死亡后再 pump 0.6s**——子进程最后写入（cancelled 错误行、
   session 保存横幅）留在 master 缓冲，不抽干会丢。
 - mock 以**子进程**拉起 `mock_openai_server.py`（SSE；错 key 真 401），loopback、

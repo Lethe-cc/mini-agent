@@ -27,6 +27,10 @@ def main():
     parser.add_argument("--tidy", action="store_true")
     parser.add_argument("--sanitizers", action="store_true")
     parser.add_argument("--warnings-as-errors", action="store_true")
+    parser.add_argument("--refresh-models", action="store_true",
+                        help="enable the build-time models.dev network refresh "
+                             "(default OFF for fast, deterministic gate builds; "
+                             "the vendored snapshot is authoritative)")
     args = parser.parse_args()
     if args.preset not in PRESETS:
         parser.error("CPP_PRESET is not a supported preset")
@@ -34,7 +38,8 @@ def main():
         ["cmake", "--preset", args.preset,
          f"-DSTARTER_CLANG_TIDY={'ON' if args.tidy else 'OFF'}",
          f"-DSTARTER_SANITIZERS={'ON' if args.sanitizers else 'OFF'}",
-         f"-DSTARTER_WARNINGS_AS_ERRORS={'ON' if args.warnings_as_errors else 'OFF'}"],
+         f"-DSTARTER_WARNINGS_AS_ERRORS={'ON' if args.warnings_as_errors else 'OFF'}",
+         f"-DMINI_AGENT_REFRESH_MODELS_DEV={'ON' if args.refresh_models else 'OFF'}"],
         ["cmake", "--build", "--preset", args.preset, "--parallel", "2"],
         ["ctest", "--preset", args.preset, "--no-tests=error"],
     ]

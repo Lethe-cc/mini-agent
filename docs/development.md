@@ -18,6 +18,7 @@
 | `python scripts/check.py --require-initialized` | 额外要求完成初始化并移除有效项目文档中的占位符 |
 | `python scripts/check.py --strict-project` | 额外要求已初始化且至少配置一项项目质量命令 |
 | `python scripts/check.py --tooling-only` | 显式跳过项目命令，仅做工具和文档检查，不用于业务验收 |
+| `python scripts/check.py --fast` | 单 preset build+CTest（models.dev refresh OFF）的开发快路径，非完整业务验收 |
 | `python -m unittest discover -s tests -p "test_*.py" -v` | 单独运行模板工具测试 |
 
 测试体系（CTest 单元 / pty 端到端 / 模板 unittest）、用例清单、`cpp_check.py`/`ctest`/pty 冒烟/冷启动的直接命令与 CI 映射，统一见 [design/testing/](design/testing/README.md)，此处不重复。

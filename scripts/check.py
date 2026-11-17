@@ -35,6 +35,7 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--strict-project", action="store_true", help="also require at least one project gate")
     mode.add_argument("--tooling-only", action="store_true", help="explicitly skip project commands; not project validation")
+    mode.add_argument("--fast", action="store_true", help="single-preset build+CTest only (refresh OFF); dev fast path, not full business validation")
     args = parser.parse_args()
     if sys.version_info < (3, 11):
         print("ERROR: Python 3.11+ is required", file=sys.stderr)
@@ -59,13 +60,17 @@ def main() -> int:
     )
     if args.tooling_only:
         print("WARNING: --tooling-only explicitly skips ALL project commands", flush=True)
-    for command in ([] if args.tooling_only else config["quality_commands"]):
+    if args.fast:
+        print("WARNING: --fast runs a single-preset build+CTest only; NOT full business validation", flush=True)
+        passed = run_command("fast C++ build+CTest", [sys.executable, "scripts/cpp_check.py"], 300) and passed
+    for command in ([] if (args.tooling_only or args.fast) else config["quality_commands"]):
         # Run every configured gate so a failure does not hide later results.
         result = run_command(command["name"], command["argv"], command.get("timeout_seconds", 300))
         passed = result and passed
     if not config["quality_commands"]:
         print("WARNING: no business quality commands; this is NOT business validation", flush=True)
-    success = "PASS tooling-only checks (project commands skipped)" if args.tooling_only else "PASS all configured checks"
+    success = "PASS tooling-only checks (project commands skipped)" if args.tooling_only else (
+        "PASS fast checks (single preset; not full validation)" if args.fast else "PASS all configured checks")
     print(success if passed else "FAIL one or more checks", flush=True)
     return 0 if passed else 1
 

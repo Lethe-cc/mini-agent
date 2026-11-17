@@ -168,8 +168,12 @@ class PtyProc:
         self.master = master
         self.buf = b""
 
-    def pump(self, seconds):
+    def pump(self, seconds, idle=0.3):
+        # Adaptive: once data has arrived, return after `idle` silence rather
+        # than burning the full window (mock chunk gaps <=0.1s). Cuts the dead
+        # tail after output settles; still waits up to `seconds` for first byte.
         deadline = time.time() + seconds
+        last = None
         while time.time() < deadline:
             r, _, _ = select.select([self.master], [], [], 0.05)
             if r:
@@ -180,6 +184,9 @@ class PtyProc:
                 if not data:
                     return
                 self.buf += data
+                last = time.time()
+            elif self.buf and last is not None and time.time() - last >= idle:
+                return
 
     def send_sigint(self):
         # Direct SIGINT: exercises the same handler path a tty Ctrl-C

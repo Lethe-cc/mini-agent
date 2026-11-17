@@ -47,7 +47,15 @@ python tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent
 python tests/pty_cli_smoke.py ./build/linux-gcc-debug/mini-agent
 python tools/cold_start_check.py ./build/linux-gcc-debug/mini-agent
 python scripts/check.py --require-initialized   # 或 --strict-project / --tooling-only
+python scripts/check.py --fast                  # 单 preset build+CTest（refresh OFF），开发快路径
 ```
+
+**性能与可选**（详见各编号文档）：
+- pty 等待已**自适应**（`read_all`/`pump` 见空闲即返回）：TUI ~85s、CLI ~11s。
+- 门禁构建默认 **models.dev refresh OFF**（`cpp_check.py`，`--refresh-models` 才开启），
+  避免每次构建联网等待；手动 `cmake --preset` 仍默认 ON（010 §21 产品决策不变）。
+- `--fast`/单 preset/`ctest -R`/`--tidy`/`--sanitizers`/宽 USER 均为可选；四 preset 矩阵与
+  sanitizers 仅 CI。纯重构可只跑 build+ctest，TUI/CLI 改动才跑 pty。
 
 CI（`.github/workflows/project.yml`）：`cpp`=四 preset 矩阵 `--strict-project`；
 `smoke`=gcc-debug 构建 + 03/04/06；`quality`=clang-debug clang-tidy + ASan/UBSan。

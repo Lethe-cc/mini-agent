@@ -11,8 +11,10 @@
   不生效，宽环境仅靠长 `USER` 改变 sysinfo 宽度。
 - 环境注入 loopback `base_url`/`api_key`/`model=smoke`，`TERM=xterm`；
   session 目录隔离到 `/tmp/mini_agent_pty_smoke`（每次清空）。
-- 读侧 `read_all(fd,timeout)`：`select` 0.2s 切片抽干 master，返回解码字节流；
-  断言既看**原始流**（ANSI/CSI 不变量）也看**虚拟屏幕**（可见文本）。
+- 读侧 `read_all(fd,timeout,idle=0.5)`：**自适应**——首字节前最多等 `timeout`；
+  一旦有数据，空闲 0.5s 即返回（mock chunk 间隔 ≤0.1s，不截断流），只砍 settle
+  后的死尾；select 0.05s 切片抽干 master。断言既看**原始流**（ANSI/CSI 不变量）
+  也看**虚拟屏幕**（可见文本）。实测整套 ~85s（旧固定窗口 ~114s+）。
 
 ## 2. 虚拟屏幕回放（核心）
 
@@ -49,7 +51,7 @@
 ## 5. 时序与稳健性
 
 - 大输入**分块写**并抽干，避免单次 `os.write` 撑满 pty 缓冲死锁。
-- 对墙钟敏感：负载下常规 ~60–120s、宽 USER 可达 ~200s；**超时截断 ≠ 产品缺陷**
+- 对墙钟敏感：自适应等待后常规 ~85s、宽 USER 略增；**超时截断 ≠ 产品缺陷**
   （019 §5 复核结论）。CI 给足 job 超时。
 - 导航/插入类断言放在主会话**末尾**，避免扰动历史计数/门控断言。
 

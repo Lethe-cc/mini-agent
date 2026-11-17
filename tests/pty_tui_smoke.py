@@ -181,16 +181,28 @@ def serve_beta():
     ThreadingHTTPServer(("127.0.0.1", BETA_PORT), BetaHandler).serve_forever()
 
 
-def read_all(fd, timeout):
+def read_all(fd, timeout, idle=0.5):
+    # Adaptive: wait up to `timeout` for the FIRST byte, but once data has
+    # arrived, return after `idle` seconds of silence instead of burning the
+    # whole window. The mock's inter-chunk gaps are <=0.1s, so a 0.5s idle
+    # never truncates a live stream; it only cuts the dead tail after output
+    # settles (the dominant cost of the old fixed-window loop).
     out = b""
     end = time.time() + timeout
+    last = None
     while time.time() < end:
-        r, _, _ = select.select([fd], [], [], 0.2)
+        r, _, _ = select.select([fd], [], [], 0.05)
         if r:
             try:
-                out += os.read(fd, 4096)
+                data = os.read(fd, 65536)
             except OSError:
                 break
+            if not data:
+                break
+            out += data
+            last = time.time()
+        elif out and last is not None and time.time() - last >= idle:
+            break
     return out.decode(errors="replace")
 
 
