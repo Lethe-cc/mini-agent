@@ -89,6 +89,8 @@ add_library(agent_core STATIC
     src/models_dev.cpp
     src/subprocess.cpp
     src/tools.cpp
+    src/tools_file.cpp
+    src/tools_git.cpp
     src/workspace.cpp
     src/tui.cpp
     src/tui_render.cpp
