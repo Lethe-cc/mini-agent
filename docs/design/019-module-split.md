@@ -73,7 +73,7 @@ CLI：
 
 - **P1 纯函数抽取** —— **已完成**（提交 `04b36f1`）：`md_geometry`、`subprocess`、`workspace`、`provider_parse`。零状态、行为保持；四 preset CTest 3/3 + pty TUI 195 PASS + CLI ALL PASS + check.py。
 - **P2 类/子命令抽取** —— **部分完成**（提交 `a879bcd`）：CLI 拆为 `cli_common`/`cli_commands`/`cli_main`（1115→86 行）+ `session_serde`。**tools_file/git/bash/registry 与 config_file/env 拆分暂缓**（与匿名命名空间助手耦合，需随 P3 一起谨慎处理）。
-- **P3 TUI 状态对象 + screen 抽取** —— **待实施**。 naive 行范围移动会破坏嵌套匿名命名空间平衡（已验证并回退）；需先建 `TuiState`/显式头文件契约再移 `LiveScreen`/`RawMode`。门禁：pty 双环境。
+- **P3 TUI 状态对象 + screen 抽取** —— **screen 层已完成**：`tui_screen.hpp` 承载 RawMode/term size/tint/LiveScreen/split_ansi_paragraphs/steady_now（tui.cpp 3626→3195 行）；四 preset + pty 双环境（常规）验证。**TuiState 状态对象待建**，是 P4 的前提。
 - **P4 TUI 逻辑拆分** —— **待实施**（slash/sidebar/turn/input），依赖 P3 的 TuiState。
 
 每阶段一个提交；任何阶段测试不绿即回退该阶段。
