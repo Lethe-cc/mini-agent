@@ -29,7 +29,7 @@
 在线读取；如需精读源码 clone 到本地 `.references/`（只读、记录 commit SHA），不放入第一方源码。无法访问时说明影响。
 
 ## 本地差异
-本项目 v1 现状是**自研零依赖 `md` 子集渲染器**（[src/md.cpp](../../src/md.cpp)，已通过 pty 虚拟屏验证），与这些库的差异：行级解析、无标准合规承诺、样式硬编码。切换决策点已记录：表格等语法实际碍眼时再引 md4c，`md::render` 为唯一替换点，TUI 不动。
+本项目 v1 现状是**自研零依赖 `md` 子集渲染器**（[src/render/md.cpp](../../src/render/md.cpp)，已通过 pty 虚拟屏验证），与这些库的差异：行级解析、无标准合规承诺、样式硬编码。切换决策点已记录：表格等语法实际碍眼时再引 md4c，`md::render` 为唯一替换点，TUI 不动。
 
 ## 实际采用情况
 2026-11-01（同日更新）：维护者采纳切换建议——**md4c v0.6.0 已 vendored**（third_party/md4c/，md4c.h/md4c.c/LICENSE.md + 记录），`md::render` 重写为 MD_PARSER 回调式 SGR writer（ADR 004）；md4c-html/entity 未引入。glamour 样式架构（token→样式表数据化、notty 降级）仍为未来改进参考。cmark/termimad/rich 未采用。

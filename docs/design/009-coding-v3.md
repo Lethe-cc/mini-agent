@@ -3,7 +3,7 @@
 ## 文档状态
 - 状态：已实现（2026-11-05，M1–M4 全部落地，验证见第 8 节；待人工评审）。同日维护者批复 git 策略"commit 可自动，push 等人工"——[ADR 008](../decisions/008-git-tool-policy.md) 升为已接受并反映于 §4/§5.2/§6/Q2/Q3/Q4；实现偏差见第 9 节。
 - 关联任务：维护者 2026-11-05 提出阶段目标"agent 能否进行代码修改、项目开发"，补充范围："能够修改代码和文档，git 能力，diff 显示修订，以及其他所有和项目开发相关的能力"。承接 [008](008-mcp-tools.md)（v2 工具循环，已实现）。
-- 核对日期与适用版本：2026-11-05 实读本仓库 `src/tools.cpp`、`src/loop.cpp`、`include/mini_agent/tools.hpp`、`include/mini_agent/loop.hpp`、`src/tui.cpp`（审批区块与 `style_history_line`）、`src/config.cpp`（schema_version 1）、`src/cli_main.cpp`（`ask --tools off|ask|auto`）。代码基线：main@725b21d。
+- 核对日期与适用版本：2026-11-05 实读本仓库 `src/tools/tools.cpp`、`src/core/loop.cpp`、`include/mini_agent/tools.hpp`、`include/mini_agent/loop.hpp`、`src/tui/tui.cpp`（审批区块与 `style_history_line`）、`src/core/config.cpp`（schema_version 1）、`src/cli/cli_main.cpp`（`ask --tools off|ask|auto`）。代码基线：main@725b21d。
 - 人工评审记录：维护者 2026-11-05 对话批复 git 策略："git 提交可以自动，push 等人工操作"（已落实至 [ADR 008](../decisions/008-git-tool-policy.md)，该 ADR 状态升为已接受；本文相应章节同日修订）。其余章节未获人工批复，推进方式仍为 AI 务实默认（design-first）。
 
 ## 1. 背景与目标
@@ -71,7 +71,7 @@ v2 之后，模型已经能执行命令（`run_bash`）、接入 MCP 工具、�
 
 ## 5. 详细设计
 
-### 5.1 FileRuntime（`src/tools.cpp` 新增段，声明入 `tools.hpp`）
+### 5.1 FileRuntime（`src/tools/tools.cpp` 新增段，声明入 `tools.hpp`）
 
 ```
 class FileRuntime final : public ToolRuntime {
@@ -106,7 +106,7 @@ class GitRuntime final : public ToolRuntime {  // 构造时探测 git 可用性�
 - **不提供**：push、pull、fetch、checkout/switch、reset、rebase、clean、stash、任何 remote 操作。模型请求时如实以 unknown tool 报错回灌。
 - 非 git 目录：GitRuntime `alive()=false`，工具整体不出现在注册表（不教模型撞墙）。
 
-### 5.3 diff 计算与渲染（`src/diff.hpp/.cpp` 新增）
+### 5.3 diff 计算与渲染（`src/tools/diff.hpp/.cpp` 新增）
 
 - 纯函数：`std::string unified_diff(std::string_view old_text, std::string_view new_text, std::string_view label)`——按行切分，LCS（O(n·m) DP，行数上限 20 000，超限降级为"文件过大，展示前后字节数"提示）；输出标准 `-/+` 前缀 + `@@ -a,b +c,d @@` 头，上下文 3 行，hunk 总行数上限 200（超出截断并标注）。
 - 新建文件 = 与空文本 diff；删除路径不经工具（无 delete 工具，见 §6）。
@@ -130,19 +130,19 @@ class GitRuntime final : public ToolRuntime {  // 构造时探测 git 可用性�
 4. 审批语义："每条工具可能弹出人工确认，被拒绝时收到 error 结果，不要重试同一调用"；
 5. 可被 `system_prompt` 配置覆写；恢复旧 session 不改写其历史 System 消息（仅 `/cwd` 变更时更新路径行——单点重写首条 System 中的 `Workspace:` 行，其余不动）。
 
-`loop.cpp` 与 provider 层零改动（System 透传已存在）；改动集中在 session 创建路径（`src/session.cpp` / cli / tui 的 new-session 工厂）。
+`loop.cpp` 与 provider 层零改动（System 透传已存在）；改动集中在 session 创建路径（`src/core/session.cpp` / cli / tui 的 new-session 工厂）。
 
 ### 5.6 代码路径汇总
 
 | 文件 | 变化 |
 | --- | --- |
-| `include/mini_agent/tools.hpp` / `src/tools.cpp` | FileRuntime、GitRuntime、`run_subprocess` 提取、`build_tool_registry` 装配 |
-| `include/mini_agent/diff.hpp` / `src/diff.cpp` | 行级 LCS unified diff（纯函数） |
-| `include/mini_agent/config.hpp` / `src/config.cpp` | `workspace`/`system_prompt` 字段、schema 2、`--cwd` 合并规则 |
-| `src/session.cpp` | session 持久化 workspace、new-session 注入 System prompt |
-| `src/tui.cpp` | `/cwd` 命令、审批块 diff 渲染、approval_rows 签名扩展 |
-| `src/cli_main.cpp` | `--cwd` flag、`--tools allowlist` 语义接 allowlist（当前仅有 off/ask/auto）、usage 文本 |
-| `src/loop.cpp` | 预检钩子：审批后执行前调用 runtime 的 `precheck`（§5.3 竞态防护）——`ToolRuntime` 增可选虚函数 `prepare(call)`（返回 diff 预览文本 / 校验），`approval_rows` 与 loop 共用 |
+| `include/mini_agent/tools.hpp` / `src/tools/tools.cpp` | FileRuntime、GitRuntime、`run_subprocess` 提取、`build_tool_registry` 装配 |
+| `include/mini_agent/diff.hpp` / `src/tools/diff.cpp` | 行级 LCS unified diff（纯函数） |
+| `include/mini_agent/config.hpp` / `src/core/config.cpp` | `workspace`/`system_prompt` 字段、schema 2、`--cwd` 合并规则 |
+| `src/core/session.cpp` | session 持久化 workspace、new-session 注入 System prompt |
+| `src/tui/tui.cpp` | `/cwd` 命令、审批块 diff 渲染、approval_rows 签名扩展 |
+| `src/cli/cli_main.cpp` | `--cwd` flag、`--tools allowlist` 语义接 allowlist（当前仅有 off/ask/auto）、usage 文本 |
+| `src/core/loop.cpp` | 预检钩子：审批后执行前调用 runtime 的 `precheck`（§5.3 竞态防护）——`ToolRuntime` 增可选虚函数 `prepare(call)`（返回 diff 预览文本 / 校验），`approval_rows` 与 loop 共用 |
 
 ## 6. 异常与安全设计
 

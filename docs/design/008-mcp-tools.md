@@ -108,7 +108,7 @@ L --> U: 最终 assistant 文本，整回合落盘
 
 ### 5.2 模块与文件布局（规划中，均为新文件/新增字段）
 
-- `include/mini_agent/tools.hpp` + `src/tools.cpp`
+- `include/mini_agent/tools.hpp` + `src/tools/tools.cpp`
 
 ```cpp
 struct ToolDefinition {           // 注册表条目（wire 无关的中立形态）
@@ -128,10 +128,10 @@ class ToolRuntime {               // 每类来源一个实现
 class ToolRegistry { /* 聚合多个 runtime；重名消歧；产出 OpenAI tools JSON */ };
 ```
 
-- `include/mini_agent/mcp.hpp` + `src/mcp_rpc.cpp`：**与传输无关的两层内核**。`McpTransport` 抽象接口：`send(json)`（投递一条完整 JSON-RPC 消息）、`recv(timeout)`（弹出下一条消息，或超时/断链错误）、`close()`；分帧与到达模型是实现的私事——这一抽象同时容纳 stdio 的异步字节流与 HTTP 的"响应内联于请求"（HTTP 实现内部自排队列，`recv` 从队列出队）。`McpRpcClient`：单调递增 id、串行 in-flight、超时与错误折叠（通知失败不报错；服务端发起请求在 v2.0 忽略并记日志事件）。`McpClient`（对话层）：`initialize`/版本协商/`notifications/initialized`、`list_tools`、`call_tool`。`inputSchema` 不校验 arguments，原样透传（server 是最终裁判，`isError` 回填给模型自纠）。
-- `src/mcp_stdio.cpp`：`StdioTransport`——`pipe×3` + `fork` + `execvp`（子进程侧 `_exit` 语义与 fd 收敛）；换行分隔 JSON，发送前拒绝内嵌裸换行，接收行上限 1 MiB 超限即协议错误；`stop()` = 关 stdin → `waitpid` 限时 → `SIGKILL`；stderr 只收集为诊断事件。
-- `src/mcp_http.cpp`：`HttpTransport`（Streamable HTTP）——每条消息一个 `POST {url}`，`Accept: application/json, text/event-stream`；响应 `application/json` 直接入队，`text/event-stream` 复用 provider 的 SSE 分行器解析至匹配本请求 id 的 response 为止；通知/响应类 POST 收 202 即成功；`initialize` 响应捕获 `Mcp-Session-Id` 并在后续所有请求携带（收 404 → 重走 initialize）；协商版本为 2025-06-18 时后续请求必须带 `MCP-Protocol-Version` 头。认证 v2.0 只支持配置的静态 Bearer token（维护者 2026-11-02 确认不做企业 OAuth，发现 401 + `WWW-Authenticate` 时如实报错提示，不进入授权流程）；不监听服务器发起的常开 GET 流。libcurl 复用 ADR 002 底座，零新依赖。
-- 内置 `BuiltinRuntime`（`src/tools.cpp` 内）：`run_bash{command, timeout?}` → `fork/exec` `/bin/bash -lc <command>`（argv 固定，不经二次拼接）；捕获 stdout+stderr 合并、默认 30 s 超时、输出截断 32 KiB（保留首尾各半，中间注明截断）；`ShouldAbort` 触发 `SIGKILL` 进程组。
+- `include/mini_agent/mcp.hpp` + `src/mcp/mcp_rpc.cpp`：**与传输无关的两层内核**。`McpTransport` 抽象接口：`send(json)`（投递一条完整 JSON-RPC 消息）、`recv(timeout)`（弹出下一条消息，或超时/断链错误）、`close()`；分帧与到达模型是实现的私事——这一抽象同时容纳 stdio 的异步字节流与 HTTP 的"响应内联于请求"（HTTP 实现内部自排队列，`recv` 从队列出队）。`McpRpcClient`：单调递增 id、串行 in-flight、超时与错误折叠（通知失败不报错；服务端发起请求在 v2.0 忽略并记日志事件）。`McpClient`（对话层）：`initialize`/版本协商/`notifications/initialized`、`list_tools`、`call_tool`。`inputSchema` 不校验 arguments，原样透传（server 是最终裁判，`isError` 回填给模型自纠）。
+- `src/mcp/mcp_stdio.cpp`：`StdioTransport`——`pipe×3` + `fork` + `execvp`（子进程侧 `_exit` 语义与 fd 收敛）；换行分隔 JSON，发送前拒绝内嵌裸换行，接收行上限 1 MiB 超限即协议错误；`stop()` = 关 stdin → `waitpid` 限时 → `SIGKILL`；stderr 只收集为诊断事件。
+- `src/mcp/mcp_http.cpp`：`HttpTransport`（Streamable HTTP）——每条消息一个 `POST {url}`，`Accept: application/json, text/event-stream`；响应 `application/json` 直接入队，`text/event-stream` 复用 provider 的 SSE 分行器解析至匹配本请求 id 的 response 为止；通知/响应类 POST 收 202 即成功；`initialize` 响应捕获 `Mcp-Session-Id` 并在后续所有请求携带（收 404 → 重走 initialize）；协商版本为 2025-06-18 时后续请求必须带 `MCP-Protocol-Version` 头。认证 v2.0 只支持配置的静态 Bearer token（维护者 2026-11-02 确认不做企业 OAuth，发现 401 + `WWW-Authenticate` 时如实报错提示，不进入授权流程）；不监听服务器发起的常开 GET 流。libcurl 复用 ADR 002 底座，零新依赖。
+- 内置 `BuiltinRuntime`（`src/tools/tools.cpp` 内）：`run_bash{command, timeout?}` → `fork/exec` `/bin/bash -lc <command>`（argv 固定，不经二次拼接）；捕获 stdout+stderr 合并、默认 30 s 超时、输出截断 32 KiB（保留首尾各半，中间注明截断）；`ShouldAbort` 触发 `SIGKILL` 进程组。
 - `provider.hpp`：新增
 
 ```cpp

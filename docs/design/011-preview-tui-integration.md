@@ -3,7 +3,7 @@
 ## 文档状态
 - 状态：已实现（2026-11-09，验证见第 8 节；待人工评审）。
 - 关联任务：维护者 2026-11-09 对话请求"增强文件内容预览，同时把编辑→diff→渲染在 TUI 中做成一体化交互"。承接 [009](009-coding-v3.md)（v3 编码能力：文件工具 + diff 审批 + 工作区边界）。
-- 核对日期与适用版本：2026-11-09 实读本仓库 `src/tools.cpp`、`src/tui.cpp`、`src/cli_main.cpp`、`src/session.cpp`、`include/mini_agent/tools.hpp`、`src/diff.cpp`。代码基线：main + 维护者未提交的 v4.x provider/MCP 改动（本设计不触碰这些文件）。
+- 核对日期与适用版本：2026-11-09 实读本仓库 `src/tools/tools.cpp`、`src/tui/tui.cpp`、`src/cli/cli_main.cpp`、`src/core/session.cpp`、`include/mini_agent/tools.hpp`、`src/tools/diff.cpp`。代码基线：main + 维护者未提交的 v4.x provider/MCP 改动（本设计不触碰这些文件）。
 - 人工评审记录：无。推进方式为 AI 务实默认（design-first），文档级别为"一般功能：简版设计"。
 
 ## 1. 背景与目标
@@ -60,7 +60,7 @@ stderr `isatty` 门控，管道场景保持 v3 字节形状（008 回归钩子�
 
 ## 5. 详细设计
 
-### 5.1 工具层（`include/mini_agent/tools.hpp`、`src/tools.cpp`）
+### 5.1 工具层（`include/mini_agent/tools.hpp`、`src/tools/tools.cpp`）
 
 - `ToolRuntime::result_preview(const ToolCall&, const ToolResult&) -> std::string`：虚函数，默认空。契约与 `preview()` 对称：只读例外是消费本 runtime 在 `call()` 中留下的每调用状态；owner/线程契约同 `call()`。
 - `ToolRegistry::result_preview()`：按名字委托 owner runtime，未知名/无钩子返回空。
@@ -68,7 +68,7 @@ stderr `isatty` 门控，管道场景保持 v3 字节形状（008 回归钩子�
 - `preview_file` 工具定义：`{"path"}` 必填；边界 `resolve_within_workspace`，NUL 即二进制拒绝，上限 `read_limit_bytes`；返回确认文本并把正文暂存。
 - applied diff 计算复用 `diff_texts/diff_against_empty/to_unified_text`（009 §5.3），label 同审批预览（`a/<rel>`、`b/<rel>`）。
 
-### 5.2 TUI（`src/tui.cpp`）
+### 5.2 TUI（`src/tui/tui.cpp`）
 
 - `ToolRound` 增 `result_preview`（纯文本、未 sanitize）与 `preview_is_markdown`（`preview_file` 且路径以 `.md/.markdown` 结尾，worker 线程解析 args 判定）。
 - worker 的 `on_tool`：`executed && !is_error` 时在 loop 线程调 `registry->result_preview()`，随 round 打包进 `tool_events`（仍是 worker→UI 唯一交接通道）。
@@ -77,7 +77,7 @@ stderr `isatty` 门控，管道场景保持 v3 字节形状（008 回归钩子�
 - `/preview <path>`：不经过模型，直接读工作区内文件（同 ADR 007 边界），`.md` 渲染、其他逐行原样，500 行截断；binary/不可读/越界报 `[error]`。登记入 `kCommands` 与 `/help`。
 - **侧栏 `p` 键**（2026-11-09 维护者追问"选中文件怎么预览"后补充）：Ctrl-F 侧栏焦点下按 `p` 直接预览高亮文件（与 `/preview` 共用 `preview_workspace_file` 帮助函数），焦点保持；进入焦点时提交一行 `[hint]` 说明键位（Up/Down walk · p=preview · Enter=insert path · Esc=leave）。Enter 插入路径的原语义不变。**2026-11-15 修订**：`p` 预览后**清除选择**（维护者请求：预览过的文件不应保持选中，避免误按 Enter 插入路径）；高亮消失、↑/↓ 从最近端重新选择、无选择时 Enter 仅退出焦点、无选择时 `p` 提交提示而不落入 composer；键位图例同步为 `p=preview+unselect`。**2026-11-15 二次修订（018）**：`/preview` 与侧栏 `p` 不再把正文灌进转录，改为开预览 pane（live 区内可滚、Esc 关，转录仅 open/closed 标记）；侧栏 `p` 开 pane 时退出侧栏焦点；加载/校验/高亮管线（loader + md/hl）不变，见 [018](018-preview-pane.md)。
 
-### 5.6 语法高亮（`include/mini_agent/highlight.hpp`、`src/highlight.cpp`；2026-11-09 维护者追加"像 vim/emacs 那样高亮预览"）
+### 5.6 语法高亮（`include/mini_agent/highlight.hpp`、`src/render/highlight.cpp`；2026-11-09 维护者追加"像 vim/emacs 那样高亮预览"）
 
 - **取向**：vim 的 `syntax/*.vim` 与 emacs 传统 font-lock 都是正则/行状态机，非真解析器；据此选**手写行词法高亮**（方案 A），零依赖（ADR 003），不 vendored tree-sitter（重、需逐语言 grammar + ADR，调研 §5 明确 syntect/chroma 为"不参考"的重依赖）。仅覆盖识别的语言，未知语言/Markdown 原样透传。
 - **模块**：`hl::State`（跨行携带：C `/* */` 块注释、py 三引号串）+ 纯函数 `highlight_line(line, lang, state)`、`language_for_path`（按扩展名）、`language_for_fence`（按 ``` 后 info 词，别名归一）、`supports`。语言族 C（cpp/c/h/js/ts/go 共用 C 词法 + 各关键字表）、Py、Sh、Json。六类 SGR（basic-16，同 md.cpp 色域）：注释 dim、串绿、数字品红、关键字青、预处理/变量黄、函数调用蓝。关键字表只取核心词（少标优于误标，同 vim default filetype）。
@@ -88,11 +88,11 @@ stderr `isatty` 门控，管道场景保持 v3 字节形状（008 回归钩子�
 - **SGR 与换行不变量**：`highlight_line` 每行输出成对 reset（`Run` 类保证开/闭），SGR 段对 `md::wrap` 是零宽（同 md::render 既有约定），列宽不变量与 `style_history_line` 的 "producer-styled 直通" 均不破——单测断言 20 列 wrap 与行尾闭合。
 - **未做**：diff 行内的 token 二次着色（±已是主信号，叠加易糊）；truecolor/主题可配（basic-16 足够，TERM 兼容）；C++ 模板/raw-string、py f-string 嵌套等解析级细节按行词法近似，偶发串色与 vim 同级、可接受。
 
-### 5.3 CLI（`src/cli_main.cpp`）
+### 5.3 CLI（`src/cli/cli_main.cpp`）
 
 - `ask` 的 `on_tool`：`executed && !is_error && isatty(STDERR_FILENO)` 时取 `registry->result_preview()` 写 stderr（diff 原文，无 ANSI——CLI 不假设终端色能力，与 v3 审批预览一致）。日志红线不变：日志仍只记元数据。
 
-### 5.4 system prompt（`src/session.cpp`）
+### 5.4 system prompt（`src/core/session.cpp`）
 
 - 默认提示词 `Tool etiquette` 增一条：`preview_file` 用于向用户展示文件（终端渲染，Markdown 带格式），`read_file` 用于自己读内容。
 

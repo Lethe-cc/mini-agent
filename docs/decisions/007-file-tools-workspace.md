@@ -26,7 +26,7 @@ v2 只有 `run_bash`：模型改代码要靠 shell 转义与 heredoc，token 成
 1. 内置 `FileRuntime` 五工具（`read_file`/`write_file`/`edit_file`/`list_dir`/`search_text`），`edit_file` 默认唯一匹配（`replace_all` 显式开）；
 2. `AppConfig`/session 增 `workspace`，CLI `--cwd` 与 TUI `/cwd` 设定；文件与 git 工具路径规范化后必须位于根内（双向：读也受限）；`run_bash` 子进程 `chdir` 至根；
 3. `write_file`/`edit_file` 执行前计算 unified diff 进审批块，并在执行前重读目标文件做预览-执行一致性校验（不一致放弃本次执行）；
-4. diff 自写（行级 LCS，纯函数入 `src/diff.cpp`），不引库、不借 `git diff --no-index`。
+4. diff 自写（行级 LCS，纯函数入 `src/tools/diff.cpp`），不引库、不借 `git diff --no-index`。
 
 ## 后果
 

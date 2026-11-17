@@ -149,7 +149,7 @@
 | C++ 已删 preset 的拒绝行为 | 临时副本 | `CPP_PRESET=windows-msvc python3 scripts/cpp_check.py` | 按设计退出 2 并列出 6 个合法 preset；无静默回退 | — |
 | C++ Sanitizers 非 Linux 拒绝 | 临时副本 | `cmake --preset dev -DSTARTER_SANITIZERS=ON` | 按设计 FATAL_ERROR：requires Linux GCC/Clang | Linux 正路径仍未验证 |
 | C++ clang-tidy **正路径** | 临时副本 | `cpp_check.py --preset dev --tidy` | 通过：`CLANG_TIDY_EXECUTABLE` 写入 cache，verbose 日志中 clang-tidy 被调用 3 次 | Linux 下未验证 |
-| clang-tidy 反证（防「退出 0 = 没跑」） | 临时副本 | 向 `src/project.cpp` 加入 `const char* p = NULL;` | 通过：真实报出 `warning: use nullptr [modernize-use-nullptr]`；但构建仍退出 0（`WarningsAsErrors` 为空） | 印证默认不把诊断升级为失败 |
+| clang-tidy 反证（防「退出 0 = 没跑」） | 临时副本 | 向 `src/core/project.cpp` 加入 `const char* p = NULL;` | 通过：真实报出 `warning: use nullptr [modernize-use-nullptr]`；但构建仍退出 0（`WarningsAsErrors` 为空） | 印证默认不把诊断升级为失败 |
 | C++ 格式检查 | 临时副本 | `python3 scripts/cpp_format.py` | 通过，退出 0，未改写文件 | — |
 | C++ 严格项目检查端到端 | 临时副本 | `python3 scripts/check.py --strict-project` | 通过（工具测试 + 真实 C++ 构建与 CTest） | — |
 | **Rust 完整四步门禁** | 临时副本 | `python3 scripts/rust_check.py` 与 `--release` | 通过，退出 0：fmt → clippy `-D warnings` → test → build 四步真实执行；单元 1/1、CLI 集成 1/1、文档测试 1/1 | 无 `rustup`，多工具链与 MSRV 未验证 |

@@ -17,7 +17,7 @@
 
 ## 决策
 
-选方案 B：`third_party/md4c/`（md4c.h/md4c.c/LICENSE.md + 记录，模式同 ADR 002 的 nlohmann）。`src/md.cpp` 的 `render()` 重写为 md4c `MD_RENDERER` 回调式 SGR writer：语义 token → ANSI；`display_width/wrap/clip` 保持自研。md4c-html/entity 不引入。
+选方案 B：`third_party/md4c/`（md4c.h/md4c.c/LICENSE.md + 记录，模式同 ADR 002 的 nlohmann）。`src/render/md.cpp` 的 `render()` 重写为 md4c `MD_RENDERER` 回调式 SGR writer：语义 token → ANSI；`display_width/wrap/clip` 保持自研。md4c-html/entity 不引入。
 
 ## 后果
 

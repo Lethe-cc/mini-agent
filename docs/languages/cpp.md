@@ -37,7 +37,7 @@ CMakePresets.json
 .clang-format
 .clang-tidy
 include/starter/project.hpp
-src/project.cpp
+src/core/project.cpp
 src/main.cpp
 tests/cpp/project_test.cpp
 scripts/cpp_check.py

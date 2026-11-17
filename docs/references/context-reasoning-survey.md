@@ -126,7 +126,7 @@ mini-agent：`reasoning_effort` 非空即原样进请求体、400 给提示不�
 
 ### 5.1 Context 窗口：四级兜底链 + 显式探测
 
-解析链（`src/tui.cpp` 的 `context_reading()`，tui.cpp:1307-1325）：
+解析链（`src/tui/tui.cpp` 的 `context_reading()`，tui.cpp:1307-1325）：
 
 ```
 config.context_window（权威：手工 /context <tokens> 或 probe 成功写入）
@@ -135,7 +135,7 @@ config.context_window（权威：手工 /context <tokens> 或 probe 成功写入
   > 无分母（状态栏退化为 ctx 单值形态）
 ```
 
-- **目录层**（v4.7）：`src/models_dev.cpp::lookup_models_dev(base_url, model)`（models_dev.cpp:65）——构建期快照 `include/mini_agent/models_dev_data.hpp`（TSV raw-string，7158 行，`tools/refresh_models_dev.py` 从 models.dev v1 生成），运行时 base_url 去尾斜杠 + 精确 key 二分，零网络。与 Pi 的静态目录同思路，但排位在实测源之后：目录是宣传口径（qwen3.8-flash 目录 1.0M vs 网关输入校验 983616 的实证分歧）。
+- **目录层**（v4.7）：`src/provider/models_dev.cpp::lookup_models_dev(base_url, model)`（models_dev.cpp:65）——构建期快照 `include/mini_agent/models_dev_data.hpp`（TSV raw-string，7158 行，`tools/refresh_models_dev.py` 从 models.dev v1 生成），运行时 base_url 去尾斜杠 + 精确 key 二分，零网络。与 Pi 的静态目录同思路，但排位在实测源之后：目录是宣传口径（qwen3.8-flash 目录 1.0M vs 网关输入校验 983616 的实证分歧）。
 - **探测层**（v4.3/v4.3.1/v4.5）：`/context probe` 显式触发（tui.cpp:1968），后台线程两段协议（`OpenAiProvider::probe_context_window`，provider_openai.cpp:999）：Stage 1 小 prompt + `max_tokens=1e9` 读计费前拒绝消息；Stage 1 只得 OutputCap 时 Stage 2 发 2.4MB 填充追输入校验器。`parse_context_probe_error`（provider_openai.cpp:684）三形态白名单（`maximum context length is N`→Window、`Range of <param> [1,N]`→按参数名分 InputCap/OutputCap、`max_tokens: X > N`→OutputCap），1k..200M 合理域外宁缺毋滥。**只有 Window/InputCap 写入 config**（tui.cpp probe 完成分支），OutputCap 显示不入库。与参考组的差异：四家全部目录驱动、无人用拒绝报文做发现——probe 是 mini-agent 面向"目录未覆盖的自建网关"的差异化路线；已知代价：Stage 2 对高重复文本压缩比高的网关可能付费打不中（DashScope 实测 2.4MB 仅 ~30 万 token，200 正常计费）。
 - **分子层**：状态栏 ctx 的 token 读数优先 provider usage（`result.usage.prompt_tokens`，tui.cpp:2567，请求带 `stream_options.include_usage`），无 usage 时字符类粗估 `estimate_context_tokens`（provider_openai.cpp:649）显示带 `~`——与 Pi 的"usage 优先、粗估兜底"同构；未做 Pi 的"compaction 后 usage 作废显示 ?"（mini-agent 无压缩，暂无此失效场景）。
 

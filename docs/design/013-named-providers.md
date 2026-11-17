@@ -11,9 +11,9 @@
 
 [012](012-multi-provider.md)（v6，已实现）为兼容旧单档案配置保留了**未命名态**：顶层 `base_url/api_key/model/context_window/reasoning_effort` 与命名档案表并存，`active_provider` 空 = 未命名。核对自代码的双模式成本：
 
-- **双向同步不变量**：`activate_provider()` 把档案展开到顶层，`sync_active_provider()` 把顶层编辑折回档案（[config.cpp:218-250](../../src/config.cpp#L218)）；TUI 每个编辑命令（/provider /login /model /context /reasoning）都必须记得调 sync（tui.cpp 6 处调用点），漏调即档案与生效值脱节。
-- **未命名分支散布**：`activate_provider("")` 回退、save 时"无档案则两键不写盘"特判、`auth_probes` map 空名键、`/models` 聚合的未命名路由（[tui.cpp:2062-2073](../../src/tui.cpp#L2062)）、`"(unnamed)"` 显示 3 处、`/provider rm` 活动档案回退未命名（[tui.cpp:2501](../../src/tui.cpp#L2501)）、`/provider` 列表未命名额外行。
-- **已发现的语义缺陷**：env 覆盖生效时切换档案，`activate_provider()` 直接覆写顶层三元组，load 时套用的 env 值被丢弃；与 `[warn]` 文案"this process keeps the env endpoint/model"（[tui.cpp:2264-2267](../../src/tui.cpp#L2264)）及 012 §5.1"覆盖生效期间档案切换只写盘不生效"的文档意图不符。
+- **双向同步不变量**：`activate_provider()` 把档案展开到顶层，`sync_active_provider()` 把顶层编辑折回档案（[config.cpp:218-250](../../src/core/config.cpp#L218)）；TUI 每个编辑命令（/provider /login /model /context /reasoning）都必须记得调 sync（tui.cpp 6 处调用点），漏调即档案与生效值脱节。
+- **未命名分支散布**：`activate_provider("")` 回退、save 时"无档案则两键不写盘"特判、`auth_probes` map 空名键、`/models` 聚合的未命名路由（[tui.cpp:2062-2073](../../src/tui/tui.cpp#L2062)）、`"(unnamed)"` 显示 3 处、`/provider rm` 活动档案回退未命名（[tui.cpp:2501](../../src/tui/tui.cpp#L2501)）、`/provider` 列表未命名额外行。
+- **已发现的语义缺陷**：env 覆盖生效时切换档案，`activate_provider()` 直接覆写顶层三元组，load 时套用的 env 值被丢弃；与 `[warn]` 文案"this process keeps the env endpoint/model"（[tui.cpp:2264-2267](../../src/tui/tui.cpp#L2264)）及 012 §5.1"覆盖生效期间档案切换只写盘不生效"的文档意图不符。
 
 前提变化：维护者 2026-11-14 明确"不用考虑兼容旧配置"。012 §4 否决"顶层字段废弃、只留 active 指针"的理由（破坏 env 覆盖与旧文件兼容）中，兼容部分不再成立；env 覆盖可用运行时叠加保留。取舍推翻记录于 [ADR 009](../decisions/009-named-providers-schema-v2.md)。
 
@@ -167,10 +167,10 @@ struct AppConfig {
 | 文件 | 改动 |
 | --- | --- |
 | include/mini_agent/config.hpp | 顶层五字段成员删除、`current`/`refresh_current` 新增、sync 删除 |
-| src/config.cpp | schema v2 读写 + 迁移 + 派生（约 11 处顶层引用重构） |
-| src/tui.cpp | 约 42 处 `config.base_url/api_key/model` → `config.current.*`；未命名分支删除（聚合路由/rm 回退/显示措辞）；编辑命令改"档案 → refresh"路径 |
-| src/cli_main.cpp | 约 5 处引用迁移；`--provider/--model` 改为 current 叠加（不再 activate+sync） |
-| src/provider_openai.cpp | **不受影响**（消费 ProviderConfig，非 AppConfig） |
+| src/core/config.cpp | schema v2 读写 + 迁移 + 派生（约 11 处顶层引用重构） |
+| src/tui/tui.cpp | 约 42 处 `config.base_url/api_key/model` → `config.current.*`；未命名分支删除（聚合路由/rm 回退/显示措辞）；编辑命令改"档案 → refresh"路径 |
+| src/cli/cli_main.cpp | 约 5 处引用迁移；`--provider/--model` 改为 current 叠加（不再 activate+sync） |
+| src/provider/provider_openai.cpp | **不受影响**（消费 ProviderConfig，非 AppConfig） |
 | tests/cpp/agent_test.cpp | `test_provider_profiles` 重写（legacy 字节不变断言、未命名 rm-active 断言作废）；`test_config_round_trip_and_precedence`/`test_config_batched_hint`/`test_connection_prompt` 随接口更新；新增迁移四分支/env 派生/auto default 用例 |
 | tests/pty_tui_smoke.py | `multi:` 段与单档案 setup 流断言更新（`"(unnamed)"`、rm-active 行为）；新增迁移场景 |
 | docs | parameters.md、architecture.md、.env.example、mcp-usage.md 涉及处同步 |

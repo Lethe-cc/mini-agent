@@ -34,7 +34,7 @@
 在线读取 GitHub API/文件；git 行为以本机实测（2.47.3）。similar 的 LICENSE 经 GitLab/GitHub 两路当日不可达，标记待补核。
 
 ## 本地差异
-本项目 diff 为自写 `src/diff.cpp`（行级 LCS unified diff，~250 行，零依赖，13 项单测 + OOM 单元守卫，见 [009 §5.3/§9 D7](../design/009-coding-v3.md)）。外部工具一律不链接；经 `run_bash` 调用属既有审批面，不构成依赖。
+本项目 diff 为自写 `src/tools/diff.cpp`（行级 LCS unified diff，~250 行，零依赖，13 项单测 + OOM 单元守卫，见 [009 §5.3/§9 D7](../design/009-coding-v3.md)）。外部工具一律不链接；经 `run_bash` 调用属既有审批面，不构成依赖。
 
 ## 实际采用情况
 2026-11-05 维护者问"有无开源 diff 工具/库可参考或直接用"，结论（当日核实支撑）：

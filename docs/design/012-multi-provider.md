@@ -15,7 +15,7 @@
   `load_config_merged()` env 覆盖文件，`config_from_json` 拒绝 `schema_version > 1`，未知字段忽略（forward-read）。
 - TUI `/provider <url>` 覆盖 `base_url`、`/login [key]` 覆盖 `api_key`（均重置 `AuthProbe` 并写盘），
   `/model <name>` 只改模型名，**不换 endpoint**；`/models` 单 worker 拉取当前 endpoint 的 `GET /models`
-  （15 s 上限，兼作认证探针），结果以编号菜单呈现，输序号选定（[tui.cpp](../../src/tui.cpp) `start_models_fetch` / `model_choice`）。
+  （15 s 上限，兼作认证探针），结果以编号菜单呈现，输序号选定（[tui.cpp](../../src/tui/tui.cpp) `start_models_fetch` / `model_choice`）。
 - 每回合从当次配置快照新建 `OpenAiProvider`（design 007 §5.5 "one provider == one agent endpoint"，无全局单例）；
   session `meta.model` 记录模型名；context window 解析链 config → /models caps → models.dev 目录（design 010）。
 - 密钥持久化在 config.json（0600，目录 0700，原子写），是 design 007 §6 记录的自觉取舍。

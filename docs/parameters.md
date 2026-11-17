@@ -2,7 +2,7 @@
 
 > **文档性质**：使用者参数参考（大纲式索引）。所有条目按当前源码核对（v0.8.0，v1–v7 + 014–017 命令面）；日常快速查看以 `mini-agent --help` 为准，本文补充语义、默认值、持久化范围与出处。
 >
-> **来源**：[cli_main.cpp](../src/cli_main.cpp)、[config.hpp](../include/mini_agent/config.hpp)、[config.cpp](../src/config.cpp)、[tui.cpp](../src/tui.cpp)、[tools.cpp](../src/tools.cpp)、[session.cpp](../src/session.cpp)、[log.cpp](../src/log.cpp)。设计与取舍见文末[参考](#7-参考)。
+> **来源**：[cli_main.cpp](../src/cli/cli_main.cpp)、[config.hpp](../include/mini_agent/config.hpp)、[config.cpp](../src/core/config.cpp)、[tui.cpp](../src/tui/tui.cpp)、[tools.cpp](../src/tools/tools.cpp)、[session.cpp](../src/core/session.cpp)、[log.cpp](../src/core/log.cpp)。设计与取舍见文末[参考](#7-参考)。
 
 ## 目录
 
@@ -145,7 +145,7 @@ mini-agent --help | --version
 | 命令 + 参数 | `--mcp 'fs=npx -y @modelcontextprotocol/server-filesystem /tmp'` | stdio；按空白拆参，**参数含空格时改用 JSON 形式** |
 | JSON 对象 | `--mcp 'api={"transport":"http","url":"https://h/mcp","bearer_token":"t"}'` | 与 config.json `mcp_servers` 条目同 schema，全量字段 |
 
-三种形式都经同一套校验（[config.cpp](../src/config.cpp) `parse_mcp_cli_spec`）；违规退出 2。详细使用场景见 [mcp-usage.md](mcp-usage.md)。
+三种形式都经同一套校验（[config.cpp](../src/core/config.cpp) `parse_mcp_cli_spec`）；违规退出 2。详细使用场景见 [mcp-usage.md](mcp-usage.md)。
 
 ### 2.8 退出码
 
@@ -436,15 +436,15 @@ Tab 补全：`/login ` 补档案名，`/model ` 补聚合菜单里的（限定�
 
 | 参数面 | 位置 |
 | --- | --- |
-| CLI 解析、退出码、SIGINT、行模式 | [src/cli_main.cpp](../src/cli_main.cpp) |
-| env 合并、config 校验、`--mcp` spec、超时 | [src/config.cpp](../src/config.cpp)、[include/mini_agent/config.hpp](../include/mini_agent/config.hpp) |
-| 斜杠命令、审批 UI、按键、120s 超时 | [src/tui.cpp](../src/tui.cpp)、[include/mini_agent/tui_bridge.hpp](../include/mini_agent/tui_bridge.hpp) |
-| 内置工具 schema 与执行 | [src/tools.cpp](../src/tools.cpp)、[include/mini_agent/tools.hpp](../include/mini_agent/tools.hpp) |
-| 工具注册表组装（workspace 回落 cwd、git 探测） | [src/mcp_rpc.cpp](../src/mcp_rpc.cpp) |
-| 会话目录/删除 | [src/session.cpp](../src/session.cpp) |
-| 日志路径解析 | [src/log.cpp](../src/log.cpp) |
+| CLI 解析、退出码、SIGINT、行模式 | [src/cli/cli_main.cpp](../src/cli/cli_main.cpp) |
+| env 合并、config 校验、`--mcp` spec、超时 | [src/core/config.cpp](../src/core/config.cpp)、[include/mini_agent/config.hpp](../include/mini_agent/config.hpp) |
+| 斜杠命令、审批 UI、按键、120s 超时 | [src/tui/tui.cpp](../src/tui/tui.cpp)、[include/mini_agent/tui_bridge.hpp](../include/mini_agent/tui_bridge.hpp) |
+| 内置工具 schema 与执行 | [src/tools/tools.cpp](../src/tools/tools.cpp)、[include/mini_agent/tools.hpp](../include/mini_agent/tools.hpp) |
+| 工具注册表组装（workspace 回落 cwd、git 探测） | [src/mcp/mcp_rpc.cpp](../src/mcp/mcp_rpc.cpp) |
+| 会话目录/删除 | [src/core/session.cpp](../src/core/session.cpp) |
+| 日志路径解析 | [src/core/log.cpp](../src/core/log.cpp) |
 
 ### 7.3 维护约定
 
-- 参数面变更（新增/改名/改默认值/改语义）时同步更新本文与 `.env.example`；`--help` 文本在 [src/cli_main.cpp](../src/cli_main.cpp) `print_usage`。
+- 参数面变更（新增/改名/改默认值/改语义）时同步更新本文与 `.env.example`；`--help` 文本在 [src/cli/cli_main.cpp](../src/cli/cli_main.cpp) `print_usage`。
 - 本文只记录已实现行为；计划中的参数写在对应设计文档，不提前进本文。

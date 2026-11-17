@@ -11,14 +11,14 @@
 
 | 文件 | 行数 | 主要问题 |
 | --- | --- | --- |
-| src/tui.cpp | 3622 | `run_loop` 单函数 ~3100 行，~40 个 lambda 闭包共享局部状态；`handle_slash` ~940 行；键位/帧渲染/侧栏/预览/回合全在一处 |
-| src/tools.cpp | 1383 | ToolRegistry + run_subprocess + run_bash + FileRuntime + GitRuntime + workspace 边界混居 |
-| src/provider_openai.cpp | 1251 | 纯解析（SSE/tool_calls/models/probe/估算）与 curl 传输混居 |
-| src/cli_main.cpp | 1115 | 四个子命令 + 公共助手 + main 同文件 |
-| src/tui_render.cpp | 974 | 已拆出的纯渲染（良好，保持） |
-| src/md.cpp | 802 | 几何（width/wrap/clip）与 md4c 渲染混居 |
-| src/config.cpp | 777 | 文件加载/迁移/校验 与 env 合并/mcp spec 混居 |
-| src/session.cpp | 612 | IO/锁 与 JSON/Markdown 序列化混居 |
+| src/tui/tui.cpp | 3622 | `run_loop` 单函数 ~3100 行，~40 个 lambda 闭包共享局部状态；`handle_slash` ~940 行；键位/帧渲染/侧栏/预览/回合全在一处 |
+| src/tools/tools.cpp | 1383 | ToolRegistry + run_subprocess + run_bash + FileRuntime + GitRuntime + workspace 边界混居 |
+| src/provider/provider_openai.cpp | 1251 | 纯解析（SSE/tool_calls/models/probe/估算）与 curl 传输混居 |
+| src/cli/cli_main.cpp | 1115 | 四个子命令 + 公共助手 + main 同文件 |
+| src/tui/tui_render.cpp | 974 | 已拆出的纯渲染（良好，保持） |
+| src/render/md.cpp | 802 | 几何（width/wrap/clip）与 md4c 渲染混居 |
+| src/core/config.cpp | 777 | 文件加载/迁移/校验 与 env 合并/mcp spec 混居 |
+| src/core/session.cpp | 612 | IO/锁 与 JSON/Markdown 序列化混居 |
 
 **根因**：TUI 的"闭包共享状态"模式使逻辑无法跨翻译单元移动；其余文件是"多职责同文件"，可按类/纯函数机械拆分。
 

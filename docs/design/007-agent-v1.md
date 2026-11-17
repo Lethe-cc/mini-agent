@@ -50,16 +50,16 @@ Provider 协议假设：兼容 OpenAI Chat Completions 的 HTTP 服务。配置�
 
 ```text
 include/mini_agent/            src/                      目标
-  chat.hpp        消息/历史模型   src/chat.cpp             agent_core (STATIC)
-  provider.hpp    Provider 接口    src/provider_openai.cpp  agent_core
-  session.hpp     持久化          src/session.cpp          agent_core
-  log.hpp         spdlog 包装      src/log.cpp                agent_core
-  md.hpp          宽度/wrap/clip + src/md.cpp                  agent_core
+  chat.hpp        消息/历史模型   src/core/chat.cpp             agent_core (STATIC)
+  provider.hpp    Provider 接口    src/provider/provider_openai.cpp  agent_core
+  session.hpp     持久化          src/core/session.cpp          agent_core
+  log.hpp         spdlog 包装      src/core/log.cpp                agent_core
+  md.hpp          宽度/wrap/clip + src/render/md.cpp                  agent_core
                   Markdown 渲染（md4c 解析，ADR 004）
 third_party/md4c/  vendored md4c.h/md4c.c（C，MIT 记录同目录）
-  loop.hpp        会话循环        src/loop.cpp             agent_core
-  tui.hpp         自绘 TUI        src/tui.cpp              agent_core
-                                            src/cli_main.cpp      mini-agent (exe)
+  loop.hpp        会话循环        src/core/loop.cpp             agent_core
+  tui.hpp         自绘 TUI        src/tui/tui.cpp              agent_core
+                                            src/cli/cli_main.cpp      mini-agent (exe)
 tests/cpp/                      单元与契约测试             agent_test
 third_party/nlohmann/           单头 JSON（待 ADR 002 接受）
 ```
@@ -381,7 +381,7 @@ TUI 规划（自绘最小集，已实现）：主屏内联渲染（见 5.6 规�
 
 ## 9. 实现偏差与已知限制
 
-实现偏差记录：(1) 5.4 早期设想的"交替屏幕"改为 5.6 规则 2 的主屏内联渲染 + 终端原生 scrollback——与自绘最小目标和"提交行不闪变"一致，属有意设计更新。(2) Ctrl-C 需要 termios 关闭 ISIG 才能拿到 0x03 字节（实现期发现，PTY 测试曾因此挂起，已修复并回归）。(3) 流式中被再次 Ctrl-C 直接退出（中断挂起中的 worker 等待期间二次按下＝放弃退出），符合 5.6 双层语义的极值约定。(4) PTY smoke 未接入 quality_commands（时序敏感、需 pty），作为人工/CI 外的 dev 工具。(5) `src/project.cpp` starter 示例暂保留在 agent_core 中，随业务扩展移除。(6) streaming 期间现行实现禁用输入（仅提示先 Ctrl-C），是相对 Pi 排队式 steering（5.6 v1.x 候选第 1 项）的有意保守选择：v1 先保证中断与回滚语义正确，排队属交互增强，未冒充设计已承诺行为。(7) 2026-11-01 免环境变量配置流：设计原"配置全部来自环境变量"经维护者要求改为 env 优先 + TUI /login 持久化（0600），密钥落盘属有意取舍，见第 6 节。(8) 2026-11-01 独立日志文件：维护者指定 spdlog；依赖策略从"仅 curl+nlohmann"扩展为三项 vendored（新增 spdlog v1.17.0 header-only，MIT 许可记录同 ADR 002 模式），事件面限定元数据是有意边界——日志不成为第二个会话文件。已知限制与后续候选：wcwidth 表为区块级近似（已含常用 emoji 0x1F000-0x1F9FF/0x1FA70-0x1FAFF、dingbats/arrows、 combining/ZWJ/变体选择符零宽处理；2026-11-01 因用户实测 emoji 回复触发 auto-wrap 重复行而补全——此前 emoji 计 1 列而终端渲染 2 列，正是重复行复现的直接原因；US 国旗/家族组合序列等边缘情形仍可能差 1 列）、无 tool calling、无上下文压缩、无流式重连、无跨会话操作、无多 Agent 编排、TUI 无多行编辑/高亮、单 Provider 形态。这些均为 v1 有意排除；消息模型、session schema 与函数式循环入口按第 5.5 节预留扩展点，但工具注册表、压缩策略、Agent 间通信等实现细节仍须届时重新设计并更新本索引，预留不等于承诺。(9) 2026-11-01 修复重复行缺陷：根因是相对行数记账依赖终端 auto-wrap 且宽度按码点计，CJK/多行内容下 desync；改为硬换行单行不变量模型（见 5.6 规则 2）。(10) 2026-11-01 Markdown 渲染：新增自研 `md` 模块（宽度/wrap/clip 从 tui.cpp 迁入并 ANSI 感知；渲染器为行级子集，零依赖）。实现期发现并修复 wrap 的 mid-line SGR 丢弃缺陷（样式仅在行首发射，TUI "助手: " 前缀致全部样式丢失）、md::render 的悬垂 string_view 缺陷（tidy bugprone-dangling-handle 捕获）、/help 单行超宽被 wrap 拦腰截断致冒烟断言不稳（改多短行）。(11) 2026-11-01 维护者决定改用开源库：`md::render` 解析层切换为 vendored md4c v0.6.0（MIT，ADR 004），补齐 GFM 表格/任务清单/删除线/嵌套列表并正确对齐与剥离 HTML；期间修复三处实现错误（TD 对齐按列记录、右对齐左填充、双重编码测试字面量）。几何层不变。(12) 2026-11-02 模型发现与选择（规则 7）：`Provider::list_models()` 定为**非纯虚**（基类抛 `ProviderError(Protocol)`），以免拆坏现有 `FakeProvider` 等实现者；`/models` 与 `/model` 共享前缀，`handle_slash` **必须按此顺序匹配**（`/models` 在前）。列举与聊天共用 `ProviderConfig` 形态但收紧超时，失败时仅渲染 `[error]` 行进历史区、不改已存 model 配置（与聊天失败轮回滚一致）。预存偏差不受影响：`src/project.cpp` starter 残留仍保留；仓库基线已有 8 处 clang-format 告警（不属 `quality_commands` 门禁），本次只对新写行跑 `clang-format-diff`，未顺手重排旧代码。
+实现偏差记录：(1) 5.4 早期设想的"交替屏幕"改为 5.6 规则 2 的主屏内联渲染 + 终端原生 scrollback——与自绘最小目标和"提交行不闪变"一致，属有意设计更新。(2) Ctrl-C 需要 termios 关闭 ISIG 才能拿到 0x03 字节（实现期发现，PTY 测试曾因此挂起，已修复并回归）。(3) 流式中被再次 Ctrl-C 直接退出（中断挂起中的 worker 等待期间二次按下＝放弃退出），符合 5.6 双层语义的极值约定。(4) PTY smoke 未接入 quality_commands（时序敏感、需 pty），作为人工/CI 外的 dev 工具。(5) `src/core/project.cpp` starter 示例暂保留在 agent_core 中，随业务扩展移除。(6) streaming 期间现行实现禁用输入（仅提示先 Ctrl-C），是相对 Pi 排队式 steering（5.6 v1.x 候选第 1 项）的有意保守选择：v1 先保证中断与回滚语义正确，排队属交互增强，未冒充设计已承诺行为。(7) 2026-11-01 免环境变量配置流：设计原"配置全部来自环境变量"经维护者要求改为 env 优先 + TUI /login 持久化（0600），密钥落盘属有意取舍，见第 6 节。(8) 2026-11-01 独立日志文件：维护者指定 spdlog；依赖策略从"仅 curl+nlohmann"扩展为三项 vendored（新增 spdlog v1.17.0 header-only，MIT 许可记录同 ADR 002 模式），事件面限定元数据是有意边界——日志不成为第二个会话文件。已知限制与后续候选：wcwidth 表为区块级近似（已含常用 emoji 0x1F000-0x1F9FF/0x1FA70-0x1FAFF、dingbats/arrows、 combining/ZWJ/变体选择符零宽处理；2026-11-01 因用户实测 emoji 回复触发 auto-wrap 重复行而补全——此前 emoji 计 1 列而终端渲染 2 列，正是重复行复现的直接原因；US 国旗/家族组合序列等边缘情形仍可能差 1 列）、无 tool calling、无上下文压缩、无流式重连、无跨会话操作、无多 Agent 编排、TUI 无多行编辑/高亮、单 Provider 形态。这些均为 v1 有意排除；消息模型、session schema 与函数式循环入口按第 5.5 节预留扩展点，但工具注册表、压缩策略、Agent 间通信等实现细节仍须届时重新设计并更新本索引，预留不等于承诺。(9) 2026-11-01 修复重复行缺陷：根因是相对行数记账依赖终端 auto-wrap 且宽度按码点计，CJK/多行内容下 desync；改为硬换行单行不变量模型（见 5.6 规则 2）。(10) 2026-11-01 Markdown 渲染：新增自研 `md` 模块（宽度/wrap/clip 从 tui.cpp 迁入并 ANSI 感知；渲染器为行级子集，零依赖）。实现期发现并修复 wrap 的 mid-line SGR 丢弃缺陷（样式仅在行首发射，TUI "助手: " 前缀致全部样式丢失）、md::render 的悬垂 string_view 缺陷（tidy bugprone-dangling-handle 捕获）、/help 单行超宽被 wrap 拦腰截断致冒烟断言不稳（改多短行）。(11) 2026-11-01 维护者决定改用开源库：`md::render` 解析层切换为 vendored md4c v0.6.0（MIT，ADR 004），补齐 GFM 表格/任务清单/删除线/嵌套列表并正确对齐与剥离 HTML；期间修复三处实现错误（TD 对齐按列记录、右对齐左填充、双重编码测试字面量）。几何层不变。(12) 2026-11-02 模型发现与选择（规则 7）：`Provider::list_models()` 定为**非纯虚**（基类抛 `ProviderError(Protocol)`），以免拆坏现有 `FakeProvider` 等实现者；`/models` 与 `/model` 共享前缀，`handle_slash` **必须按此顺序匹配**（`/models` 在前）。列举与聊天共用 `ProviderConfig` 形态但收紧超时，失败时仅渲染 `[error]` 行进历史区、不改已存 model 配置（与聊天失败轮回滚一致）。预存偏差不受影响：`src/core/project.cpp` starter 残留仍保留；仓库基线已有 8 处 clang-format 告警（不属 `quality_commands` 门禁），本次只对新写行跑 `clang-format-diff`，未顺手重排旧代码。
 
 ## v7.1 修订（2026-11-14 缺陷修复：行宽 autowrap 守卫 + 状态行裁剪优先级）
 

@@ -3,7 +3,7 @@
 ## 文档状态
 - 状态：已实现（2026-11-07，验证见第 8 节；待人工评审）。
 - 关联任务：维护者 2026-11-06 提问"agent 能否获取模型上下文长度/使用量/思考级别"，确认三者现状均不可得后，2026-11-07 批复"开始补全这些功能，显示位置就在底部 bar"。承接 [009](009-coding-v3.md)（v3 编码能力，已实现）。
-- 核对日期与适用版本：2026-11-07 实读本仓库 `src/provider_openai.cpp`、`src/loop.cpp`、`src/config.cpp`、`src/tui.cpp` 与 [TUI 界面调研](../references/tui-agent-ui-survey.md)（状态栏专题第 4 节，四家共识 model·ctx%·cost 底线）。
+- 核对日期与适用版本：2026-11-07 实读本仓库 `src/provider/provider_openai.cpp`、`src/core/loop.cpp`、`src/core/config.cpp`、`src/tui/tui.cpp` 与 [TUI 界面调研](../references/tui-agent-ui-survey.md)（状态栏专题第 4 节，四家共识 model·ctx%·cost 底线）。
 - 人工评审记录：无。
 
 ## 1. 背景与目标
@@ -50,10 +50,10 @@ v3 之后 TUI 状态行只有 model/session/连通/auth 信息，没有任何用
 ## 5. 详细设计
 
 - `include/mini_agent/provider.hpp`：`TokenUsage{prompt,completion,total}` + `CompletionResult::usage`；`ProviderConfig::reasoning_effort`；`estimate_context_tokens` 声明。
-- `src/provider_openai.cpp`：`request_body` 增两参数（默认值保持旧字节形状）；SSE `on_data_` 在 choices 守卫**之前**读 `usage` 对象（含 input/output_tokens 折叠）；`estimate_context_tokens` 实现（UTF-8 首字节分类）。
-- `include/mini_agent/loop.hpp` / `src/loop.cpp`：`TurnOptions::usage_out` 指针；每轮 `ask_provider` 后合并进 `turn_usage`；提交段写回（仅 `usage_seen`）。
-- `include/mini_agent/config.hpp` / `src/config.cpp`：两字段 + JSON 读写 + env 覆盖 + `to_provider()` 透传 reasoning。
-- `include/mini_agent/tui.hpp` / `src/tui.cpp`：`StatusInputs` + `status_usage_segments`（纯函数可测）；`TurnResult::usage`；run_loop 读数状态（`context_reading`/`reset_usage_readings` lambda，估算带 `estimate_dirty` 惰性重算）；状态行在 auto-tools 之后、瞬时态之前拼接；`/context`、`/reasoning` 命令；`/config` 两行展示；模型选择两处复位；400 hint。
+- `src/provider/provider_openai.cpp`：`request_body` 增两参数（默认值保持旧字节形状）；SSE `on_data_` 在 choices 守卫**之前**读 `usage` 对象（含 input/output_tokens 折叠）；`estimate_context_tokens` 实现（UTF-8 首字节分类）。
+- `include/mini_agent/loop.hpp` / `src/core/loop.cpp`：`TurnOptions::usage_out` 指针；每轮 `ask_provider` 后合并进 `turn_usage`；提交段写回（仅 `usage_seen`）。
+- `include/mini_agent/config.hpp` / `src/core/config.cpp`：两字段 + JSON 读写 + env 覆盖 + `to_provider()` 透传 reasoning。
+- `include/mini_agent/tui.hpp` / `src/tui/tui.cpp`：`StatusInputs` + `status_usage_segments`（纯函数可测）；`TurnResult::usage`；run_loop 读数状态（`context_reading`/`reset_usage_readings` lambda，估算带 `estimate_dirty` 惰性重算）；状态行在 auto-tools 之后、瞬时态之前拼接；`/context`、`/reasoning` 命令；`/config` 两行展示；模型选择两处复位；400 hint。
 - `tests/mock_openai_server.py`：仅当请求带 `stream_options.include_usage` 时追加 usage chunk（123/45/168），对齐真实网关语义。
 
 ## 6. 异常与安全
@@ -192,7 +192,7 @@ ctx 读数的分母本质是输入侧容量，而 DashScope 系网关对 stage-1
 调研（[011 参考](../references/context-reasoning-survey.md) §1.5）确认 pi 的 1.0M 显示来自构建期固化的 models.dev v2 目录、运行时零验证。mini-agent 采纳同一数据源，但按本项目"实测源优先"排进兜底链、只做显示兜底：
 
 - **数据层**：`tools/refresh_models_dev.py`（开发工具、非门禁）抓 **v1 稳定目录** `https://models.dev/api.json`（5.9MB，MIT=anomalyco/models.dev，GitHub API 当日核实），裁剪为 TSV（`base_url\tmodel\tcontext\toutput`，base 去尾斜杠、(base,model) 去重、无 limit.context 的行丢弃），生成 `include/mini_agent/models_dev_data.hpp`（raw string 内嵌，7158 行 ≈466KB，二进制 +~0.5MB）。行数 <1000 拒写（上游 schema 漂移护栏）。v2 是 experimental 且需 provider→api→base_url 两层解引用，v1 的 provider.api 直接就是可匹配的 base_url，语义等价、体积小。
-- **查询层**：`src/models_dev.cpp::lookup_models_dev(base_url, model)`——启动后首次调用解析 TSV 进静态表，`base\tmodel\t` 前缀二分 + 精确 key 校验（id 前缀邻居不误命中），命中返回 `{context, output}`，任何缺参/未命中返回 nullopt。无网络、无新依赖。
+- **查询层**：`src/provider/models_dev.cpp::lookup_models_dev(base_url, model)`——启动后首次调用解析 TSV 进静态表，`base\tmodel\t` 前缀二分 + 精确 key 校验（id 前缀邻居不误命中），命中返回 `{context, output}`，任何缺参/未命中返回 nullopt。无网络、无新依赖。
 - **接入点（两处，均不改 config）**：① `context_reading()` 兜底链尾部——`config > caps > models.dev`，只给状态栏 ctx /max 分母补数，**永不覆盖权威 config**（目录是宣传口径：models.dev 报 1.0M、DashScope 实测输入校验 983616，config/probe 必须压过它）；② `/context` 无参行——config 未设且目录命中时追加 `catalog: 1.0M (1000000) · set it: /context 1000000`，把静默兜底变成可见可确认的建议。probe 语义不变（实测值仍可覆盖一切）。
 - reasoning 档位元数据本轮**不**接（v1 无 effort 表，需 v2 且属独立特性，见 §2.4 调研结论）。
 

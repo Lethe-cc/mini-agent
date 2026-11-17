@@ -69,33 +69,33 @@ endif()
 string(TIMESTAMP MINI_AGENT_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
 
 add_library(agent_core STATIC
-    src/chat.cpp
-    src/context.cpp
-    src/config.cpp
-    src/diff.cpp
-    src/highlight.cpp
-    src/log.cpp
-    src/md.cpp
-    src/md_geometry.cpp
-    src/loop.cpp
-    src/project.cpp
-    src/provider_openai.cpp
-    src/provider_parse.cpp
-    src/session.cpp
-    src/session_serde.cpp
-    src/mcp_rpc.cpp
-    src/mcp_stdio.cpp
-    src/mcp_http.cpp
-    src/models_dev.cpp
-    src/subprocess.cpp
-    src/tools.cpp
-    src/tools_file.cpp
-    src/tools_git.cpp
-    src/workspace.cpp
-    src/tui.cpp
-    src/tui_preview.cpp
-    src/tui_sidebar.cpp
-    src/tui_render.cpp
+    src/core/chat.cpp
+    src/core/context.cpp
+    src/core/config.cpp
+    src/core/loop.cpp
+    src/core/log.cpp
+    src/core/project.cpp
+    src/core/session.cpp
+    src/core/session_serde.cpp
+    src/provider/provider_openai.cpp
+    src/provider/provider_parse.cpp
+    src/provider/models_dev.cpp
+    src/tools/diff.cpp
+    src/tools/subprocess.cpp
+    src/tools/tools.cpp
+    src/tools/tools_file.cpp
+    src/tools/tools_git.cpp
+    src/tools/workspace.cpp
+    src/mcp/mcp_rpc.cpp
+    src/mcp/mcp_stdio.cpp
+    src/mcp/mcp_http.cpp
+    src/render/highlight.cpp
+    src/render/md.cpp
+    src/render/md_geometry.cpp
+    src/tui/tui.cpp
+    src/tui/tui_preview.cpp
+    src/tui/tui_sidebar.cpp
+    src/tui/tui_render.cpp
     third_party/md4c/md4c.c
 )
 target_include_directories(agent_core PUBLIC
@@ -143,7 +143,7 @@ target_compile_definitions(agent_core PRIVATE
     MINI_AGENT_BUILD_TIME="${MINI_AGENT_BUILD_TIME}")
 starter_options(agent_core)
 
-add_executable(mini-agent src/cli_main.cpp src/cli_common.cpp src/cli_commands.cpp)
+add_executable(mini-agent src/cli/cli_main.cpp src/cli/cli_common.cpp src/cli/cli_commands.cpp)
 target_link_libraries(mini-agent PRIVATE agent_core)
 target_compile_definitions(mini-agent PRIVATE
     MINI_AGENT_VERSION="${PROJECT_VERSION}"

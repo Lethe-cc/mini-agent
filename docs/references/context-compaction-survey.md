@@ -137,7 +137,7 @@ Zed 是 AI 原生编辑器（Rust/GPUI），agent 面板走 ACP（Agent Client P
 
 ## 4. 对照 mini-agent 基线（main `7436714`，0.8.0）
 
-已有：窗口三级链 config→gateway caps→models.dev（`src/tui.cpp:662-678`，详见 ctx-reasoning-survey §5）；reported 优先+`estimate_context_tokens` fallback（`:683-691`）；014 流前重试（瞬时错误）；015 溢出窄模式集（`src/provider_openai.cpp:480-497`，含 `range of input length`）+ 手动 `/compact`（有界转录、全量替换、失败不动历史）；v7.2 footer 状态保底。
+已有：窗口三级链 config→gateway caps→models.dev（`src/tui/tui.cpp:662-678`，详见 ctx-reasoning-survey §5）；reported 优先+`estimate_context_tokens` fallback（`:683-691`）；014 流前重试（瞬时错误）；015 溢出窄模式集（`src/provider/provider_openai.cpp:480-497`，含 `range of input length`）+ 手动 `/compact`（有界转录、全量替换、失败不动历史）；v7.2 footer 状态保底。
 
 缺口（按价值排序）：
 1. 计量口径：reported 优先在多轮累加 usage 下有 pi #115 同款跳变风险 → 锚点+尾部。

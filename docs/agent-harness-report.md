@@ -40,14 +40,14 @@
   - **多协议映射**：opencode 为每个协议单独维护映射表（openai-chat 直发 `reasoning_effort`、anthropic 走 `thinking.budget_tokens` 且预算必须 < max_tokens、DashScope 系 `enable_thinking`），见 [context-reasoning-survey.md §2.4](references/context-reasoning-survey.md)。
   - **能力元数据目录**：Codex CLI 从 `GET /models` 拉完整 ModelInfo 目录（含 `context_window`、`supported_reasoning_levels`）并磁盘缓存；opencode/Pi 用 models.dev 中央目录 + 随仓库快照兜底；mini-agent 用 `config.context_window`（权威）> 网关 caps > models.dev 内嵌目录（构建期 TSV 快照，零网络）的四级兜底链（[010-model-metadata.md](design/010-model-metadata.md)）。
   - **诚实原则**（四家调研的共同底线）：目录没数就不假装知道；未知模型给保守常数或 None，不猜窗口。
-- mini-agent 对应：[provider_openai.cpp](../src/provider_openai.cpp)（HTTPS + SSE）、[config.cpp](../src/config.cpp)、[models_dev.cpp](../src/models_dev.cpp)。
+- mini-agent 对应：[provider_openai.cpp](../src/provider/provider_openai.cpp)（HTTPS + SSE）、[config.cpp](../src/core/config.cpp)、[models_dev.cpp](../src/provider/models_dev.cpp)。
 
 ### 2.2 Agent 循环（Loop）
 
 - 职责：请求 → 解析回复（文本 / tool_calls / stop reason）→ 执行工具 → 结果回填历史 → 再请求，直到停止条件。
 - 停止条件是 harness 的"自主度旋钮"：模型不再调工具、达到 max turns、用户中断、成本/时间预算。
 - 编排形态的取舍回引 Anthropic 的 workflow/agent 二分：**循环本身可以很简单（mini-swe-agent 约百行），复杂度应放在工具接口而非编排花型**——"能简单就不要复杂"是其核心建议。
-- mini-agent 对应：[loop.cpp](../src/loop.cpp) + [chat.cpp](../src/chat.cpp)（`run_turn`），v2 工具调用循环见 008 设计。
+- mini-agent 对应：[loop.cpp](../src/core/loop.cpp) + [chat.cpp](../src/core/chat.cpp)（`run_turn`），v2 工具调用循环见 008 设计。
 
 ### 2.3 工具层（Tool Layer）
 
@@ -57,13 +57,13 @@ harness 区别于 chat 客户端的核心。三个子问题：
 [SWE-agent](https://github.com/SWE-agent/SWE-agent) 提出的概念（论文 [arXiv:2405.15793](https://arxiv.org/abs/2405.15793)）：工具接口要面向模型而非面向人——输出裁剪（只回必要行区间）、行号化编辑、失败时返回"可行动的提示"而非裸栈回溯。这是 harness 工程质量的最大杠杆点。
 
 **b) 编辑协议选型**
-[Aider](https://github.com/Aider-AI/aider) 的实践：search/replace block vs unified diff 两种模型可稳定产出的格式，配错误后的重试与自动修复流程；repo map 做上下文选取。mini-agent 对应 [diff.cpp](../src/diff.cpp)。
+[Aider](https://github.com/Aider-AI/aider) 的实践：search/replace block vs unified diff 两种模型可稳定产出的格式，配错误后的重试与自动修复流程；repo map 做上下文选取。mini-agent 对应 [diff.cpp](../src/tools/diff.cpp)。
 
 **c) 工具扩展：内置 vs 插件 vs MCP**
 两条主流边界划法（本仓库 [ADR 005](decisions/005-mcp-transport-abstraction.md)、[ADR 006](decisions/006-tool-approval-policy.md) 与 DeepSeek Harness 的对照结论）：
 - **DeepSeek Harness（dsh）**："Everything is a Plugin"（Cordis 运行时，UI/工具/行为皆插件）——扩展即代码。
 - **MCP 路线**：[Model Context Protocol](https://modelcontextprotocol.io)（开放规范，JSON-RPC 2.0）——扩展即协议对端。Host（LLM 应用）内建 Client 连接外部 Server；Server 提供 **Tools / Resources / Prompts** 三类能力，Client 可提供 Sampling / Roots / Elicitation。灵感同构于 Language Server Protocol（LSP）。
-- mini-agent 采用 MCP client 路线：stdio（换行分隔 JSON-RPC，stdout 仅协议消息）+ Streamable HTTP（每消息一个 POST，响应 JSON 或 SSE 二选一，`Mcp-Session-Id` 会话管理、`MCP-Protocol-Version` 头），版本基线 [2025-06-18 spec](https://modelcontextprotocol.io/specification/2025-06-18)，v2 明确裁剪 resources/prompts/sampling/elicitation/roots/progress/OAuth。实现：[mcp_stdio.cpp](../src/mcp_stdio.cpp)、[mcp_http.cpp](../src/mcp_http.cpp)、[mcp_rpc.cpp](../src/mcp_rpc.cpp)。
+- mini-agent 采用 MCP client 路线：stdio（换行分隔 JSON-RPC，stdout 仅协议消息）+ Streamable HTTP（每消息一个 POST，响应 JSON 或 SSE 二选一，`Mcp-Session-Id` 会话管理、`MCP-Protocol-Version` 头），版本基线 [2025-06-18 spec](https://modelcontextprotocol.io/specification/2025-06-18)，v2 明确裁剪 resources/prompts/sampling/elicitation/roots/progress/OAuth。实现：[mcp_stdio.cpp](../src/mcp/mcp_stdio.cpp)、[mcp_http.cpp](../src/mcp/mcp_http.cpp)、[mcp_rpc.cpp](../src/mcp/mcp_rpc.cpp)。
 
 **d) 工具的另一形态：CLI-as-tools**
 Anthropic 的 [Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) 与业界实践都指出：对终端 harness 而言，把 `rg`/`git`/编译器这类现成 CLI 直接当工具暴露，往往比为每个能力写结构化 tool 更省 token、更通用。本仓库登记于 [cli-as-tools.md](references/cli-as-tools.md)。
@@ -80,7 +80,7 @@ Anthropic 提出 "context engineering" 概念取代 "prompt engineering"（[原�
 ### 2.5 会话与状态持久化
 
 - 一进程一会话（mini-agent [ADR 001](decisions/001-session-model.md)）vs 跨会话恢复（Pi 的 `/new /resume /name /fork /compact` 命令族，为 5.5 扩展点既定形态）。
-- 原子写 + 文件锁（mini-agent [session.cpp](../src/session.cpp)，sessions 目录 0600）。
+- 原子写 + 文件锁（mini-agent [session.cpp](../src/core/session.cpp)，sessions 目录 0600）。
 - 失败轮不留脏历史：错误只进展示层，不进 Chat 存储（007 §5 设计，Aider"错误行进历史区而非弹界面"的变体）。
 
 ### 2.6 前端与交互层
@@ -90,7 +90,7 @@ CLI（非交互单次调用，`ask` 契约）、TUI（交互式多轮）、以�
 - 事件与渲染分离：SSE delta 进队列，主循环按帧抽干重绘（Codex）。
 - 状态行承载运行态（model/session/interrupt 提示，Ctrl-C 双层语义：先中断请求、再退出）。
 - streaming 期消息排队（Pi：Enter 排队 steering / Escape 停止）与 interrupt-and-redirect（Hermes：中断后输入行立即可用，直接下新指令）。
-- mini-agent 对应：[tui.cpp](../src/tui.cpp)、[cli_main.cpp](../src/cli_main.cpp)、Markdown 渲染 [md.cpp](../src/md.cpp)（[ADR 004](decisions/004-md4c-parser.md)）。
+- mini-agent 对应：[tui.cpp](../src/tui/tui.cpp)、[cli_main.cpp](../src/cli/cli_main.cpp)、Markdown 渲染 [md.cpp](../src/render/md.cpp)（[ADR 004](decisions/004-md4c-parser.md)）。
 
 ### 2.7 护栏、审批与安全（Guardrails）
 
@@ -105,7 +105,7 @@ harness 与"裸模型"最重要的区别之一（MCP 规范明确 "客户端 MUS
 ### 2.8 错误恢复与可观测性
 
 - 400/超时/断连的分类处理与重试；模型输出格式错误的修复回路（Aider）。
-- 日志分层（mini-agent [log.cpp](../src/log.cpp)）；状态栏三路证据回显（顶层/choices 两位置 + reasoning delta + usage 字段汇成显示，[context-reasoning-survey.md §2.6](references/context-reasoning-survey.md)）。
+- 日志分层（mini-agent [log.cpp](../src/core/log.cpp)）；状态栏三路证据回显（顶层/choices 两位置 + reasoning delta + usage 字段汇成显示，[context-reasoning-survey.md §2.6](references/context-reasoning-survey.md)）。
 
 ---
 
@@ -127,12 +127,12 @@ harness 与"裸模型"最重要的区别之一（MCP 规范明确 "客户端 MUS
 
 | 子系统 | 实现 | 成熟度 |
 |---|---|---|
-| Provider | [provider_openai.cpp](../src/provider_openai.cpp)（OpenAI 兼容 + SSE）+ [models_dev.cpp](../src/models_dev.cpp) 元数据 | v1 已验证，v4.2/v4.7 目录链落地 |
-| Agent 循环 | [loop.cpp](../src/loop.cpp) / [chat.cpp](../src/chat.cpp) | v1 chat + v2 工具循环（008） |
-| 工具层 | [tools.cpp](../src/tools.cpp)：内置 `run_bash` + MCP client（[mcp_stdio.cpp](../src/mcp_stdio.cpp) / [mcp_http.cpp](../src/mcp_http.cpp)） | v2 已落地 |
+| Provider | [provider_openai.cpp](../src/provider/provider_openai.cpp)（OpenAI 兼容 + SSE）+ [models_dev.cpp](../src/provider/models_dev.cpp) 元数据 | v1 已验证，v4.2/v4.7 目录链落地 |
+| Agent 循环 | [loop.cpp](../src/core/loop.cpp) / [chat.cpp](../src/core/chat.cpp) | v1 chat + v2 工具循环（008） |
+| 工具层 | [tools.cpp](../src/tools/tools.cpp)：内置 `run_bash` + MCP client（[mcp_stdio.cpp](../src/mcp/mcp_stdio.cpp) / [mcp_http.cpp](../src/mcp/mcp_http.cpp)） | v2 已落地 |
 | 审批护栏 | ADR 006 默认 ask、ADR 008 git 分级 | 已落地 |
-| 会话持久化 | [session.cpp](../src/session.cpp) 原子写 + 锁 | v1 已验证 |
-| 前端 | [cli_main.cpp](../src/cli_main.cpp) + [tui.cpp](../src/tui.cpp)（自绘帧模型、streaming 排队、Ctrl-C 双层） | v1/v1.x 已验证 |
+| 会话持久化 | [session.cpp](../src/core/session.cpp) 原子写 + 锁 | v1 已验证 |
+| 前端 | [cli_main.cpp](../src/cli/cli_main.cpp) + [tui.cpp](../src/tui/tui.cpp)（自绘帧模型、streaming 排队、Ctrl-C 双层） | v1/v1.x 已验证 |
 | 上下文压缩 | 仅显示 ctx%，无 compaction | **与四家参考组的最大缺口**（调研 §3 结论 2） |
 | 跨会话命令族 | `/new /resume /fork /compact` 形态 | v2/v4 规划中 |
 
