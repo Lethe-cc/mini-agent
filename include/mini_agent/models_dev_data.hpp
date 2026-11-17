@@ -6,7 +6,7 @@
 // models.dev v1 context-window catalog, compact TSV:
 //   base_url \t model_id \t context_tokens \t output_tokens(0=unknown)
 // Source: https://models.dev/api.json (MIT, anomalyco/models.dev)
-// Rows: 8092
+// Rows: 8107
 namespace mini_agent {
 
 #if defined(__clang__)
@@ -817,6 +817,7 @@ https://api.aixy-gateway.com/v1	openai/gpt-6-sol	1050000	128000
 https://api.aixy-gateway.com/v1	openai/gpt-6.1-sol	1050000	128000
 https://api.ambient.xyz/v1	ambient/large	202752	202752
 https://api.ambient.xyz/v1	ambient/small	101072	101072
+https://api.ambient.xyz/v1	deepseek/deepseek-v4.1-flash-1017	1048576	384000
 https://api.ambient.xyz/v1	minimax/minimax-m3	131072	131072
 https://api.ambient.xyz/v1	qwen/qwen3-30b-a3b-instruct-2507	131072	32768
 https://api.ambient.xyz/v1	qwen/qwen3.6-27b	32768	8192
@@ -2362,7 +2363,7 @@ https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-flash-vision-exp	1048575	94
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-pro	1048576	393216
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-pro-0813	1048576	943718
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash	1048576	393216
-https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-1017	1048576	393216
+https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-1017	1048576	943718
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-1017-fast	1048576	262144
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-1017-ultrafast	1048576	1048576
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-fast	1048576	32768
@@ -2440,7 +2441,7 @@ https://api.kilo.ai/api/gateway	meta-llama/llama-4-maverick	524288	32768
 https://api.kilo.ai/api/gateway	meta-llama/llama-4-scout	327680	16384
 https://api.kilo.ai/api/gateway	meta-llama/llama-guard-4-12b	163840	16384
 https://api.kilo.ai/api/gateway	meta/muse-ember	1048576	943718
-https://api.kilo.ai/api/gateway	meta/muse-glimmer-30b	131072	16384
+https://api.kilo.ai/api/gateway	meta/muse-glimmer-30b	131072	117964
 https://api.kilo.ai/api/gateway	meta/muse-spark-1.1	1048576	943718
 https://api.kilo.ai/api/gateway	meta/muse-spark-1.2	1048576	943718
 https://api.kilo.ai/api/gateway	meta/muse-spark-1.2-contributor	1048576	943718
@@ -2591,7 +2592,7 @@ https://api.kilo.ai/api/gateway	openai/gpt-audio	128000	16384
 https://api.kilo.ai/api/gateway	openai/gpt-audio-mini	128000	16384
 https://api.kilo.ai/api/gateway	openai/gpt-chat-latest	400000	128000
 https://api.kilo.ai/api/gateway	openai/gpt-oss-120b	131072	65536
-https://api.kilo.ai/api/gateway	openai/gpt-oss-20b	131072	65536
+https://api.kilo.ai/api/gateway	openai/gpt-oss-20b	131072	117964
 https://api.kilo.ai/api/gateway	openai/gpt-oss-safeguard-120b	128000	16000
 https://api.kilo.ai/api/gateway	openai/gpt-oss-safeguard-20b	131072	65536
 https://api.kilo.ai/api/gateway	openai/o1	200000	100000
@@ -2643,7 +2644,7 @@ https://api.kilo.ai/api/gateway	qwen/qwen3-vl-8b-instruct	262144	235929
 https://api.kilo.ai/api/gateway	qwen/qwen3.5-122b-a10b	262144	65536
 https://api.kilo.ai/api/gateway	qwen/qwen3.5-27b	262144	81920
 https://api.kilo.ai/api/gateway	qwen/qwen3.5-35b-a3b	262144	81920
-https://api.kilo.ai/api/gateway	qwen/qwen3.5-397b-a17b	262144	81920
+https://api.kilo.ai/api/gateway	qwen/qwen3.5-397b-a17b	256000	64000
 https://api.kilo.ai/api/gateway	qwen/qwen3.5-9b	262144	40960
 https://api.kilo.ai/api/gateway	qwen/qwen3.5-flash	1000000	64000
 https://api.kilo.ai/api/gateway	qwen/qwen3.5-flash-02-23	1000000	65536
@@ -2665,6 +2666,7 @@ https://api.kilo.ai/api/gateway	qwen/qwen3.8-max-0902	1000000	131072
 https://api.kilo.ai/api/gateway	qwen/qwen3.8-max-prime	1000000	131072
 https://api.kilo.ai/api/gateway	qwen/qwen3.8-omni-flash	1000000	131072
 https://api.kilo.ai/api/gateway	qwen/qwen4-max	1000000	131072
+https://api.kilo.ai/api/gateway	recursive/flint-v1.0	262144	262144
 https://api.kilo.ai/api/gateway	reflection/beam-1.0-501b-a23b	1048576	943718
 https://api.kilo.ai/api/gateway	reflection/beam-free	1048576	131072
 https://api.kilo.ai/api/gateway	rekaai/reka-edge	16384	14745
@@ -2827,7 +2829,6 @@ https://api.lkeap.cloud.tencent.com/coding/v3	hunyuan-turbos	131072	16384
 https://api.lkeap.cloud.tencent.com/coding/v3	kimi-k2.5	262144	32768
 https://api.lkeap.cloud.tencent.com/coding/v3	minimax-m2.5	204800	32768
 https://api.lkeap.cloud.tencent.com/coding/v3	tc-code-latest	131072	16384
-https://api.llmgateway.io/v1	alibaba/deepseek-v4-flash	1000000	393216
 https://api.llmgateway.io/v1	alibaba/deepseek-v4-flash-0731	1000000	393216
 https://api.llmgateway.io/v1	alibaba/deepseek-v4-pro	1000000	393216
 https://api.llmgateway.io/v1	alibaba/deepseek-v4.1-flash	1000000	393216
@@ -2862,6 +2863,7 @@ https://api.llmgateway.io/v1	alibaba/qwen3.8-flash	983616	131072
 https://api.llmgateway.io/v1	alibaba/qwen3.8-max	983616	131072
 https://api.llmgateway.io/v1	alibaba/qwen3.8-omni-flash	983616	131072
 https://api.llmgateway.io/v1	alibaba/qwen35-397b-a17b	262144	65536
+https://api.llmgateway.io/v1	alibaba/qwen4-max	983616	131072
 https://api.llmgateway.io/v1	anthropic/claude-fable-5	1000000	128000
 https://api.llmgateway.io/v1	anthropic/claude-fable-5-1	1000000	128000
 https://api.llmgateway.io/v1	anthropic/claude-fable-5-2	1000000	128000
@@ -2908,6 +2910,10 @@ https://api.llmgateway.io/v1	aws-mantle/gpt-5.6-luna	921600	128000
 https://api.llmgateway.io/v1	aws-mantle/gpt-5.6-sol	921600	128000
 https://api.llmgateway.io/v1	aws-mantle/gpt-5.6-terra	921600	128000
 https://api.llmgateway.io/v1	aws-mantle/gpt-6-astra	1050000	128000
+https://api.llmgateway.io/v1	aws-mantle/gpt-6-luna	921600	128000
+https://api.llmgateway.io/v1	aws-mantle/gpt-6-sol	921600	128000
+https://api.llmgateway.io/v1	aws-mantle/gpt-6.1-sol	921600	128000
+https://api.llmgateway.io/v1	aws-mantle/gpt-6.1-terra	921600	128000
 https://api.llmgateway.io/v1	azure-anthropic/claude-fable-5	1000000	128000
 https://api.llmgateway.io/v1	azure-anthropic/claude-fable-5-1	1000000	128000
 https://api.llmgateway.io/v1	azure-anthropic/claude-opus-4-6	1000000	128000
@@ -2949,7 +2955,6 @@ https://api.llmgateway.io/v1	azure/gpt-6.1-terra	1050000	128000
 https://api.llmgateway.io/v1	azure/gpt-oss-120b	131072	32768
 https://api.llmgateway.io/v1	azure/grok-4-1-fast-reasoning	128000	128000
 https://api.llmgateway.io/v1	azure/grok-4-3	200000	8192
-https://api.llmgateway.io/v1	baidu/deepseek-v4-flash	1048576	131072
 https://api.llmgateway.io/v1	baidu/deepseek-v4-flash-0731	1048576	131072
 https://api.llmgateway.io/v1	baidu/deepseek-v4-pro	1048576	131072
 https://api.llmgateway.io/v1	baidu/deepseek-v4.1-flash	1048576	393216
@@ -2961,7 +2966,6 @@ https://api.llmgateway.io/v1	baidu/glm-5.3	1048576	131072
 https://api.llmgateway.io/v1	baidu/glm-5.3-flash	1048576	131072
 https://api.llmgateway.io/v1	baidu/kimi-k3	1048576	1048576
 https://api.llmgateway.io/v1	beam-1.0-501b-a23b	1048576	131072
-https://api.llmgateway.io/v1	bytedance/deepseek-v4-flash	1048576	393216
 https://api.llmgateway.io/v1	bytedance/deepseek-v4-flash-0731	1048576	393216
 https://api.llmgateway.io/v1	bytedance/deepseek-v4-pro	1048576	393216
 https://api.llmgateway.io/v1	bytedance/glm-5.2	1024000	128000
@@ -2994,7 +2998,6 @@ https://api.llmgateway.io/v1	claude-sonnet-4-5-20250929	200000	64000
 https://api.llmgateway.io/v1	claude-sonnet-4-6	1000000	64000
 https://api.llmgateway.io/v1	claude-sonnet-5	1000000	1000000
 https://api.llmgateway.io/v1	claude-sonnet-5-5	1000000	128000
-https://api.llmgateway.io/v1	cloudflare/deepseek-v4-flash	1048576	393216
 https://api.llmgateway.io/v1	cloudflare/deepseek-v4-flash-0731	1048576	393216
 https://api.llmgateway.io/v1	cloudflare/deepseek-v4-pro	1048576	393216
 https://api.llmgateway.io/v1	cloudflare/deepseek-v4.1-flash-1017	1048576	393216
@@ -3013,13 +3016,16 @@ https://api.llmgateway.io/v1	custom	128000	16384
 https://api.llmgateway.io/v1	deepinfra/deepseek-v3.2	160000	65536
 https://api.llmgateway.io/v1	deepinfra/deepseek-v4-flash	1000000	393216
 https://api.llmgateway.io/v1	deepinfra/deepseek-v4-flash-0731	1000000	393216
+https://api.llmgateway.io/v1	deepinfra/deepseek-v4-flash-vision-exp	1048576	262144
 https://api.llmgateway.io/v1	deepinfra/deepseek-v4-pro	1048576	64000
 https://api.llmgateway.io/v1	deepinfra/deepseek-v4.1-flash	1048576	393216
 https://api.llmgateway.io/v1	deepinfra/deepseek-v4.1-flash-1017	1048576	393216
 https://api.llmgateway.io/v1	deepinfra/deepseek-v4.1-flash-latest	1048576	393216
 https://api.llmgateway.io/v1	deepinfra/gemma-4-26b-a4b-it	262144	32768
 https://api.llmgateway.io/v1	deepinfra/gemma-4-31b-it	262144	32768
+https://api.llmgateway.io/v1	deepinfra/glm-5.3-flash	1048576	131072
 https://api.llmgateway.io/v1	deepinfra/granite-4.2-8b	131072	117964
+https://api.llmgateway.io/v1	deepinfra/hy4-preview	1048576	131072
 https://api.llmgateway.io/v1	deepinfra/ling-3.0-flash	262144	32768
 https://api.llmgateway.io/v1	deepinfra/ling-3.0-flash-vl	131072	32768
 https://api.llmgateway.io/v1	deepinfra/mimo-v2.6-flash	1048576	65536
@@ -3049,10 +3055,14 @@ https://api.llmgateway.io/v1	entrim/deepseek-v4.1-flash-latest	1048576	1048576
 https://api.llmgateway.io/v1	entrim/glm-5.3	1048576	131072
 https://api.llmgateway.io/v1	entrim/glm-5.3-flash	1048576	131072
 https://api.llmgateway.io/v1	fireworks/deepseek-v4.1-flash	1048576	393216
+https://api.llmgateway.io/v1	fireworks/deepseek-v4.1-flash-1017	1048576	393216
+https://api.llmgateway.io/v1	fireworks/deepseek-v4.1-flash-latest	1048576	393216
 https://api.llmgateway.io/v1	fireworks/glm-5.3	1048576	131072
 https://api.llmgateway.io/v1	fireworks/glm-5.3-flash	1048576	131072
 https://api.llmgateway.io/v1	fireworks/kimi-k3	1040384	1040384
 https://api.llmgateway.io/v1	fireworks/kimi-k3-fast	1040384	1040384
+https://api.llmgateway.io/v1	fireworks/kimi-k3.1-pro	1040384	1040384
+https://api.llmgateway.io/v1	fireworks/muse-spark-open	1048576	943718
 https://api.llmgateway.io/v1	flexai/deepseek-v4-flash	1048576	384000
 https://api.llmgateway.io/v1	flexai/deepseek-v4.1-flash-1017	1048576	384000
 https://api.llmgateway.io/v1	flexai/deepseek-v4.1-flash-latest	1048576	1048576
@@ -3175,6 +3185,7 @@ https://api.llmgateway.io/v1	hy-mt2-plus	8192	8192
 https://api.llmgateway.io/v1	hy3	262144	128000
 https://api.llmgateway.io/v1	hy4-preview	1048576	64000
 https://api.llmgateway.io/v1	inference.net/deepseek-v4-flash	1000000	384000
+https://api.llmgateway.io/v1	inference.net/deepseek-v4.1-flash	1040000	393216
 https://api.llmgateway.io/v1	inference.net/deepseek-v4.1-flash-1017	262144	131072
 https://api.llmgateway.io/v1	inference.net/deepseek-v4.1-flash-cyber	1040000	393216
 https://api.llmgateway.io/v1	inference.net/deepseek-v4.1-flash-latest	262144	131072
@@ -3270,7 +3281,6 @@ https://api.llmgateway.io/v1	muse-spark-open	1048576	131072
 https://api.llmgateway.io/v1	muse-wonder-1.0	1048576	131072
 https://api.llmgateway.io/v1	nebius/minimax-m3.1-flash	1048576	1048576
 https://api.llmgateway.io/v1	nemotron-3-ultra-550b	1048576	128000
-https://api.llmgateway.io/v1	novita/deepseek-v4-flash	1050000	393216
 https://api.llmgateway.io/v1	novita/deepseek-v4-flash-0731	1050000	393216
 https://api.llmgateway.io/v1	novita/deepseek-v4.1-flash	1048576	393216
 https://api.llmgateway.io/v1	novita/deepseek-v4.1-flash-1017	1048576	393216
@@ -3370,11 +3380,7 @@ https://api.llmgateway.io/v1	qwen3.8-max	1000000	1000000
 https://api.llmgateway.io/v1	qwen3.8-omni-flash	983616	131072
 https://api.llmgateway.io/v1	qwen35-397b-a17b	262144	65536
 https://api.llmgateway.io/v1	qwen4-max	983616	262144
-https://api.llmgateway.io/v1	ranoai/deepseek-v4-flash	1000000	393216
 https://api.llmgateway.io/v1	reka-ai/deepseek-v4.1-flash	1048576	393216
-https://api.llmgateway.io/v1	reka-ai/deepseek-v4.1-flash-1017	1048576	393216
-https://api.llmgateway.io/v1	reka-ai/deepseek-v4.1-flash-latest	1048576	393216
-https://api.llmgateway.io/v1	reka-ai/glm-5.3	1048576	262144
 https://api.llmgateway.io/v1	reka-ai/glm-5.3-flash	1048576	262144
 https://api.llmgateway.io/v1	reka-ai/reka-edge-2603	16384	16384
 https://api.llmgateway.io/v1	reka-edge-2603	16384	16384
@@ -3411,6 +3417,7 @@ https://api.llmgateway.io/v1	scx-ai-gp/glm-5.3-flash	1048576	131072
 https://api.llmgateway.io/v1	scx-ai-gp/kimi-k2.7-code	262144	262144
 https://api.llmgateway.io/v1	scx-ai-gp/kimi-k3	1048576	1048576
 https://api.llmgateway.io/v1	scx-ai-gp/kimi-k3.1-pro	1048576	1048576
+https://api.llmgateway.io/v1	scx-ai-gp/kimi-k3.1-pro-highspeed	1000000	1000000
 https://api.llmgateway.io/v1	scx-ai-gp/qwen3.8-max	1000000	131072
 https://api.llmgateway.io/v1	scx-ai/gpt-oss-120b	131072	32768
 https://api.llmgateway.io/v1	scx-ai/minimax-m2.7	196608	196608
@@ -3422,7 +3429,6 @@ https://api.llmgateway.io/v1	seed-2-0-pro-260328	262144	262144
 https://api.llmgateway.io/v1	sonar	130000	4096
 https://api.llmgateway.io/v1	step-3.7-flash	262144	256000
 https://api.llmgateway.io/v1	step-5-preview	1000000	1000000
-https://api.llmgateway.io/v1	tencent/deepseek-v4-flash	1000000	393216
 https://api.llmgateway.io/v1	tencent/deepseek-v4-flash-0731	1000000	393216
 https://api.llmgateway.io/v1	tencent/deepseek-v4-pro	1000000	393216
 https://api.llmgateway.io/v1	tencent/deepseek-v4.1-flash	1000000	393216
@@ -3449,6 +3455,7 @@ https://api.llmgateway.io/v1	tencent/mimo-v2.6-pro	1000000	131072
 https://api.llmgateway.io/v1	tencent/minimax-m2.7	200000	128000
 https://api.llmgateway.io/v1	tencent/minimax-m3	1000000	131072
 https://api.llmgateway.io/v1	tencent/step-5-preview	1000000	65536
+https://api.llmgateway.io/v1	together-ai/beam-1.0-501b-a23b	1048576	131072
 https://api.llmgateway.io/v1	together-ai/deepseek-v4-pro	1048576	163840
 https://api.llmgateway.io/v1	together-ai/deepseek-v4.1-flash	1048576	393216
 https://api.llmgateway.io/v1	together-ai/deepseek-v4.1-flash-1017	1048576	393216
@@ -3458,8 +3465,10 @@ https://api.llmgateway.io/v1	together-ai/glm-5.3	1048576	943717
 https://api.llmgateway.io/v1	together-ai/glm-5.3-flash	1048576	943717
 https://api.llmgateway.io/v1	together-ai/gpt-oss-120b	131072	32768
 https://api.llmgateway.io/v1	together-ai/kimi-k3	1000000	1000000
+https://api.llmgateway.io/v1	together-ai/kimi-k3.1-pro	1048576	1048576
 https://api.llmgateway.io/v1	together-ai/minimax-m3.1-flash	1048576	1048576
 https://api.llmgateway.io/v1	together-ai/muse-glimmer-30b	131072	117964
+https://api.llmgateway.io/v1	together-ai/muse-spark-open	1048576	943718
 https://api.llmgateway.io/v1	vertex-anthropic/claude-haiku-4-5	200000	64000
 https://api.llmgateway.io/v1	vertex-anthropic/claude-opus-4-5-20251101	200000	32000
 https://api.llmgateway.io/v1	vertex-anthropic/claude-opus-4-6	1000000	128000
@@ -3481,6 +3490,7 @@ https://api.llmgateway.io/v1	xai/grok-4-7	500000	500000
 https://api.llmgateway.io/v1	xai/grok-build-0-1	256000	256000
 https://api.llmgateway.io/v1	xiaomi/mimo-v2.6-flash	1000000	131072
 https://api.llmgateway.io/v1	xiaomi/mimo-v2.6-pro	1000000	131072
+https://api.llmgateway.io/v1	xiaomi/mimo-v2.6-pro-ultraspeed	1000000	131072
 https://api.llmgateway.io/v1	zai/glm-4-32b-0414-128k	128000	128000
 https://api.llmgateway.io/v1	zai/glm-4.5	128000	98304
 https://api.llmgateway.io/v1	zai/glm-4.5-air	128000	98304
@@ -3497,6 +3507,7 @@ https://api.llmgateway.io/v1	zai/glm-5.1	200000	128000
 https://api.llmgateway.io/v1	zai/glm-5.2	1000000	128000
 https://api.llmgateway.io/v1	zai/glm-5.3	1000000	128000
 https://api.llmgateway.io/v1	zai/glm-5.3-flash	1048576	131072
+https://api.llmgateway.io/v1	zai/glm-5.3-flashx	1048576	131072
 https://api.llmtech.eu/v1	nvidia/Qwen3.8-27B-NVFP4	262144	32768
 https://api.logits.com/v1	deepseek/deepseek-v4.1-flash	1048576	393216
 https://api.logits.com/v1	moonshotai/kimi-k3.1-pro	1048576	1048576
@@ -5637,7 +5648,7 @@ https://inference.baseten.co/v1	deepseek-ai/DeepSeek-V4.1-Flash-1017	1048576	262
 https://inference.baseten.co/v1	deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast	1048576	262144
 https://inference.baseten.co/v1	deepseek-ai/DeepSeek-V4.1-Flash-Fast	1048576	32768
 https://inference.baseten.co/v1	moonshotai/Kimi-K3	1048576	262144
-https://inference.baseten.co/v1	moonshotai/Kimi-K3.1-Pro	1000000	262144
+https://inference.baseten.co/v1	moonshotai/Kimi-K3.1-Pro	1048576	262144
 https://inference.baseten.co/v1	nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B	202800	202800
 https://inference.baseten.co/v1	openai/gpt-oss-120b	128072	128072
 https://inference.baseten.co/v1	zai-org/GLM-5.2	1048576	262144
@@ -5860,74 +5871,78 @@ https://jzstoken.com/api/v1	kimi-k3.1-pro	1048576	1048576
 https://jzstoken.com/api/v1	qwen3.8-max	1000000	131072
 https://kenari.id/v1	beam-1-0:free	262144	131072
 https://kenari.id/v1	claude-fable-5	1000000	128000
+https://kenari.id/v1	claude-haiku-5-5	1000000	128000
 https://kenari.id/v1	claude-opus-4-7	1000000	128000
 https://kenari.id/v1	claude-opus-4-8	1000000	128000
 https://kenari.id/v1	claude-opus-5	1000000	128000
+https://kenari.id/v1	claude-opus-5-5	1000000	128000
 https://kenari.id/v1	claude-sonnet-4-6	1000000	64000
 https://kenari.id/v1	claude-sonnet-5	1000000	128000
+https://kenari.id/v1	claude-sonnet-5-5	1000000	128000
 https://kenari.id/v1	deepseek-v4-1-flash	1000000	384000
 https://kenari.id/v1	deepseek-v4-flash	1000000	384000
-https://kenari.id/v1	deepseek-v4-flash:free	1000000	384000
 https://kenari.id/v1	deepseek-v4-pro	1000000	384000
-https://kenari.id/v1	gemini-2-5-flash	1048576	65536
-https://kenari.id/v1	gemini-2-5-flash-lite	1048576	65536
 https://kenari.id/v1	gemini-3-1-flash-lite	1048576	65536
-https://kenari.id/v1	gemini-3-1-flash-tts	8192	16384
 https://kenari.id/v1	gemini-3-1-pro	1048576	65536
-https://kenari.id/v1	gemini-3-5-flash	1048576	65536
 https://kenari.id/v1	gemini-3-6-flash	1048576	65536
 https://kenari.id/v1	gemini-3-7-flash	1048576	65536
+https://kenari.id/v1	gemini-3-8-flash	1048576	65536
 https://kenari.id/v1	gemma-4-31b-it	262144	32768
+https://kenari.id/v1	glm-4-6v-flash:free	128000	32768
 https://kenari.id/v1	glm-4-7-flash:free	200000	131072
-https://kenari.id/v1	glm-5-1	200000	131072
 https://kenari.id/v1	glm-5-2	1000000	131072
 https://kenari.id/v1	glm-5-3	1000000	131072
 https://kenari.id/v1	glm-5-3-flash	1000000	131072
-https://kenari.id/v1	gpt-5-4-mini	400000	128000
-https://kenari.id/v1	gpt-5-5	1050000	128000
 https://kenari.id/v1	gpt-5-6-luna	1050000	128000
 https://kenari.id/v1	gpt-5-6-sol	1050000	128000
-https://kenari.id/v1	gpt-5-6-terra	1050000	128000
+https://kenari.id/v1	gpt-6-1-sol	1050000	128000
+https://kenari.id/v1	gpt-6-1-terra	1050000	128000
+https://kenari.id/v1	gpt-6-astra	1050000	128000
+https://kenari.id/v1	gpt-6-luna	1050000	128000
+https://kenari.id/v1	gpt-6-sol	1050000	128000
 https://kenari.id/v1	gpt-image-2	272000	16384
 https://kenari.id/v1	gpt-oss-120b	131072	131072
 https://kenari.id/v1	gpt-oss-20b	131072	131072
 https://kenari.id/v1	grok-4-5	500000	500000
 https://kenari.id/v1	grok-4-6	500000	500000
-https://kenari.id/v1	grok-build-0-1	256000	256000
+https://kenari.id/v1	grok-4-7	500000	500000
 https://kenari.id/v1	grok-imagine-image	16000	0
 https://kenari.id/v1	grok-imagine-image-2-0	64000	0
-https://kenari.id/v1	hy3	256000	128000
-https://kenari.id/v1	hy3:free	256000	128000
+https://kenari.id/v1	grok-imagine-image-quality	16000	0
+https://kenari.id/v1	hy3	196608	128000
+https://kenari.id/v1	hy4	1048576	65536
 https://kenari.id/v1	hy4-flash	1048576	65536
 https://kenari.id/v1	hy4-flash:free	1048576	65536
 https://kenari.id/v1	kimi-k2-6	262144	262144
-https://kenari.id/v1	kimi-k2-6:free	262144	262144
 https://kenari.id/v1	kimi-k2-7-code	262144	262144
-https://kenari.id/v1	kimi-k2-7-code:free	262144	262144
 https://kenari.id/v1	kimi-k3	1048576	1048576
-https://kenari.id/v1	mimo-v2-5	1048576	131072
-https://kenari.id/v1	mimo-v2-5-pro	1048576	131072
-https://kenari.id/v1	mimo-v2-5:free	1048576	131072
+https://kenari.id/v1	kimi-k3-1-pro	1048576	1048576
+https://kenari.id/v1	longcat-2-5:free	1000000	262144
+https://kenari.id/v1	lyria-3-5	131072	65536
 https://kenari.id/v1	minimax-m2-7	204800	131072
 https://kenari.id/v1	minimax-m2-7-highspeed	204800	131072
 https://kenari.id/v1	minimax-m3	1048576	512000
-https://kenari.id/v1	mistral-large:free	262144	262144
-https://kenari.id/v1	mistral-medium-3-5:free	262144	262144
+https://kenari.id/v1	minimax-m3-1-flash	1000000	512000
+https://kenari.id/v1	muse-ember-1-0	1048576	524288
+https://kenari.id/v1	muse-glimmer-30b:free	131072	131072
+https://kenari.id/v1	muse-spark-1-2	1048576	131072
 https://kenari.id/v1	muse-spark-1-2-contributor	1048576	131072
+https://kenari.id/v1	muse-spark-1-3	1048576	131072
 https://kenari.id/v1	muse-spark-1-3-contributor	1048576	131072
+https://kenari.id/v1	muse-wonder-1-0	1007997	131072
 https://kenari.id/v1	muse-wonder-full-1-0	1048576	131072
 https://kenari.id/v1	nano-banana-2	131072	32768
 https://kenari.id/v1	nano-banana-2-lite	65536	4096
 https://kenari.id/v1	nano-banana-pro	65536	32768
-https://kenari.id/v1	nemotron-3-nano-30b-a3b	262144	262144
 https://kenari.id/v1	nemotron-3-super-120b-a12b	262144	262144
-https://kenari.id/v1	nemotron-3-super-120b-a12b:free	262144	262144
 https://kenari.id/v1	nemotron-3-ultra-550b-a55b	1000000	128000
+https://kenari.id/v1	nemotron-3-ultra-550b-a55b:free	1000000	128000
 https://kenari.id/v1	particle-1:free	1048576	131072
 https://kenari.id/v1	qwen3-7-plus	1000000	64000
 https://kenari.id/v1	qwen3-8-max	1000000	131072
+https://kenari.id/v1	solar-mini4:free	524288	131072
 https://kenari.id/v1	step-3-7-flash	256000	256000
-https://kenari.id/v1	step-3-7-flash:free	256000	256000
+https://kenari.id/v1	step-5-preview	1000000	1000000
 https://kenari.id/v1	whisper-large-v3-turbo	448	448
 https://korouter.ai/v1	claude-fable-5	1000000	128000
 https://korouter.ai/v1	claude-fable-5.1	1000000	128000
@@ -7038,7 +7053,7 @@ https://openrouter.ai/api/v1	deepseek/deepseek-v4-flash-vision-exp	1048576	94371
 https://openrouter.ai/api/v1	deepseek/deepseek-v4-pro	1048576	393216
 https://openrouter.ai/api/v1	deepseek/deepseek-v4-pro-0813	1048576	943718
 https://openrouter.ai/api/v1	deepseek/deepseek-v4.1-flash	1048576	393216
-https://openrouter.ai/api/v1	deepseek/deepseek-v4.1-flash-1017	1048576	393216
+https://openrouter.ai/api/v1	deepseek/deepseek-v4.1-flash-1017	1048576	943718
 https://openrouter.ai/api/v1	dots-studio/dots-3-note-preview:free	512000	460800
 https://openrouter.ai/api/v1	elorian/glimpse	262144	256000
 https://openrouter.ai/api/v1	fireworks/ember-1	1048576	943718
@@ -7102,7 +7117,7 @@ https://openrouter.ai/api/v1	meta-llama/llama-4-maverick	524288	32768
 https://openrouter.ai/api/v1	meta-llama/llama-4-scout	327680	16384
 https://openrouter.ai/api/v1	meta-llama/llama-guard-4-12b	163840	16384
 https://openrouter.ai/api/v1	meta/muse-ember	1048576	943718
-https://openrouter.ai/api/v1	meta/muse-glimmer-30b	131072	16384
+https://openrouter.ai/api/v1	meta/muse-glimmer-30b	131072	117964
 https://openrouter.ai/api/v1	meta/muse-spark-1.1	1048576	943718
 https://openrouter.ai/api/v1	meta/muse-spark-1.2	1048576	943718
 https://openrouter.ai/api/v1	meta/muse-spark-1.2-contributor	1048576	943718
@@ -7158,7 +7173,7 @@ https://openrouter.ai/api/v1	nvidia/nemotron-3-super-120b-a12b	262144	16384
 https://openrouter.ai/api/v1	nvidia/nemotron-3-ultra-550b-a55b	262144	182520
 https://openrouter.ai/api/v1	nvidia/nemotron-3-ultra-550b-a55b:free	1000000	65536
 https://openrouter.ai/api/v1	nvidia/nemotron-3.5-content-safety	131072	117964
-https://openrouter.ai/api/v1	nvidia/nemotron-3.5-lightning	262144	235929
+https://openrouter.ai/api/v1	nvidia/nemotron-3.5-lightning	1048576	235929
 https://openrouter.ai/api/v1	nvidia/nemotron-3.5-lightning:free	1000000	65536
 https://openrouter.ai/api/v1	nvidia/nemotron-3.5-super-vl	1048576	235929
 https://openrouter.ai/api/v1	nvidia/nemotron-3.5-super-vl:free	1000000	131072
@@ -7215,7 +7230,7 @@ https://openrouter.ai/api/v1	openai/gpt-audio	128000	16384
 https://openrouter.ai/api/v1	openai/gpt-audio-mini	128000	16384
 https://openrouter.ai/api/v1	openai/gpt-chat-latest	400000	128000
 https://openrouter.ai/api/v1	openai/gpt-oss-120b	131072	65536
-https://openrouter.ai/api/v1	openai/gpt-oss-20b	131072	65536
+https://openrouter.ai/api/v1	openai/gpt-oss-20b	131072	117964
 https://openrouter.ai/api/v1	openai/gpt-oss-safeguard-20b	131072	65536
 https://openrouter.ai/api/v1	openai/o3	200000	100000
 https://openrouter.ai/api/v1	openai/o3-pro	200000	100000
@@ -7256,7 +7271,7 @@ https://openrouter.ai/api/v1	qwen/qwen3-vl-8b-instruct	262144	235929
 https://openrouter.ai/api/v1	qwen/qwen3.5-122b-a10b	262144	65536
 https://openrouter.ai/api/v1	qwen/qwen3.5-27b	262144	81920
 https://openrouter.ai/api/v1	qwen/qwen3.5-35b-a3b	262144	81920
-https://openrouter.ai/api/v1	qwen/qwen3.5-397b-a17b	262144	81920
+https://openrouter.ai/api/v1	qwen/qwen3.5-397b-a17b	262144	64000
 https://openrouter.ai/api/v1	qwen/qwen3.5-9b	262144	40960
 https://openrouter.ai/api/v1	qwen/qwen3.5-flash-02-23	1000000	65536
 https://openrouter.ai/api/v1	qwen/qwen3.5-plus-02-15	1000000	65536
