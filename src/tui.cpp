@@ -46,6 +46,7 @@
 #include <thread>
 #include <vector>
 
+#include "tui_preview.hpp"
 #include "tui_screen.hpp"
 
 namespace mini_agent::tui {
@@ -1013,74 +1014,6 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     // 018 (design 018): loader extracted from 011's preview_workspace_file;
     // validation semantics (workspace bounds, regular file, binary reject)
     // unchanged. The body is kept so the pane can re-render on resize.
-    auto load_preview_body = [&](const std::string& path_raw, std::string* body, std::string* err,
-                                 const std::string& root_override) -> bool {
-        std::filesystem::path resolved;
-        std::string bounds_error;
-        const std::string root =
-            !root_override.empty()
-                ? root_override
-                : (config.workspace.empty()
-                       ? std::filesystem::current_path().string()
-                       : std::filesystem::weakly_canonical(config.workspace).string());
-        if (!resolve_within_workspace(root, path_raw, &resolved, &bounds_error)) {
-            *err = "preview " + sanitize_display(path_raw) + ": " + sanitize_display(bounds_error);
-            return false;
-        }
-        std::error_code ec;
-        if (!std::filesystem::is_regular_file(resolved, ec)) {
-            *err = "preview: not a regular file: " + sanitize_display(path_raw);
-            return false;
-        }
-        std::ifstream stream(resolved, std::ios::binary);
-        if (!stream) {
-            *err = "preview: cannot open: " + sanitize_display(path_raw);
-            return false;
-        }
-        std::ostringstream buffer;
-        buffer << stream.rdbuf();
-        *body = buffer.str();
-        if (body->find('\0') != std::string::npos) {
-            *err = "preview: binary file: " + sanitize_display(path_raw);
-            return false;
-        }
-        return true;
-    };
-    // 011 rendering pipeline (md / highlight / sanitize, 500-line code cap),
-    // now producing a line vector for the pane instead of committing.
-    auto render_preview_lines = [&](const std::string& body, const std::string& path_raw,
-                                    std::size_t cols) -> std::vector<std::string> {
-        std::vector<std::string> out;
-        std::string lower = path_raw;
-        for (auto& c : lower)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        const bool markdown =
-            lower.size() >= 3 &&
-            (lower.compare(lower.size() - 3, 3, ".md") == 0 ||
-             (lower.size() >= 9 && lower.compare(lower.size() - 9, 9, ".markdown") == 0));
-        const std::size_t width = cols > 1 ? cols - 1 : 1;
-        if (markdown) {
-            std::string pline;
-            std::istringstream pr(md::render(body, width));
-            while (std::getline(pr, pline))
-                out.push_back(pline.empty() ? std::string(" ") : pline);
-        } else {
-            const auto lang = hl::language_for_path(path_raw);
-            const bool lit = !lang.empty() && colors_enabled();
-            std::string pline;
-            std::istringstream pr(body);
-            hl::State hstate;
-            std::size_t shown = 0;
-            while (std::getline(pr, pline) && shown < 500) {
-                const auto safe = sanitize_display(pline);
-                out.push_back(lit ? hl::highlight_line(safe, lang, hstate) : "  " + safe);
-                ++shown;
-            }
-            if (!pr.eof())
-                out.push_back("  ... truncated (file longer than 500 lines)");
-        }
-        return out;
-    };
     auto open_preview_pane = [&](const std::string& path_raw,
                                  const std::string& root_override = "") -> bool {
         // 018 gate: the live region belongs to streaming/compact/approval.
@@ -1089,7 +1022,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             return false;
         }
         std::string body, err;
-        if (!load_preview_body(path_raw, &body, &err, root_override)) {
+        if (!load_preview_body(config.workspace, path_raw, &body, &err, root_override)) {
             screen.commit("[error] " + err);
             return false;
         }
@@ -1097,7 +1030,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         preview_pane.open = true;
         preview_pane.path = path_raw;
         preview_pane.body = std::move(body);
-        preview_pane.lines = render_preview_lines(preview_pane.body, path_raw, cols_now());
+        preview_pane.lines =
+            render_preview_lines(colors_enabled(), preview_pane.body, path_raw, cols_now());
         preview_pane.scroll = 0;
         preview_pane.rendered_cols = cols_now();
         sidebar_focus = false; // 018: the pane takes over from sidebar focus
@@ -3095,8 +3029,8 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
             // Scroll/resize change extra_rows, busting the render cache.
             if (preview_pane.open && !streaming && !approval_pending()) {
                 if (preview_pane.rendered_cols != cols_now()) {
-                    preview_pane.lines =
-                        render_preview_lines(preview_pane.body, preview_pane.path, cols_now());
+                    preview_pane.lines = render_preview_lines(colors_enabled(), preview_pane.body,
+                                                              preview_pane.path, cols_now());
                     preview_pane.rendered_cols = cols_now();
                 }
                 const std::size_t vis = pane_visible_rows(static_cast<std::size_t>(term_rows()));
