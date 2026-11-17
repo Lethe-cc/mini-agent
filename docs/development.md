@@ -20,6 +20,8 @@
 | `python scripts/check.py --tooling-only` | 显式跳过项目命令，仅做工具和文档检查，不用于业务验收 |
 | `python -m unittest discover -s tests -p "test_*.py" -v` | 单独运行模板工具测试 |
 
+测试体系（CTest 单元 / pty 端到端 / 模板 unittest）、用例清单、`cpp_check.py`/`ctest`/pty 冒烟/冷启动的直接命令与 CI 映射，统一见 [design/testing/](design/testing/README.md)，此处不重复。
+
 ## 开发小工具（tools/）
 
 项目过程中产生的小工具（手动调试、探测、一次性验证脚本）统一放 `tools/`，清单和用法见 [tools/README.md](../tools/README.md)。它们不是质量命令，不进 `project.json`；CI/门禁脚本仍放 `scripts/`，被自动化测试引用的 mock 服务和测试脚本仍放 `tests/`。

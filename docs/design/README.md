@@ -1,5 +1,7 @@
 # 设计文档索引
 
+**测试设计**独立成目录：[testing/](testing/README.md) —— 三层测试体系、运行命令、mock 服务、CI 映射；用例分组清单见 [testing/case-inventory.md](testing/case-inventory.md)。其他文档只引用该目录，不重复展开。
+
 模板自身的实现设计：
 
 | 文档 | 状态 | 范围 |

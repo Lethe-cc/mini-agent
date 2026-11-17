@@ -161,6 +161,8 @@ stop
 
 ## 验证入口
 
+测试体系（三层）、每块测试的详细设计与用例清单统一见 [design/testing/](design/testing/README.md)；下列为速览。
+
 - 基础检查：`python3 scripts/check.py --require-initialized`
 - 严格项目门禁（configure → build → CTest）：`python3 scripts/check.py --strict-project`
 - 手工冒烟（pty 驱动 TUI + mock SSE）：`python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent`
