@@ -296,7 +296,13 @@ def read_after(fd, keys, timeout):
 
 
 def main():
-    binary = sys.argv[1] if len(sys.argv) > 1 else "build/linux-gcc-debug/mini-agent"
+    argv = sys.argv[1:]
+    grep = None
+    if "--grep" in argv:
+        i = argv.index("--grep")
+        grep = argv[i + 1] if i + 1 < len(argv) else ""
+        del argv[i:i + 2]
+    binary = argv[0] if argv else "build/linux-gcc-debug/mini-agent"
     if not os.path.exists(binary):
         print(f"FAIL: binary not found: {binary}")
         return 1
@@ -332,6 +338,11 @@ def main():
     failures = []
 
     def expect(condition, label):
+        # --grep selects which assertions gate the result (focused debugging).
+        # The interaction flow still runs in full so process/session state stays
+        # consistent; non-matching checks are simply not reported/counted.
+        if grep is not None and grep not in label:
+            return
         print(("PASS " if condition else "FAIL ") + label)
         if not condition:
             failures.append(label)

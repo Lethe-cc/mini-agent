@@ -38,6 +38,8 @@
 
 ```bash
 python tests/pty_cli_smoke.py ./build/linux-gcc-debug/mini-agent
+# 只让匹配标签的断言门禁（流程仍完整运行）：
+python tests/pty_cli_smoke.py ./build/…/mini-agent --grep session
 ```
 
 ## 5. 扩展约定

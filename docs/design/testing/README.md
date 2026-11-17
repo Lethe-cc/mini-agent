@@ -55,7 +55,8 @@ python scripts/check.py --fast                  # 单 preset build+CTest（refre
 - 门禁构建默认 **models.dev refresh OFF**（`cpp_check.py`，`--refresh-models` 才开启），
   避免每次构建联网等待；手动 `cmake --preset` 仍默认 ON（010 §21 产品决策不变）。
 - `--fast`/单 preset/`ctest -R`/`--tidy`/`--sanitizers`/宽 USER 均为可选；四 preset 矩阵与
-  sanitizers 仅 CI。纯重构可只跑 build+ctest，TUI/CLI 改动才跑 pty。
+  sanitizers 仅 CI。pty 支持 `--grep <标签>` 只让匹配断言门禁（流程仍完整运行）。
+  纯重构可只跑 build+ctest，TUI/CLI 改动才跑 pty。
 
 CI（`.github/workflows/project.yml`）：`cpp`=四 preset 矩阵 `--strict-project`；
 `smoke`=gcc-debug 构建 + 03/04/06；`quality`=clang-debug clang-tidy + ASan/UBSan。

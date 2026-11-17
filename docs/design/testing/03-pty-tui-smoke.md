@@ -61,6 +61,8 @@
 python tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent
 # 宽环境（长 USER）：
 env USER=abcdefghijklmnopqrstuvwxyz python tests/pty_tui_smoke.py ./build/…/mini-agent
+# 只让匹配标签的断言门禁（聚焦调试；交互流程仍完整运行，耗时不变）：
+python tests/pty_tui_smoke.py ./build/…/mini-agent --grep pane
 ```
 
 退出码 0=全过；逐条 `PASS/FAIL <label>`，末尾汇总。

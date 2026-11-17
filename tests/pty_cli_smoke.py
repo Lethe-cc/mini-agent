@@ -37,10 +37,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8941
 failures = 0
+GREP = None
 
 
 def check(cond, name):
     global failures
+    if GREP is not None and GREP not in name:
+        return
     if cond:
         print(f"PASS {name}")
     else:
@@ -231,8 +234,13 @@ class PtyProc:
 
 
 def main():
-    binary = os.path.abspath(sys.argv[1] if len(sys.argv) > 1
-                             else "./build/linux-gcc-debug/mini-agent")
+    global GREP
+    argv = sys.argv[1:]
+    if "--grep" in argv:
+        i = argv.index("--grep")
+        GREP = argv[i + 1] if i + 1 < len(argv) else ""
+        del argv[i:i + 2]
+    binary = os.path.abspath(argv[0] if argv else "./build/linux-gcc-debug/mini-agent")
     check(os.path.exists(binary), f"binary exists: {binary}")
     if failures:
         return 1
