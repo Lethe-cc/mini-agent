@@ -109,27 +109,31 @@ target_include_directories(agent_core PUBLIC
 target_compile_features(agent_core PUBLIC cxx_std_17)
 target_link_libraries(agent_core PUBLIC CURL::libcurl)
 
-# Build-time models.dev catalog refresh (design 010 §21, §21.3): every build
-# tries to regenerate the VENDORED header in the source tree in place
-# (maintainer's choice: one authoritative file, no build-tree shadow copy).
-# --best-effort means a failed fetch/schema guard never breaks the build and
-# never writes: the header then simply stays at its last good content.
-# Write-if-different in the script keeps unchanged catalogs from dirtying
-# git status or triggering recompiles; upstream updates DO show up as a
-# modified header (expected, commit it along with the next change).
+# Configure-time models.dev catalog refresh (design 010 §21, §21.4): the
+# fetch runs when cmake (re-)configures, NEVER during make/ninja -- the old
+# ALL custom target stalled every incremental build on the network (broken
+# IPv6 hangs tens of seconds per attempt). The vendored header in the source
+# tree is regenerated in place; --best-effort means a failed fetch/schema
+# guard never breaks configure and never writes: the header stays at its
+# last good content. Write-if-different keeps unchanged catalogs from
+# dirtying git status or triggering recompiles; upstream updates DO show up
+# as a modified header (expected, commit it along with the next change).
 if(MINI_AGENT_REFRESH_MODELS_DEV)
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
-        # Absolute --output is required: the custom target runs from the
-        # build dir, where the script's relative default would misfire.
-        add_custom_target(models_dev_refresh ALL
+        message(STATUS "full update command: ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/refresh_models_dev.py --output ${CMAKE_CURRENT_SOURCE_DIR}/include/mini_agent/models_dev_data.hpp --best-effort")
+        execute_process(
             COMMAND "${Python3_EXECUTABLE}"
                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/refresh_models_dev.py"
                     --output "${CMAKE_CURRENT_SOURCE_DIR}/include/mini_agent/models_dev_data.hpp"
                     --best-effort
-            VERBATIM)
-        message(STATUS "full update command: ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/refresh_models_dev.py --output ${CMAKE_CURRENT_SOURCE_DIR}/include/mini_agent/models_dev_data.hpp --best-effort")
-        add_dependencies(agent_core models_dev_refresh)
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            RESULT_VARIABLE MINI_AGENT_MODELS_DEV_REFRESH_RESULT)
+        if(NOT MINI_AGENT_MODELS_DEV_REFRESH_RESULT EQUAL 0)
+            message(WARNING "models.dev refresh exited "
+                            "${MINI_AGENT_MODELS_DEV_REFRESH_RESULT}; "
+                            "keeping the existing catalog header")
+        endif()
     else()
         message(STATUS "models.dev refresh: Python3 not found, using the vendored catalog snapshot")
     endif()

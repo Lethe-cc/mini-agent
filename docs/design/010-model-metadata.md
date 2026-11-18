@@ -248,6 +248,16 @@ dump 行头其实一直带时间，但形态是裸 epoch 毫秒（`=== REQUEST 1
 
 验证（2026-11-16，linux-gcc-debug / GCC）：源树头现为 8092 行活目录（对已提交 7158 行快照约 1900 行 diff，git 可见；写入路径与 §21.1 已验证的 --output 生成同一代码路径）；重新 configure+build 后刷新步报 unchanged，再跑一次构建仅 `[1/1]` 刷新步、头 mtime 不变、零重编译；CTest 3/3、strict-project 通过；离线 best-effort 路径复用 §21.1 已验证的脚本行为（不写文件 → 头保持原内容）。
 
+### 21.4 v4.18.2（2026-11-18 维护者反馈：make 卡在刷新步——刷新移到 configure 阶段）
+
+维护者实测 `make -j6` 长时间停在刷新步（本机 IPv6 损坏，urllib 先试 AAAA 挂到超时才回落 IPv4，每次 make 都卡几十秒；`unchanged` 行是慢抓取结束后才打印）。追问"不应该在 cmake 阶段进行吗"——采纳，推翻 §21.1 的"每次构建"接线：
+
+- **形态**：`add_custom_target(... ALL)` + `add_dependencies` 改为 configure 期 `execute_process`（同一脚本、同一源树绝对路径 `--output`、同一 `--best-effort`）；非 0 退出只 `message(WARNING)` 不阻断 configure。**make/ninja 阶段零网络**，no-op 增量构建实测 0.09s；刷新只在 cmake 重新 configure 时发生（改 CMakeLists、换 preset、显式重配）。
+- **脚本 IPv4-only**：抓取前进程内把 `socket.getaddrinfo` 钉在 `AF_INET`（目录主机有 A 记录；本机坏 IPv6 会让双栈解析挂等超时，2026-11-18 实测）。configure 期刷新从 ~24s 降到 ~9s（剩余为 6.6MB 目录的真实下载时间）。
+- **语义变化（显式承认）**："每次构建自动获取"变为"每次 configure 自动获取"；长期不重配的构建目录不再自动追新目录，需要时手动重配或跑脚本。选项、best-effort、write-if-different、行数护栏、源树写回（§21.3）全部不变；`cpp_check.py` 默认 OFF/`--refresh-models` 开启的接线不受影响（选项本就在 configure 期读）。
+
+验证（2026-11-18，linux-gcc-debug / GCC + 根 build/ Unix Makefiles）：ON 重配时 configure 期实跑刷新（unchanged 8163 行，~9s）；随后 `cmake --build`（ninja）与 `make -j6` 均无刷新步，no-op make 0.09s；脚本直跑 IPv4 抓取 9.6s 成功写 8163 行；CTest 3/3、strict-project 通过（cpp_check 默认 OFF 路径亦过）。离线 best-effort 行为复用 §21.1 已验证路径（不写文件 → 头保持原内容）。
+
 ## 最终核对
 
 代码、测试、文档（src/README、development.md、.env.example）同批交付；本文件为实现轮记录，待人工评审后按流程更新状态。

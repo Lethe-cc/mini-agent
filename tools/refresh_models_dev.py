@@ -7,10 +7,11 @@ literal, one row per (provider base_url, model id, context, output). The C++
 side (src/models_dev.cpp) matches config.base_url + model against this table
 as the last fallback in the context-window chain.
 
-Since design 010 §21 (v4.18) CMake invokes this on EVERY build (option
-MINI_AGENT_REFRESH_MODELS_DEV, default ON) with --best-effort, writing the
-vendored header include/mini_agent/models_dev_data.hpp IN PLACE (§21.3);
-any failure leaves the header at its last good content. Manual usage:
+Since design 010 §21 (v4.18) CMake invokes this at CONFIGURE time (§21.4;
+option MINI_AGENT_REFRESH_MODELS_DEV, default ON) with --best-effort,
+writing the vendored header include/mini_agent/models_dev_data.hpp IN
+PLACE (§21.3); make/ninja never touch the network. Any failure leaves the
+header at its last good content. Manual usage:
 
     python3 tools/refresh_models_dev.py            # fetch + regenerate vendored
     python3 tools/refresh_models_dev.py --input f.json  # offline re-parse
@@ -20,6 +21,7 @@ any failure leaves the header at its last good content. Manual usage:
 import argparse
 import json
 import os
+import socket
 import sys
 import urllib.request
 
@@ -97,6 +99,16 @@ def main() -> int:
             # models.dev 403s the default Python-urllib User-Agent; identify
             # the tool explicitly (verified 2026-11-16).
             req = urllib.request.Request(URL, headers={"User-Agent": "mini-agent-catalog-refresh/1.0"})
+            # The maintainer's dev box has broken IPv6: getaddrinfo may
+            # return AAAA first and urlopen hangs until timeout before
+            # trying IPv4 (tens of seconds per run). The catalog host has
+            # A records, so pin resolution to IPv4 (process-local patch).
+            _getaddrinfo = socket.getaddrinfo
+
+            def _ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+                return _getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+            socket.getaddrinfo = _ipv4_only
             with urllib.request.urlopen(req, timeout=60) as resp:
                 catalog = json.load(resp)
         rows = build_rows(catalog)
