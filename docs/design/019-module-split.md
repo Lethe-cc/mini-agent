@@ -92,3 +92,23 @@ CLI：
 ## 7. 不做
 
 - 不引入新依赖、不改公共 API/退出码/日志红线；不重写 LiveScreen 帧模型；不做"真滚动窗口"等未实现能力；不合并/重命名现有公共头。
+
+## 8. P4 剩余：TuiState 设计（决策完备，待实施）
+
+已抽尽可独立参数化的单元（preview/sidebar/workers）。剩余 turn/slash/input 三大闭包群
+共享同一组可变控制状态，必须先建 `TuiState`（`src/tui/tui_state.hpp`）才能跨文件拆分。
+
+**共享状态清单**（run_loop 局部，需收进 TuiState）：
+- 终端/渲染：`LiveScreen screen`、`cols/rows`、`colors_enabled`、composer/cursor、history、`last_prompt_chars`
+- 回合：`worker/turn_done/result/TurnResult`、`streaming`、`abort_requested`、`turn_start`、`reasoning_live`、`panel_tool_rows`、`tools_active`
+- 审批：`bridge(TurnBridge)`、`approval_policy/abort/expanded`、`session_allowed_tools(+mutex)`、`config_snapshot`、`tool_registry`、`max_tool_rounds`
+- 侧栏/预览：`sidebar_*`、`preview_pane`、`sidebar_browse`
+- 模型/认证：`models_*`、`model_caps`、`auth/auth_probes`、`model_menu_open/choices/targets`、`reasoning_menu_open`
+- 配置/会话：`config&`、`session&`、`store&`、`logger`（主线程独占）、`session_ids/stale`
+
+**迁移方式**：`run_loop` 声明 `TuiState S;`，闭包 `[&]`→`[&S]`、成员 `x`→`S.x`；
+再把三大群改为接收 `TuiState&` 的自由函数移入 `tui_turn.cpp`/`tui_slash.cpp`/`tui_input.cpp`。
+worker 线程只读快照 + 写 bridge/result（join-then-read 纪律不变）；`logger`/`screen` 仍主线程独占。
+
+**门禁**：每步四 preset CTest + pty TUI 195/宽 USER + CLI；审批/中断/行记账断言必须全绿；
+不绿即回退该步。ASan/UBSan（CI quality）兜底线程/越界。
