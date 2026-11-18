@@ -24,6 +24,7 @@ src/
 │   ├── tui_preview.cpp/.hpp 预览 body 加载 / 行渲染（参数化）
 │   ├── tui_sidebar.cpp/.hpp 侧栏单级目录 + git changed 扫描（参数化）
 │   └── tui_workers.cpp/.hpp models 发现 / ctx probe / compact 摘要 worker（参数化）
+│   └── tui_turn.cpp/.hpp  TurnState（回合/审批共享状态）+ run_turn_worker
 ├── core/       Agent 内核
 │   ├── chat.cpp            Message / Chat 模型 + JSON
 │   ├── loop.cpp            run_turn 纯函数式会话循环

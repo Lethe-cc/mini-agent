@@ -49,42 +49,36 @@
 #include "tui_preview.hpp"
 #include "tui_screen.hpp"
 #include "tui_sidebar.hpp"
+#include "tui_turn.hpp"
 #include "tui_workers.hpp"
 
 namespace mini_agent::tui {
-namespace {
-struct TurnResult {
-    bool ok = false;
-    bool aborted = false;
-    std::string reply;
-    std::string error;
-    // v4: provider usage rolled up by run_turn (zero when the gateway
-    // reported nothing). Read by the main thread after join().
-    TokenUsage usage;
-    // v4.2: reasoning evidence observed in the responses (design 010 §11).
-    ActualReasoning reasoning;
-    // Credential evidence from the completion request. The worker fills these
-    // in and the main thread folds them into `auth` (the worker must never
-    // touch main-thread state such as `auth`, `logger` or `screen`).
-    int http_status = 0;
-    bool network_error = false;
-};
-} // namespace
 
 int run_loop(AppConfig& config, Session& session, SessionStore& store, const TuiOptions& options) {
     RawMode raw(STDIN_FILENO);
     std::signal(SIGINT, SIG_IGN); // Ctrl-C must arrive as byte 0x03, not a signal
 
     LiveScreen screen;
+    // 019 §8: TurnState owns the shared turn/approval control state; aliases
+    // keep the existing main-thread code byte-identical.
+    TurnState S;
+    auto& bridge = S.bridge;
+    auto& abort_requested = S.abort_requested;
+    auto& turn_done = S.turn_done;
+    auto& result = S.result;
+    auto& reasoning_live = S.reasoning_live;
+    auto& approval_abort = S.approval_abort;
+    auto& session_allowed_tools = S.session_allowed_tools;
+    auto& session_allowed_mutex = S.session_allowed_mutex;
+    auto& config_snapshot = S.config_snapshot;
+    auto& max_tool_rounds = S.max_tool_rounds;
+    auto& tool_registry = S.tool_registry;
+    auto& approval_policy = S.approval_policy;
     auto cols_now = [] {
         const int c = term_columns();
         return c > 0 ? static_cast<std::size_t>(c) : 80u;
     };
-    TurnBridge bridge;
-    std::atomic<bool> abort_requested{false};
-    std::atomic<bool> turn_done{false};
     bool exiting{false};
-    TurnResult result;
     std::thread worker;
     std::string composer;
     std::size_t cursor = 0; // caret byte offset in composer (codepoint boundary)
@@ -308,7 +302,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
 
     // v2 tool layer (design 008 section 5.4): registry, approval bridge.
     std::string tool_note;
-    auto tool_registry = build_tool_registry(config, &tool_note);
+    S.tool_registry = build_tool_registry(config, &tool_note);
     // v4.11 turn panel (design 010 §21): live process rows during a turn.
     // `running_tool` is set by on_tool_start (worker thread) and cleared
     // by on_tool -- both through TurnBridge's tool queue; `reasoning_live`
@@ -360,23 +354,19 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         screen.commit(tint(colors_enabled(), "2", "[preview] closed: " + preview_pane.path));
         logger->event("preview_close", {{"path", preview_pane.path}});
     };
-    std::atomic<bool> reasoning_live{false};
     // Completed tool rows for THIS turn, kept for the panel even after
     // drain_tool_events commits them to history (the panel is the turn's
     // process view; history scrolls away).
     std::vector<std::string> panel_tool_rows;
-    std::atomic<bool> approval_abort{false};
     bool approval_expanded = false;
-    std::set<std::string> session_allowed_tools;
-    std::mutex session_allowed_mutex; // worker memoizes AllowSession names
     // Allowlist names are snapshotted per turn like the rest of config;
     // /tools and slash handlers rebuild both the registry and this copy.
-    AppConfig config_snapshot = config;
-    const std::size_t max_tool_rounds = config.max_tool_rounds;
+    S.config_snapshot = config;
+    S.max_tool_rounds = config.max_tool_rounds;
     bool tools_active = false; // any tool round ran in the current turn
     if (!tool_note.empty())
         screen.commit("[info] " + tool_note + " · lazy start on first call · /tools");
-    std::string approval_policy = // mutable via /approve while worker idle
+    S.approval_policy = // mutable via /approve while worker idle
         config.tool_approval.empty() ? std::string("ask") : config.tool_approval;
     if (approval_policy == "off" && !tool_registry->empty()) {
         screen.commit("[warn] tool_approval=off: tools run WITHOUT asking");
@@ -492,162 +482,7 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         // parks them in the bridge (data, not a logger pointer): /log may
         // reassign `logger` mid-turn, and only the main thread touches it.
         worker = std::thread([&, turn_config, user_msg = std::move(user)]() mutable {
-            auto provider_config = turn_config.to_provider();
-            provider_config.reasoning_live = &reasoning_live; // v4.11 panel
-            // 014 (design 014 §5): metadata-only retry notification; never
-            // on_delta (reply text/history stay free of retry noise).
-            provider_config.on_retry = [&bridge](int attempt, int http_status, int wait_ms) {
-                bridge.push_retry_event(RetryEvent{attempt, http_status, wait_ms});
-            };
-            OpenAiProvider provider(std::move(provider_config));
-            // v4.17: the old second deep copy (`Chat outgoing`) was dead
-            // code -- run_turn builds and commits its own `turn_chat`
-            // below; one snapshot per turn is the thread boundary.
-            TurnResult r;
-            // Snapshot of the shared control state for this turn's tools
-            // (thread-boundary discipline mirrors turn_config; the TUI
-            // rebuilds the registry before every start_turn, so mutations
-            // of `tool_registry` here are serialized by the worker join).
-            ToolRegistry* registry = tool_registry.get();
-            TurnOptions turn_options;
-            turn_options.tools = registry;
-            turn_options.max_tool_rounds = max_tool_rounds;
-            turn_options.should_abort = [&] {
-                return abort_requested.load() || approval_abort.load();
-            };
-            turn_options.approve = [&](const ToolCall& call) -> Approval {
-                const bool auto_run = approval_policy == "off" ||
-                                      (approval_policy == "allowlist" &&
-                                       std::find(config_snapshot.tool_allowlist.begin(),
-                                                 config_snapshot.tool_allowlist.end(), call.name) !=
-                                           config_snapshot.tool_allowlist.end());
-                if (auto_run || session_allowed_tools.count(call.name) != 0)
-                    return Approval::Allow;
-                unsigned long long seq = 0;
-                // v3: compute the diff preview on the worker thread
-                // (registry preview honors the same single-owner
-                // contract as list/call) and arm the runtime's race
-                // guard -- both before publish. publish_approval stamps
-                // the countdown source and publishes request_seq (v4.17:
-                // protocol lives in TurnBridge).
-                seq = bridge.publish_approval(
-                    call, registry ? registry->preview(call) : std::string());
-                const auto wait =
-                    bridge.wait_approval(seq, kApprovalTimeoutS, [&] {
-                        return abort_requested.load();
-                    });
-                if (wait == ApprovalWait::Timeout) { // never block the worker forever
-                    ToolRound timeout_round;
-                    timeout_round.tool_name = call.name;
-                    timeout_round.arguments_json = call.arguments_json;
-                    timeout_round.executed = false;
-                    timeout_round.is_error = true;
-                    timeout_round.approval_timeout = true;
-                    bridge.push_tool_event(std::move(timeout_round));
-                }
-                const int answer = bridge.approval_answer(seq);
-                switch (answer) {
-                case 1:
-                    return Approval::Allow;
-                case 3: {
-                    std::lock_guard<std::mutex> lock(session_allowed_mutex);
-                    session_allowed_tools.insert(call.name);
-                    return Approval::AllowSession;
-                }
-                default:
-                    // v3: denial must release any preview-armed race guard
-                    // (worker owns the registry; preview() armed it here).
-                    if (registry)
-                        registry->disarm(call);
-                    return Approval::Deny;
-                }
-            };
-            turn_options.on_tool_start = [&](const ToolCall& call) {
-                // v4.11: panel shows the call as running until on_tool
-                // lands (approval-gated calls fire this only after the
-                // approve decision, denied calls never fire it).
-                bridge.set_running_tool("[tool] " + sanitize_display(call.name) +
-                                        (tool_arg_summary(call.arguments_json).empty()
-                                             ? std::string()
-                                             : " · " + tool_arg_summary(call.arguments_json)) +
-                                        " [running]");
-            };
-            turn_options.on_tool = [&](const ToolCall& call, const ToolResult& tool_result,
-                                       bool executed) {
-                ToolRound round;
-                round.tool_name = call.name;
-                round.arguments_json = call.arguments_json;
-                round.executed = executed;
-                round.is_error = tool_result.is_error;
-                round.elapsed_ms = tool_result.elapsed_ms;
-                round.result_bytes = tool_result.text.size();
-                // v5 (design 011): stage the human preview on the worker
-                // (loop) thread right after execution -- the registry's
-                // result_preview shares call()'s single-owner contract.
-                if (executed && !tool_result.is_error && registry) {
-                    round.result_preview = registry->result_preview(call, tool_result);
-                    if (call.name == "preview_file") {
-                        // .md/.markdown bodies render; others show verbatim.
-                        // The path lives in the args; parse it for the
-                        // extension (staged body carries no name).
-                        const auto args =
-                            nlohmann::json::parse(call.arguments_json, nullptr, false);
-                        std::string path =
-                            args.is_object() && args.contains("path") && args["path"].is_string()
-                                ? args["path"].get<std::string>()
-                                : std::string();
-                        std::string lower = path;
-                        for (auto& c : lower)
-                            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                        const auto ends = [&](std::string_view suf) {
-                            return lower.size() >= suf.size() &&
-                                   lower.compare(lower.size() - suf.size(), suf.size(), suf) == 0;
-                        };
-                        round.preview_is_markdown = ends(".md") || ends(".markdown");
-                        // v5 5.6: non-markdown recognized code files
-                        // highlight; markdown takes precedence above.
-                        if (!round.preview_is_markdown)
-                            round.preview_lang = hl::language_for_path(path);
-                    }
-                }
-                bridge.finish_running_tool(std::move(round));
-            };
-            // v4: run_turn writes here only on a successful turn; the
-            // worker copies it into `result` (join-then-read discipline).
-            TokenUsage turn_usage;
-            turn_options.usage_out = &turn_usage;
-            ActualReasoning turn_reasoning; // v4.2
-            turn_options.reasoning_out = &turn_reasoning;
-            try {
-                // v4.17 (copy-on-write thread boundary): run_turn takes
-                // the stored chat by reference and commits the whole turn
-                // to it ONLY on success -- the loop's internal staging
-                // copy is the error isolation (5.6 rule: failures never
-                // reach history; 008 section 4). The worker's former deep
-                // copy of the entire history was redundant defense and
-                // made every turn O(chat) twice; the CLI path already
-                // passes session.chat directly. Main-thread reads of the
-                // chat during the turn are gated exactly as before: the
-                // only writer window is the commit at turn end, and the
-                // same-turn success write happened in the old design too.
-                r.reply = run_turn(
-                    session.chat, provider, user_msg.content,
-                    [&](std::string_view d) { bridge.append_delta(d); },
-                    [&] { return abort_requested.load(); }, turn_options);
-                r.usage = turn_usage;
-                r.reasoning = turn_reasoning;
-                r.ok = true;
-            } catch (const ProviderError& e) {
-                r.error = e.what();
-                r.http_status = e.http_status();
-                r.network_error = e.kind() == ProviderErrorKind::Network;
-            } catch (const std::exception& e) {
-                r.error = e.what();
-            }
-            if (abort_requested.load())
-                r.aborted = true;
-            result = std::move(r);
-            turn_done = true;
+            run_turn_worker(S, turn_config, session.chat, user_msg.content);
         });
     };
 

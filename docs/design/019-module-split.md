@@ -74,7 +74,7 @@ CLI：
 - **P1 纯函数抽取** —— **已完成**（提交 `04b36f1`）：`md_geometry`、`subprocess`、`workspace`、`provider_parse`。零状态、行为保持；四 preset CTest 3/3 + pty TUI 195 PASS + CLI ALL PASS + check.py。
 - **P2 类/子命令抽取** —— **已完成**（CLI `a879bcd`；tools 拆分见后续提交）：CLI → `cli_common`/`cli_commands`/`cli_main`（1115→86）+ `session_serde`；tools → `tools_file`（FileRuntime）/`tools_git`（GitRuntime），tools.cpp 保留 registry+bash（1095→222）。**config_file/env 拆分暂缓**（config.cpp 777 行、env/file 合并高度耦合，价值低）。
 - **P3 TUI 状态对象 + screen 抽取** —— **screen 层已完成**：`tui_screen.hpp` 承载 RawMode/term size/tint/LiveScreen/split_ansi_paragraphs/steady_now（tui.cpp 3626→3195 行）；四 preset + pty 双环境（常规）验证。**TuiState 状态对象待建**，是 P4 的前提。
-- **P4 TUI 逻辑拆分** —— **进行中**：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`（均参数化无屏幕状态；tui.cpp 3195→2848）。**TuiState + slash/turn/input 仍待实施**（run_loop 闭包共享状态，需先建状态对象）。
+- **P4 TUI 逻辑拆分** —— **进行中**：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`；**TurnState 首片**（回合/审批共享状态 + `run_turn_worker`）→ `tui_turn`（别名保持主线程代码不变；tui.cpp 3195→2683）。**slash/input 仍待实施**（同法扩 TuiState）。
 
 每阶段一个提交；任何阶段测试不绿即回退该阶段。
 
@@ -93,7 +93,12 @@ CLI：
 
 - 不引入新依赖、不改公共 API/退出码/日志红线；不重写 LiveScreen 帧模型；不做"真滚动窗口"等未实现能力；不合并/重命名现有公共头。
 
-## 8. P4 剩余：TuiState 设计（决策完备，待实施）
+## 8. P4 剩余：TuiState 设计（决策完备；首片 turn/审批已实施）
+
+**首片已落地**（`tui_turn.hpp/.cpp`）：`TurnState` 拥有 bridge/审批原子量/session_allowed_tools(+mutex)/
+config_snapshot/tool_registry/max_tool_rounds/approval_policy/result/reasoning_live；run_loop 以引用别名
+保持主线程代码字节不变；worker body 移入 `run_turn_worker(TurnState&,...)`。验证：四 preset + pty 195/0 + CLI。
+剩余 slash/input 按同法扩 TuiState 后迁移。
 
 已抽尽可独立参数化的单元（preview/sidebar/workers）。剩余 turn/slash/input 三大闭包群
 共享同一组可变控制状态，必须先建 `TuiState`（`src/tui/tui_state.hpp`）才能跨文件拆分。

@@ -96,6 +96,7 @@ add_library(agent_core STATIC
     src/tui/tui_preview.cpp
     src/tui/tui_sidebar.cpp
     src/tui/tui_workers.cpp
+    src/tui/tui_turn.cpp
     src/tui/tui_render.cpp
     third_party/md4c/md4c.c
 )
