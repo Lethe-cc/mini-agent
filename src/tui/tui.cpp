@@ -50,6 +50,7 @@
 #include "tui_screen.hpp"
 #include "tui_sidebar.hpp"
 #include "tui_turn.hpp"
+#include "tui_slash.hpp"
 #include "tui_workers.hpp"
 
 namespace mini_agent::tui {
@@ -716,884 +717,117 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
                           "saved, but this process keeps the env endpoint/model until "
                           "the vars are unset and mini-agent restarts");
     };
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wchanges-meaning"
+#endif
+    struct SlashCtx {
+        decltype(screen)& screen;
+        decltype(config)& config;
+        decltype(session)& session;
+        decltype(store)& store;
+        decltype(options)& options;
+        decltype(cols_now)& cols_now;
+        decltype(composer)& composer;
+        decltype(cursor)& cursor;
+        decltype(last_user)& last_user;
+        decltype(pending)& pending;
+        decltype(history)& history;
+        decltype(hist_pos)& hist_pos;
+        decltype(history_draft)& history_draft;
+        decltype(make_logger)& make_logger;
+        decltype(logger)& logger;
+        decltype(active_session_id)& active_session_id;
+        decltype(temp_mode)& temp_mode;
+        decltype(secret_input)& secret_input;
+        decltype(secret_field)& secret_field;
+        decltype(models_running)& models_running;
+        decltype(models_done)& models_done;
+        decltype(models_result)& models_result;
+        decltype(models_worker)& models_worker;
+        decltype(model_menu_open)& model_menu_open;
+        decltype(model_choices)& model_choices;
+        decltype(model_choice_targets)& model_choice_targets;
+        decltype(models_fingerprint)& models_fingerprint;
+        decltype(models_start)& models_start;
+        decltype(model_caps)& model_caps;
+        decltype(reasoning_menu_open)& reasoning_menu_open;
+        decltype(reasoning_choices)& reasoning_choices;
+        decltype(probe_running)& probe_running;
+        decltype(probe_done)& probe_done;
+        decltype(probe_result)& probe_result;
+        decltype(probe_worker)& probe_worker;
+        decltype(compact_running)& compact_running;
+        decltype(compact_done)& compact_done;
+        decltype(compact_result)& compact_result;
+        decltype(compact_worker)& compact_worker;
+        decltype(auth)& auth;
+        decltype(auth_probes)& auth_probes;
+        decltype(session_ids)& session_ids;
+        decltype(session_ids_stale)& session_ids_stale;
+        decltype(refresh_session_ids)& refresh_session_ids;
+        decltype(streaming)& streaming;
+        decltype(last_prompt_chars)& last_prompt_chars;
+        decltype(pressure_hint_consumed)& pressure_hint_consumed;
+        decltype(status_reasoning_seen)& status_reasoning_seen;
+        decltype(provider_name_list)& provider_name_list;
+        decltype(caps_for_model)& caps_for_model;
+        decltype(effective_window)& effective_window;
+        decltype(context_reading)& context_reading;
+        decltype(maybe_pressure_hint)& maybe_pressure_hint;
+        decltype(reset_usage_readings)& reset_usage_readings;
+        decltype(switch_active_profile)& switch_active_profile;
+        decltype(turn_start)& turn_start;
+        decltype(last_ctrl_c)& last_ctrl_c;
+        decltype(show_sysinfo)& show_sysinfo;
+        decltype(show_sidebar)& show_sidebar;
+        decltype(sidebar_running)& sidebar_running;
+        decltype(sidebar_stale)& sidebar_stale;
+        decltype(sidebar_focus)& sidebar_focus;
+        decltype(sidebar_sel)& sidebar_sel;
+        decltype(sidebar_result)& sidebar_result;
+        decltype(sidebar_done)& sidebar_done;
+        decltype(sidebar_browse)& sidebar_browse;
+        decltype(sidebar_worker)& sidebar_worker;
+        decltype(preview_pane)& preview_pane;
+        decltype(set_preview_mouse)& set_preview_mouse;
+        decltype(close_preview_pane)& close_preview_pane;
+        decltype(approval_expanded)& approval_expanded;
+        decltype(tools_active)& tools_active;
+        decltype(panel_tool_rows)& panel_tool_rows;
+        decltype(drain_tool_events)& drain_tool_events;
+        decltype(approval_pending)& approval_pending;
+        decltype(answer_approval)& answer_approval;
+        decltype(start_turn)& start_turn;
+        decltype(save_and_report)& save_and_report;
+        decltype(start_sidebar)& start_sidebar;
+        decltype(enter_sidebar_dir)& enter_sidebar_dir;
+        decltype(start_models_fetch)& start_models_fetch;
+        decltype(maybe_autofetch_models)& maybe_autofetch_models;
+        decltype(open_preview_pane)& open_preview_pane;
+        decltype(ensure_default_profile)& ensure_default_profile;
+        decltype(active_profile_for_edit)& active_profile_for_edit;
+        decltype(select_model)& select_model;
+        decltype(bridge)& bridge;
+        decltype(abort_requested)& abort_requested;
+        decltype(turn_done)& turn_done;
+        decltype(result)& result;
+        decltype(reasoning_live)& reasoning_live;
+        decltype(approval_abort)& approval_abort;
+        decltype(session_allowed_tools)& session_allowed_tools;
+        decltype(session_allowed_mutex)& session_allowed_mutex;
+        decltype(config_snapshot)& config_snapshot;
+        decltype(max_tool_rounds)& max_tool_rounds;
+        decltype(tool_registry)& tool_registry;
+        decltype(approval_policy)& approval_policy;
+        decltype(worker)& worker;
+        decltype(exiting)& exiting;
+    } slash_ctx{screen, config, session, store, options, cols_now, composer, cursor, last_user, pending, history, hist_pos, history_draft, make_logger, logger, active_session_id, temp_mode, secret_input, secret_field, models_running, models_done, models_result, models_worker, model_menu_open, model_choices, model_choice_targets, models_fingerprint, models_start, model_caps, reasoning_menu_open, reasoning_choices, probe_running, probe_done, probe_result, probe_worker, compact_running, compact_done, compact_result, compact_worker, auth, auth_probes, session_ids, session_ids_stale, refresh_session_ids, streaming, last_prompt_chars, pressure_hint_consumed, status_reasoning_seen, provider_name_list, caps_for_model, effective_window, context_reading, maybe_pressure_hint, reset_usage_readings, switch_active_profile, turn_start, last_ctrl_c, show_sysinfo, show_sidebar, sidebar_running, sidebar_stale, sidebar_focus, sidebar_sel, sidebar_result, sidebar_done, sidebar_browse, sidebar_worker, preview_pane, set_preview_mouse, close_preview_pane, approval_expanded, tools_active, panel_tool_rows, drain_tool_events, approval_pending, answer_approval, start_turn, save_and_report, start_sidebar, enter_sidebar_dir, start_models_fetch, maybe_autofetch_models, open_preview_pane, ensure_default_profile, active_profile_for_edit, select_model, bridge, abort_requested, turn_done, result, reasoning_live, approval_abort, session_allowed_tools, session_allowed_mutex, config_snapshot, max_tool_rounds, tool_registry, approval_policy, worker, exiting};
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     auto handle_slash = [&](std::string_view line) -> bool {
-        auto arg_of = [](std::string_view text) -> std::string_view {
-            const auto space = text.find(' ');
-            return space == std::string_view::npos ? std::string_view() : text.substr(space + 1);
-        };
-        if (line == "/help") {
-            // Short lines on purpose: single-row commands stay intact even
-            // on narrow terminals (wrap breaks mid-token at width limit).
-            screen.commit("commands: /provider <url> · /login [key] · /model <name>");
-            screen.commit("          /provider list|add <name> [url]|rm <name> (profiles)");
-            screen.commit("          /login <name> [key] · /model <provider>/<name>");
-            screen.commit("          /tools (tool registry) · /mcp (servers) · /cwd [path]");
-            screen.commit("          /approve ask|allowlist|off (tool gate)");
-            screen.commit("          /compact (summarize history; context relief)");
-            screen.commit("          /models (list & pick) · /log <path>|off|default");
-            screen.commit(
-                "          /log info|debug|trace (capture level; /debug on|all|off alias)");
-            screen.commit(
-                "          /config · /sessions · /session <id|prefix>|new · /sysinfo on|off");
-            screen.commit("          /version (build identity: version · commit · built)");
-            screen.commit("          /sidebar on|off (tree + changed files)");
-            screen.commit("          /preview <path> (show a file; .md renders)");
-            screen.commit("          /exit");
-            screen.commit("Each of /provider /login /model saves on its own;");
-            screen.commit("configure them in any order, any number of sittings.");
-            screen.commit("prompt: ?=unconfigured/unverified · ~=checking · >=ok");
-            screen.commit("        !=key rejected · x=provider unreachable");
-            screen.commit("Enter sends · Enter queues while streaming");
-            return true;
-        }
-        if (line.rfind("/login", 0) == 0) {
-            // v6 (design 012 §5.2): a first token naming a configured
-            // profile targets that profile's key; anything else is the key
-            // itself for the active profile. v7: with no profiles the
-            // command auto-creates default (design 013 §5.4).
-            const auto arg = arg_of(line);
-            ensure_default_profile();
-            std::string target = config.active_provider;
-            std::string_view key = arg;
-            if (!arg.empty()) {
-                const auto space = arg.find(' ');
-                const auto first = space == std::string_view::npos ? arg : arg.substr(0, space);
-                if (config.find_provider(first) != nullptr) {
-                    target = std::string(first);
-                    key = space == std::string_view::npos ? std::string_view() : arg.substr(space);
-                    while (!key.empty() && key.front() == ' ')
-                        key.remove_prefix(1);
-                }
-            }
-            const std::string label = " (" + target + ")";
-            if (key.empty()) {
-                secret_input = true; // masked composer; next Enter sets key
-                // The profile name pins the target even if the active
-                // profile changes before Enter lands.
-                secret_field = "api_key:" + target;
-                screen.commit("[input] API key" + label +
-                              " (hidden); Enter confirms, empty Enter cancels");
-            } else {
-                auto* profile = config.find_provider(target);
-                profile->api_key = std::string(key);
-                auth_probes[target] = AuthProbe{}; // verdict belongs to the old key
-                if (target == config.current.name)
-                    auth = AuthProbe{};
-                config.refresh_current();
-                save_and_report(true);
-                maybe_autofetch_models();
-            }
-            return true;
-        }
-        if (line.rfind("/models", 0) == 0) {
-            // Listed before /model so the shared prefix resolves here first.
-            // v6: any complete profile (or the unnamed route) can be listed;
-            // the fetch aggregates every ready target.
-            bool any_ready = !config.current.base_url.empty() && !config.current.api_key.empty();
-            for (const auto& p : config.providers)
-                any_ready = any_ready || (!p.base_url.empty() && !p.api_key.empty());
-            if (!any_ready) {
-                screen.commit("[error] model listing needs base_url + api_key ·" +
-                              config_next_hint(config));
-            } else if (models_running) {
-                screen.commit("[info] already listing models, wait for the list");
-            } else {
-                screen.commit("[info] listing models from provider...");
-                start_models_fetch(true); // force: explicit re-list bypasses cache
-            }
-            return true;
-        }
-        if (line.rfind("/model", 0) == 0) {
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                const std::string shown =
-                    config.current.name.empty()
-                        ? (config.current.model.empty() ? "(not set)" : config.current.model)
-                        : config.current.name + "/" + config.current.model;
-                screen.commit("model=" + shown + "; usage /model <name> | <provider>/<name>" +
-                              (config.current.base_url.empty() || config.current.api_key.empty()
-                                   ? std::string()
-                                   : " · /models lists what the provider offers"));
-            } else {
-                // v6 (design 012 §5.2): qualified -> atomic profile switch;
-                // bare -> active-profile match, then a globally unique id
-                // in the last fetched list; ambiguous names fail closed
-                // (never guess an endpoint).
-                const std::string ref(arg);
-                std::string provider;
-                std::string id;
-                if (split_qualified_model(ref, &provider, &id) &&
-                    config.find_provider(provider) != nullptr) {
-                    select_model(provider, id, "slash");
-                    return true;
-                }
-                std::vector<std::string> owners;
-                for (std::size_t i = 0; i < model_choice_targets.size(); ++i) {
-                    const auto& target = model_choice_targets[i];
-                    if (target.second == ref &&
-                        std::find(owners.begin(), owners.end(), target.first) == owners.end())
-                        owners.push_back(target.first);
-                }
-                if (owners.size() > 1) {
-                    std::string names;
-                    for (const auto& owner : owners)
-                        names += (names.empty() ? "" : ", ") +
-                                 (owner.empty() ? "(none)" : owner);
-                    screen.commit("[error] model '" + ref +
-                                  "' exists on several providers: " + names);
-                    screen.commit("        pick one with /model <provider>/" + ref);
-                } else if (owners.size() == 1) {
-                    select_model(owners.front(), ref, "slash");
-                } else {
-                    // Not in the fetched list: literal set on the active
-                    // route (legacy behavior -- the id may simply not be
-                    // listed).
-                    select_model("", ref, "slash");
-                }
-            }
-            return true;
-        }
-        if (line.rfind("/provider", 0) == 0) {
-            const auto arg = arg_of(line);
-            if (arg.empty() || arg == "list") {
-                // v6 (design 012 §5.2): all profiles, keys masked, active
-                // marked. v7: no unnamed row -- /config shows the effective
-                // values when env overrides them.
-                if (config.providers.empty()) {
-                    screen.commit("providers: none · usage /provider add <name> [url]");
-                } else {
-                    screen.commit("providers (" + std::to_string(config.providers.size()) + "):");
-                    for (const auto& p : config.providers)
-                        screen.commit("  " + p.name + " · " +
-                                      (p.base_url.empty() ? "(url not set)" : p.base_url) +
-                                      " · key=" + (p.api_key.empty() ? "(not set)" : "***set***") +
-                                      (p.name == config.active_provider ? "  <- active" : ""));
-                }
-                screen.commit("usage /provider <url> · /provider add <name> [url] · "
-                              "/provider rm <name>");
-            } else if (arg.rfind("add", 0) == 0 && (arg.size() == 3 || arg[3] == ' ')) {
-                auto rest = arg.substr(3);
-                while (!rest.empty() && rest.front() == ' ')
-                    rest.remove_prefix(1);
-                const auto space = rest.find(' ');
-                const std::string name(rest.substr(0, space));
-                auto url = space == std::string_view::npos ? std::string_view()
-                                                           : rest.substr(space + 1);
-                while (!url.empty() && url.front() == ' ')
-                    url.remove_prefix(1);
-                ProviderProfile probe;
-                probe.name = name;
-                probe.base_url = std::string(url);
-                std::string err;
-                if (!probe.valid(&err)) {
-                    screen.commit("[error] " + err);
-                    return true;
-                }
-                if (auto* existing = config.find_provider(name)) {
-                    // Upsert (same rule as MCP): URL replaces when given;
-                    // key/model/metadata survive an add without a URL.
-                    if (!url.empty()) {
-                        existing->base_url = std::string(url);
-                        auth_probes.erase(name);
-                        if (name == config.current.name) {
-                            auth = AuthProbe{};
-                            config.refresh_current();
-                        }
-                    }
-                    screen.commit("[ok] provider '" + name + "' updated" +
-                                  (url.empty() ? "" : " · " + std::string(url)));
-                } else {
-                    config.providers.push_back(std::move(probe));
-                    // v7 (design 013 §5.4): the first profile auto-activates
-                    // so the table never exists without a selection.
-                    if (config.providers.size() == 1) {
-                        config.active_provider = name;
-                        config.refresh_current();
-                        switch_active_profile();
-                    }
-                    screen.commit("[ok] provider '" + name + "' added" +
-                                  (url.empty() ? "" : " · " + std::string(url)));
-                }
-                const auto* added = config.find_provider(name);
-                if (added->base_url.empty())
-                    screen.commit("     next: /provider add " + name +
-                                  " <url> · then /login " + name);
-                else if (added->api_key.empty())
-                    screen.commit("     next: /login " + name + " (key stays hidden)");
-                logger->event("provider_add", {{"provider", name}});
-                save_and_report(true);
-                maybe_autofetch_models();
-            } else if (arg.rfind("rm", 0) == 0 && (arg.size() == 2 || arg[2] == ' ')) {
-                auto rest = arg.substr(2);
-                while (!rest.empty() && rest.front() == ' ')
-                    rest.remove_prefix(1);
-                const std::string name(rest);
-                auto it = std::find_if(config.providers.begin(), config.providers.end(),
-                                       [&](const ProviderProfile& p) { return p.name == name; });
-                if (name.empty() || it == config.providers.end()) {
-                    screen.commit("[error] unknown provider '" + name +
-                                  "' · /provider lists the names");
-                    return true;
-                }
-                const bool was_active = name == config.active_provider;
-                config.providers.erase(it);
-                auth_probes.erase(name);
-                if (was_active) {
-                    // v7 (design 013 §5.4, Q2): fall back to the first
-                    // remaining profile; with none left the setup state
-                    // returns. The removed profile's credentials go with it.
-                    if (!config.providers.empty())
-                        config.activate_provider(config.providers.front().name);
-                    else
-                        config.active_provider.clear();
-                    config.refresh_current();
-                    switch_active_profile();
-                    screen.commit(config.providers.empty()
-                                      ? "[info] active profile removed; no profiles left · "
-                                        "/provider add <name> or /login to start over"
-                                      : "[info] active profile removed; switched to '" +
-                                            config.active_provider + "'");
-                }
-                logger->event("provider_rm", {{"provider", name}});
-                save_and_report(true);
-                screen.commit("[ok] provider '" + name + "' removed");
-            } else {
-                // /provider <url>: edit the active profile's URL (v7: no
-                // unnamed top level; auto-default when no profile exists).
-                ensure_default_profile();
-                ProviderProfile probe;
-                probe.name = config.active_provider;
-                probe.base_url = std::string(arg);
-                std::string err;
-                if (!probe.valid(&err)) {
-                    screen.commit("[error] " + err);
-                    return true;
-                }
-                auto* active = config.find_provider(config.active_provider);
-                active->base_url = probe.base_url;
-                while (!active->base_url.empty() && active->base_url.back() == '/')
-                    active->base_url.pop_back();
-                auth_probes.erase(active->name);
-                if (active->name == config.current.name)
-                    auth = AuthProbe{}; // a different endpoint cannot inherit it
-                config.refresh_current();
-                save_and_report(true);
-                maybe_autofetch_models();
-            }
-            return true;
-        }
-        if (line.rfind("/log", 0) == 0) {
-            // v4.8 (design 010 §19): /log owns both the metadata-log path
-            // (pre-v4.8 behavior, unchanged) and the traffic-capture
-            // level ladder: info (default, metadata only) < debug (raw
-            // chat dumps) < trace (+ truncated auxiliary traffic).
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                screen.commit(logger->enabled() ? "logging on: " + config.log_file
-                                                : "logging off; usage /log <path> or /log off");
-                screen.commit("level=" + config.log_level +
-                              " (session-only) · usage /log info|debug|trace");
-            } else if (arg == "info" || arg == "debug" || arg == "trace") {
-                // v4.8.1: the level is session-scoped -- set in memory,
-                // never saved (persistence would resurrect a debug switch
-                // across sessions; the maintainer rule for this knob).
-                config.log_level = std::string(arg);
-                if (config.log_level == "info") {
-                    screen.commit("[ok] log level info (this session) · metadata log only, "
-                                  "no raw dumps");
-                } else {
-                    screen.commit("[ok] log level " + config.log_level + " (this session)" +
-                                  (config.log_level == "debug"
-                                       ? " · raw chat traffic"
-                                       : " · chat + truncated aux traffic") +
-                                  " -> " + config.to_provider().debug_log_path);
-                }
-            } else if (arg == "off") {
-                config.log_file = "off"; // sentinel: explicit disable
-                logger = make_logger();
-                save_and_report();
-                screen.commit("[ok] logging disabled");
-            } else if (arg == "default") {
-                config.log_file.clear(); // empty -> /tmp/mini-agent-<uid>.log
-                logger = make_logger();
-                save_and_report();
-                const auto shown = Logger::resolve_path(config);
-                screen.commit("[ok] logging back to default: " +
-                              (shown ? *shown : std::string("(none)")));
-            } else {
-                config.log_file = std::string(arg);
-                logger = make_logger();
-                save_and_report();
-                if (logger->enabled()) {
-                    screen.commit("[ok] logging to: " + config.log_file);
-                } else {
-                    screen.commit("[warn] log path not writable, logging stays off");
-                }
-            }
-            return true;
-        }
-        if (line.rfind("/compact", 0) == 0) {
-            // 015 (design 015 §4C): manual history compaction. Idle-gated
-            // like /session; the summary request runs on its own worker.
-            if (streaming || compact_running || approval_pending()) {
-                screen.commit("[info] /compact needs an idle turn · wait or Ctrl-C");
-                return true;
-            }
-            std::size_t count = 0;
-            for (const auto& m : session.chat.messages()) {
-                if (m.role != Role::System)
-                    ++count;
-            }
-            if (count < 2) {
-                screen.commit("[info] nothing to compact (fewer than 2 messages)");
-                return true;
-            }
-            // 017: if the whole history fits the retained-tail budget there
-            // is nothing to summarize -- compacting would only add an empty
-            // checkpoint (same guard family as "cannot reclaim, do not run").
-            const std::size_t keep_from = find_retained_tail(session.chat.messages(), 20000);
-            std::size_t region_non_system = 0;
-            for (std::size_t i = 0; i < keep_from; ++i) {
-                if (session.chat.messages()[i].role != Role::System)
-                    ++region_non_system;
-            }
-            if (region_non_system == 0) {
-                screen.commit("[info] nothing to compact (history fits the retained tail budget)");
-                return true;
-            }
-            if (!config.complete()) {
-                screen.commit("[error] LLM not configured ·" + config_next_hint(config));
-                return true;
-            }
-            // 017 (design 017 §2.2): verbatim backup BEFORE any replacement;
-            // a failed backup aborts the compact (history stays untouched).
-            if (!temp_mode) {
-                std::string backup_err;
-                if (!store.save_backup(session, &backup_err)) {
-                    screen.commit("[error] compact backup failed: " + backup_err +
-                                  " (history unchanged)");
-                    return true;
-                }
-            }
-            const AppConfig snapshot = config; // thread boundary
-            const Chat history = session.chat; // thread boundary
-            compact_result = CompactResult{};
-            compact_done = false;
-            compact_running = true;
-            abort_requested = false;
-            logger->event("compact", {{"status", "start"},
-                                      {"before", std::to_string(history.messages().size())}});
-            screen.commit("[info] compacting " + std::to_string(history.messages().size()) +
-                          " messages (recent turns kept verbatim, original backed up; "
-                          "Ctrl-C/Esc cancels)...");
-            compact_worker = std::thread([&, snapshot, history] {
-                compact_result =
-                    compact_history(snapshot, history, [&] { return abort_requested.load(); });
-                compact_done = true;
-            });
-            return true;
-        }
-        if (line == "/config") {
-            screen.commit("base_url=" + (config.current.base_url.empty() ? "(not set)" : config.current.base_url));
-            screen.commit("model=" + (config.current.model.empty() ? "(not set)" : config.current.model));
-            screen.commit("api_key=" +
-                          std::string(config.current.api_key.empty() ? "(not set)" : "***set***"));
-            screen.commit("login=" + std::string(auth_log_token(auth)));
-            // v6 (design 012): profile table size + active selection.
-            screen.commit("providers=" + std::to_string(config.providers.size()) + " active=" +
-                          (config.active_provider.empty() ? "(no provider)" : config.active_provider) +
-                          (config.env_override_active ? " · env override in effect" : ""));
-            screen.commit("log_file=" + (config.log_file.empty() ? "(off)" : config.log_file));
-            screen.commit(std::string("log_level=") + config.log_level +
-                          " (session-only, not saved)");
-            // v4 fields (design 010).
-            screen.commit("context_window=" +
-                          (config.current.context_window > 0
-                               ? format_token_count(config.current.context_window) + " (" +
-                                     std::to_string(config.current.context_window) + ")"
-                               : std::string("(not set)")));
-            screen.commit("reasoning_effort=" + (config.current.reasoning_effort.empty()
-                                                     ? std::string("(not set)")
-                                                     : config.current.reasoning_effort));
-            screen.commit("config file: " + default_config_path().string() +
-                          " (env overrides file)");
-            return true;
-        }
-        if (line.rfind("/sidebar", 0) == 0) {
-            // v4.13: right sidebar with the workspace tree + changed
-            // files. Session-only display state (same rule as /sysinfo).
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                screen.commit(std::string("sidebar=") + (show_sidebar ? "on" : "off") +
-                              " · usage /sidebar on|off");
-            } else if (arg == "on") {
-                show_sidebar = true;
-                start_sidebar();
-                screen.commit("[ok] sidebar on (this session) · tree + git changes");
-            } else if (arg == "off") {
-                show_sidebar = false;
-                sidebar_focus = false; // v4.14: no focus survives the panel
-                screen.commit("[ok] sidebar off (this session)");
-            } else {
-                screen.commit("[error] /sidebar expects on|off");
-            }
-            return true;
-        }
-        if (line.rfind("/sysinfo", 0) == 0) {
-            // v4.12: bottom system-info row toggle (user@host · cwd ·
-            // clock). Session-only like the log level -- display state,
-            // not a durable preference.
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                screen.commit(std::string("sysinfo=") + (show_sysinfo ? "on" : "off") +
-                              " · usage /sysinfo on|off");
-            } else if (arg == "on") {
-                show_sysinfo = true;
-                screen.commit("[ok] system info row on (session-only)");
-            } else if (arg == "off") {
-                show_sysinfo = false;
-                screen.commit("[ok] system info row off (session-only)");
-            } else {
-                screen.commit("[error] /sysinfo expects on|off");
-            }
-            return true;
-        }
-        if (line.rfind("/version", 0) == 0) {
-            // 0.8.0: runtime build identity, same three lines as the CLI
-            // `version` subcommand. Read-only; works in any state.
-            screen.commit("mini-agent v" MINI_AGENT_VERSION);
-            screen.commit("commit " MINI_AGENT_COMMIT);
-            screen.commit("built " MINI_AGENT_BUILD_TIME);
-            return true;
-        }
-        if (line == "/sessions") {
-            std::string err;
-            const auto ids = store.list(&err);
-            screen.commit(ids.empty() ? "sessions: (empty)" : "sessions:");
-            for (const auto& id : ids)
-                screen.commit("  " + id + (id == session.meta.id ? "  <- current" : ""));
-            screen.commit("switch in place: /session <id or prefix> · /session new");
-            return true;
-        }
-        if (line.rfind("/session", 0) == 0 && line != "/sessions") {
-            // v4.9: switch or fork the live session without exiting. Same
-            // idle-gated swap discipline as /cwd (worker join, registry
-            // rebuild); the old session is saved and unlocked, the target
-            // is loaded and locked. A failed lock/load rolls back.
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                screen.commit("session=" + session.meta.id +
-                              " · usage /session <id or prefix> | /session new");
-                return true;
-            }
-            if (streaming || turn_done.load() || compact_running) {
-                // The turn-completion handler writes session.chat after
-                // joining; swapping mid-fold would land the old turn in
-                // the new session. Require idle (Ctrl-C interrupts).
-                screen.commit("[info] session switch needs an idle turn · wait or Ctrl-C");
-                return true;
-            }
-            std::string target_id = std::string(arg);
-            const bool fresh = target_id == "new";
-            if (fresh) {
-                target_id = mini_agent::generate_session_id();
-            } else if (!mini_agent::session_id_is_safe(target_id)) {
-                screen.commit("[error] unsafe session id");
-                return true;
-            } else {
-                // v4.13: prefix match (maintainer request). The typed word
-                // resolves against stored ids; one hit replaces it, several
-                // list candidates, none falls through so `load` reports the
-                // usual "no such session" error.
-                session_ids_stale = true;
-                refresh_session_ids();
-                const auto m = mini_agent::match_session_ref(target_id, session_ids);
-                if (m.exact) {
-                    target_id = m.id;
-                } else if (!m.candidates.empty()) {
-                    screen.commit("session " + target_id + " is ambiguous:");
-                    for (const auto& id : m.candidates)
-                        screen.commit("  " + id + (id == session.meta.id ? "  <- current" : ""));
-                    screen.commit("type more characters, or Tab to cycle /session <id>");
-                    return true;
-                }
-            }
-            if (target_id == session.meta.id) {
-                screen.commit("[info] already on session " + target_id);
-                return true;
-            }
-            std::string err;
-            // Persist the outgoing session first; a save failure is a warn
-            // only (the switch proceeds; the old file keeps last-turn state).
-            // v4.15: a temp session has no file and never gets one, so the
-            // pre-switch save is skipped (its chat is dropped on switch-out).
-            if (!temp_mode && !store.save(session, &err)) {
-                screen.commit("[warn] save before switch failed: " + err);
-            }
-            Session next;
-            std::optional<std::string> next_workspace;
-            if (fresh) {
-                next.meta.id = target_id;
-                next.meta.model = config.current.model;
-                next_workspace = config.workspace.empty()
-                                     ? std::optional<std::string>{}
-                                     : std::optional<std::string>(config.workspace);
-                next.meta.workspace = next_workspace;
-                next.meta.provider =
-                    config.current.name.empty()
-                        ? std::optional<std::string>()
-                        : std::optional<std::string>(config.current.name);
-                mini_agent::inject_system_prompt(next.chat, config.workspace, config.current.model,
-                                                 config.system_prompt);
-            } else {
-                auto loaded = store.load(target_id, &err);
-                if (!loaded) {
-                    screen.commit("[error] load failed: " + sanitize_display(err));
-                    return true;
-                }
-                next = std::move(*loaded);
-            }
-            if (!store.try_lock(target_id, &err)) {
-                screen.commit("[error] session busy: " + sanitize_display(err));
-                return true;
-            }
-            store.unlock(session.meta.id);
-            session = std::move(next);
-            active_session_id = session.meta.id;
-            // v4.15: `/session new` from a temp session stays temp (the new
-            // chat is equally ephemeral); resuming a saved id ends temp mode
-            // -- from here on the target behaves like a normal session.
-            temp_mode = temp_mode && fresh;
-            // v3 workspace precedence on switch (same as resume in cmd_run):
-            // the session's own stamp rebinds config; else keep current.
-            if (session.meta.workspace && !session.meta.workspace->empty()) {
-                config.workspace = *session.meta.workspace;
-                session.chat.update_system_workspace(config.workspace);
-                std::string note;
-                tool_registry = build_tool_registry(config, &note);
-            }
-            config_snapshot = config; // worker turn snapshot refresh (same as /cwd)
-            reset_usage_readings();   // usage belongs to the new session
-            // Re-seed ↑/↓ history from the new chat (same rule as launch).
-            history.clear();
-            for (const auto& m : session.chat.messages())
-                if (m.role == Role::User && !m.content.empty() && m.content.front() != '/')
-                    history.push_back(m.content);
-            hist_pos = history.size();
-            history_draft.clear();
-            logger->event("session_switch", {{"id", session.meta.id},
-                                             {"fresh", fresh ? "new" : "resume"},
-                                             {"temp", temp_mode ? "on" : "off"}});
-            screen.commit(std::string("[ok] ") + (fresh ? "new" : "resumed") +
-                          (temp_mode ? " temp" : "") + " session " + session.meta.id + " · " +
-                          std::to_string(session.chat.messages().size()) + " message(s)");
-            return true;
-        }
-        if (line.rfind("/context", 0) == 0) {
-            // v4 (design 010): model context window for the status-bar
-            // ctx% reading. Config is authoritative -- no probing.
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                const auto inputs = context_reading();
-                std::string shown = config.current.context_window > 0
-                                        ? format_token_count(config.current.context_window) + " (" +
-                                              std::to_string(config.current.context_window) + ")"
-                                        : std::string("(not set)");
-                // v4.7: when unset, surface the catalog reading (the same
-                // value the status bar silently uses) so the user can see
-                // and confirm it before it becomes config-authoritative.
-                if (config.current.context_window <= 0 && inputs.context_window > 0)
-                    shown += " · catalog: " + format_token_count(inputs.context_window) + " (" +
-                             std::to_string(inputs.context_window) + ") · set it: /context " +
-                             std::to_string(inputs.context_window);
-                screen.commit("context_window=" + shown +
-                              "; usage /context <tokens|128K|1M> | /context probe | /context off");
-                screen.commit(
-                    "ctx reading: " + std::string(inputs.context_exceeded ? "EXCEEDED " : "") +
-                    (inputs.context_tokens > 0
-                         ? (inputs.context_estimated ? "~" : "") +
-                               format_token_count(inputs.context_tokens) + " tokens (" +
-                               std::to_string(inputs.context_tokens) + ")" +
-                               (inputs.context_window > 0
-                                    ? " = " +
-                                          std::to_string(inputs.context_tokens * 100 /
-                                                         inputs.context_window) +
-                                          "% of window"
-                                    : std::string())
-                         : std::string("(no data yet)")) +
-                    (inputs.context_estimated ? " · estimated" : " · provider-anchored"));
-                // 017 (design 017 §2.1): per-class breakdown + pressure.
-                screen.commit("breakdown (estimated): system ~" +
-                              format_token_count(inputs.breakdown.system) + " · conversation ~" +
-                              format_token_count(inputs.breakdown.conversation) +
-                              " · tool output ~" +
-                              format_token_count(inputs.breakdown.tool_output));
-                if (inputs.context_exceeded)
-                    screen.commit("[warn] last request overflowed the window · reading "
-                                  "synthesized until the next successful turn");
-                if (const long long threshold = pressure_threshold(inputs.context_window);
-                    threshold > 0)
-                    screen.commit("pressure: /compact hint at >= " + format_token_count(threshold) +
-                                  " tokens (window - max(15%, 16k))");
-            } else if (arg == "off" || arg == "0") {
-                active_profile_for_edit()->context_window = 0;
-                config.refresh_current(); // v7: per-profile metadata
-                save_and_report();
-                screen.commit("[ok] context window cleared · status shows tokens, no %");
-            } else if (arg == "probe") {
-                // v4.3 (design 010 §13): explicit, user-triggered cheap
-                // probe -- one oversized-max_tokens request whose rejection
-                // carries the gateway's authoritative numbers. Never
-                // automatic: it costs a request and the message text is
-                // not an API contract, so the maintainer decides when.
-                if (probe_running) {
-                    screen.commit("[info] probe already in flight, wait for the result");
-                    return true;
-                }
-                if (config.current.base_url.empty() || config.current.api_key.empty() || config.current.model.empty()) {
-                    screen.commit("[error] probe needs base_url + api_key + model ·" +
-                                  config_next_hint(config));
-                    return true;
-                }
-                if (probe_worker.joinable())
-                    probe_worker.join();
-                probe_running = true;
-                probe_done = false;
-                probe_result = ProbeResult{};
-                logger->event("ctx_probe", {{"status", "start"},
-                                            {"base_url", Logger::redact_url(config.current.base_url)},
-                                            {"model", config.current.model}});
-                const AppConfig snapshot = config; // thread boundary
-                probe_worker = std::thread([&, snapshot] {
-                    probe_result = probe_window(snapshot);
-                    probe_done = true;
-                });
-                screen.commit("[info] probing context window (one oversized request)...");
-            } else {
-                // §21: decimal K/M suffixes (128K=128000, 1M=1000000);
-                // plain digits stay exact. 0 = invalid, nothing written.
-                const long long parsed_window = parse_token_count(arg);
-                if (parsed_window <= 0) {
-                    screen.commit("[error] /context expects a positive token count "
-                                  "(e.g. 131072, 128K, 1M)");
-                    return true;
-                }
-                active_profile_for_edit()->context_window = parsed_window;
-                config.refresh_current(); // v7: per-profile metadata
-                save_and_report();
-            }
-            return true;
-        }
-        if (line.rfind("/reasoning", 0) == 0) {
-            // v4 (design 010): reasoning_effort passthrough. Verbatim
-            // value; the server is the arbiter (400 -> hint, no auto-drop:
-            // config is authoritative and silent removal would lie about
-            // what was sent).
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                screen.commit("reasoning_effort=" +
-                              (config.current.reasoning_effort.empty() ? std::string("(not set)")
-                                                               : config.current.reasoning_effort) +
-                              "; usage /reasoning <level> or /reasoning off");
-                // v4.2 (§11): cached capabilities for the current model ->
-                // numbered picker over the gateway's supported levels (the
-                // same interaction as /models). A literal value still works
-                // for models without advertised metadata.
-                const auto caps = caps_for_model();
-                if (!caps.reasoning_efforts.empty()) {
-                    close_preview_pane(); // 018: menu takes over the live region
-                    reasoning_choices = caps.reasoning_efforts;
-                    reasoning_menu_open = true;
-                    for (const auto& row : reasoning_menu_rows(
-                             reasoning_choices, config.current.reasoning_effort,
-                             caps.reasoning_default_effort, caps.reasoning_mandatory))
-                        screen.commit(row);
-                } else if (caps.supports_reasoning) {
-                    screen.commit("[info] gateway marks this model as reasoning-capable "
-                                  "but lists no levels; set one explicitly");
-                }
-            } else if (arg == "off") {
-                active_profile_for_edit()->reasoning_effort.clear();
-                config.refresh_current(); // v7: per-profile metadata
-                save_and_report();
-                screen.commit("[ok] reasoning effort cleared · requests omit the field");
-            } else {
-                active_profile_for_edit()->reasoning_effort = std::string(arg);
-                config.refresh_current(); // v7: per-profile metadata
-                save_and_report();
-            }
-            return true;
-        }
-        if (line.rfind("/debug", 0) == 0) {
-            // v4.8 (design 010 §19): /debug is now an alias of the /log
-            // level ladder -- on == /log debug, all == /log trace, off ==
-            // /log info. Bodies contain conversation content (the point
-            // of the level) while the api_key stays in the Authorization
-            // header only.
-            const auto arg = arg_of(line);
-            auto set_level = [&](std::string_view level, std::string_view ok_text) {
-                config.log_level = level; // session-scoped (v4.8.1): no save
-                if (config.log_level == "info") {
-                    screen.commit(std::string(ok_text) + " · metadata log only");
-                } else {
-                    screen.commit(std::string(ok_text) + " -> " +
-                                  config.to_provider().debug_log_path);
-                }
-            };
-            if (arg.empty()) {
-                const auto pc = config.to_provider();
-                screen.commit(
-                    std::string("debug=") + config.log_level +
-                    (config.capture_chat() ? " · file: " + pc.debug_log_path : std::string()) +
-                    "; usage /debug on|all|off (alias of /log debug|trace|info)");
-            } else if (arg == "on") {
-                set_level("debug", "[ok] log level debug (chat traffic) · raw chat traffic");
-            } else if (arg == "all") {
-                // trace: ALSO dump auxiliary traffic (models listing,
-                // context probe request/response), truncated.
-                set_level("trace", "[ok] log level trace (chat + truncated aux traffic)");
-            } else if (arg == "off") {
-                set_level("info", "[ok] log level info · no further dumps");
-            } else if (arg == "debug" || arg == "trace" || arg == "info") {
-                set_level(arg, arg == "info"
-                                   ? "[ok] log level info"
-                                   : (arg == "debug" ? "[ok] log level debug (chat traffic)"
-                                                     : "[ok] log level trace (chat + aux)"));
-            } else {
-                screen.commit("[error] /debug expects on|all|off|info|debug|trace");
-            }
-            return true;
-        }
-        if (line.rfind("/approve", 0) == 0) {
-            // v3.1 runtime approval switch: /approve [ask|allowlist|off].
-            // Worker must be idle (policy is snapshotted per turn), same
-            // join discipline as /cwd and /tools.
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                screen.commit("approval=" + approval_policy +
-                              " · /approve ask|allowlist|off · 'a' key also "
-                              "allows a tool name for this session");
-                if (approval_policy == "allowlist") {
-                    std::string joined;
-                    for (const auto& name : config.tool_allowlist) {
-                        if (!joined.empty())
-                            joined += ", ";
-                        joined += name;
-                    }
-                    screen.commit("allowlist: " +
-                                  (joined.empty() ? std::string("(empty)") : joined));
-                }
-                return true;
-            }
-            const std::string want(arg);
-            if (want != "ask" && want != "allowlist" && want != "off") {
-                screen.commit("[error] /approve expects ask|allowlist|off");
-                return true;
-            }
-            if (worker.joinable())
-                worker.join();
-            approval_policy = want;
-            config.tool_approval = want;
-            config_snapshot = config; // worker turn snapshot refresh (same as /cwd)
-            save_and_report(false);
-            if (want == "off" && !tool_registry->empty())
-                screen.commit("[warn] tool_approval=off: tools run WITHOUT asking"
-                              " (no sandbox: run_bash executes at your user's "
-                              "privileges; git push stays human-only by tool "
-                              "absence, but shell can still reach remotes)");
-            else if (want == "allowlist" && config.tool_allowlist.empty())
-                screen.commit("[info] allowlist mode with an EMPTY list: every tool "
-                              "still asks; add names via tool_allowlist in config.json");
-            else
-                screen.commit("[ok] approval=" + approval_policy + " saved");
-            logger->event("approval_switch", {{"policy", approval_policy}});
-            return true;
-        }
-        if (line.rfind("/cwd", 0) == 0) {
-            // v3 (design 009 5.4): query or rebind the session workspace.
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                screen.commit("workspace: " +
-                              sanitize_display(config.workspace.empty()
-                                                   ? std::filesystem::current_path().string()
-                                                   : config.workspace) +
-                              " · /cwd <path> to rebind (file+git tools and run_bash)");
-                return true;
-            }
-            const std::filesystem::path target(arg);
-            std::error_code ec;
-            const auto canonical = std::filesystem::weakly_canonical(target, ec);
-            if (ec || !std::filesystem::is_directory(canonical, ec)) {
-                screen.commit("[error] not a directory: " + sanitize_display(arg));
-                return true;
-            }
-            if (worker.joinable())
-                worker.join(); // registry swap needs the worker idle (008 thread rule)
-            config.workspace = canonical.string();
-            session.meta.workspace = config.workspace;
-            session.chat.update_system_workspace(config.workspace);
-            std::string note;
-            tool_registry = build_tool_registry(config, &note);
-            config_snapshot = config;
-            sidebar_browse.clear(); // 018: browser resets to the new workspace
-            start_sidebar(); // v4.13: tree belongs to the new boundary
-            screen.commit("[ok] workspace=" + sanitize_display(config.workspace) +
-                          " · tools rebound · " +
-                          (config.workspace == std::filesystem::current_path().string()
-                               ? "(matches launch cwd)"
-                               : "run_bash now starts inside it"));
-            return true;
-        }
-        if (line.rfind("/preview", 0) == 0) {
-            const auto arg = arg_of(line);
-            if (arg.empty()) {
-                screen.commit("usage: /preview <path> (workspace-bounded; .md renders)");
-                return true;
-            }
-            open_preview_pane(std::string(arg));
-            return true;
-        }
-        if (line == "/tools") {
-            // Rebuild the registry so fresh server configs apply without
-            // a restart; old clients die with their transports (RAII).
-            if (worker.joinable())
-                worker.join();
-            config_snapshot = config;
-            std::string note;
-            tool_registry = build_tool_registry(config, &note);
-            std::vector<std::string> rendered;
-            for (const auto& definition : tool_registry->list()) {
-                auto first_line = definition.description.find('\n');
-                rendered.push_back(definition.name + " \u00b7 " + definition.source + " \u00b7 " +
-                                   sanitize_display(definition.description.substr(0, first_line)));
-            }
-            for (const auto& row : tool_registry_rows(rendered))
-                screen.commit(row);
-            if (!note.empty())
-                screen.commit("[info] " + note + " (lazy start on first call)");
-            screen.commit("approval=" + approval_policy);
-            return true;
-        }
-        if (line == "/mcp") {
-            if (config.mcp_servers.empty()) {
-                screen.commit("mcp servers: (none) · add mcp_servers to config.json");
-                return true;
-            }
-            for (const auto& server : config.mcp_servers) {
-                screen.commit("  " + server.name + " \u00b7 " + server.transport + "\u2192" +
-                              (server.transport == "http" ? Logger::redact_url(server.url)
-                                                          : sanitize_display(server.command)));
-            }
-            screen.commit("restart servers after config edits: /tools · down marks clear per call");
-            return true;
-        }
-        if (line == "/exit")
-            return false; // caller exits
-        if (!line.empty() && line.front() == '/') {
-            screen.commit("[error] unknown command " + std::string(line) + " (/help)");
-            return true;
-        }
-        return false;
+        return handle_slash_impl(slash_ctx, line);
     };
 
     auto hist_up = [&] {

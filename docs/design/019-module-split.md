@@ -74,7 +74,7 @@ CLI：
 - **P1 纯函数抽取** —— **已完成**（提交 `04b36f1`）：`md_geometry`、`subprocess`、`workspace`、`provider_parse`。零状态、行为保持；四 preset CTest 3/3 + pty TUI 195 PASS + CLI ALL PASS + check.py。
 - **P2 类/子命令抽取** —— **已完成**（CLI `a879bcd`；tools 拆分见后续提交）：CLI → `cli_common`/`cli_commands`/`cli_main`（1115→86）+ `session_serde`；tools → `tools_file`（FileRuntime）/`tools_git`（GitRuntime），tools.cpp 保留 registry+bash（1095→222）。**config_file/env 拆分暂缓**（config.cpp 777 行、env/file 合并高度耦合，价值低）。
 - **P3 TUI 状态对象 + screen 抽取** —— **screen 层已完成**：`tui_screen.hpp` 承载 RawMode/term size/tint/LiveScreen/split_ansi_paragraphs/steady_now（tui.cpp 3626→3195 行）；四 preset + pty 双环境（常规）验证。**TuiState 状态对象待建**，是 P4 的前提。
-- **P4 TUI 逻辑拆分** —— **进行中**：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`；**TurnState 首片**（回合/审批共享状态 + `run_turn_worker`）→ `tui_turn`（别名保持主线程代码不变；tui.cpp 3195→2683）。**slash/input 仍待实施**（同法扩 TuiState）。
+- **P4 TUI 逻辑拆分** —— **进行中**：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`；**TurnState 首片**（回合/审批共享状态 + `run_turn_worker`）→ `tui_turn`；**slash 群** → `tui_slash.hpp`（`handle_slash_impl` 模板 over 引用上下文；作用域感知扫描重命名，只改代码段、保护字符串/注释；内部遮蔽局部 `history`→`hchat`；tui.cpp →1917）。**input/帧渲染仍待实施**（同法）。
 
 每阶段一个提交；任何阶段测试不绿即回退该阶段。
 
@@ -118,7 +118,7 @@ worker 线程只读快照 + 写 bridge/result（join-then-read 纪律不变）�
 **门禁**：每步四 preset CTest + pty TUI 195/宽 USER + CLI；审批/中断/行记账断言必须全绿；
 不绿即回退该步。ASan/UBSan（CI quality）兜底线程/越界。
 
-**实施注意（2026-11-18 实测）**：turn/审批群无内部遮蔽，别名法一次成功；但 slash 群存在
-**内部局部遮蔽外部同名**（如 /compact 块内 `const Chat history` 遮蔽外部 `history` vector），
-纯文本/正则重命名无法区分会作用域，两次尝试均编译失败已回退。故 slash/input 迁移必须用
-**作用域感知**手段（clang-rename/libTooling AST，或先手工把内部局部改名再收拢），不得用全局正则。
+**实施注意（2026-11-18 实测）**：turn/审批群无内部遮蔽，别名法一次成功；slash 群有内部局部遮蔽
+（/compact 的 `Chat history`）与字符串字面量含同名单词，全局正则会误改。最终用**作用域感知扫描**
+（逐字符区分代码/字符串/字符/注释/raw-string，仅重命名代码段）+ 内部局部预改名（history→hchat）成功，
+pty 195/0。input/帧渲染沿用同一扫描器。
