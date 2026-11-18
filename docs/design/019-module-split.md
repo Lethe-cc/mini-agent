@@ -117,3 +117,8 @@ worker 线程只读快照 + 写 bridge/result（join-then-read 纪律不变）�
 
 **门禁**：每步四 preset CTest + pty TUI 195/宽 USER + CLI；审批/中断/行记账断言必须全绿；
 不绿即回退该步。ASan/UBSan（CI quality）兜底线程/越界。
+
+**实施注意（2026-11-18 实测）**：turn/审批群无内部遮蔽，别名法一次成功；但 slash 群存在
+**内部局部遮蔽外部同名**（如 /compact 块内 `const Chat history` 遮蔽外部 `history` vector），
+纯文本/正则重命名无法区分会作用域，两次尝试均编译失败已回退。故 slash/input 迁移必须用
+**作用域感知**手段（clang-rename/libTooling AST，或先手工把内部局部改名再收拢），不得用全局正则。
