@@ -118,35 +118,30 @@ temp（不落盘）/ normal（原子写+锁）；`/session new|<id>` 进程内�
 @startuml run-turn-activity
 start
 :staging = copy(chat) + user;
-:round = 0;
-while (round <= max_tool_rounds?) is (yes)
+:round = 0; done = false;
+repeat
   :last_round = (round == max);
-  :tools_for_round = tools_enabled && !last_round ? tools_json : "";
+  :tools_for_round = (tools_enabled && !last_round) ? tools_json : "";
   if (tools_enabled && last_round?) then (yes)
-    :append_system_note(限轮提示) 折进首位 System;
+    :append_system_note 折进首位 System;
     if (无首位 System?) then (yes)
-      :staging.add(末尾 User 提示); limit_note = idx;
+      :staging.add(末尾 User 提示);
+      :limit_note = idx;
     endif
   endif
   :result = ask_provider(staging, tools_for_round);
   :累加 usage / reasoning（prompt 取末轮）;
   if (!tools_enabled || !has_tool_calls || last_round?) then (yes)
-    :final_text = result.text; break;
+    :final_text = result.text;
+    :done = true;
   else (no)
-    while (逐个 tool_call（顺序执行）?)
-      if (session_allowed 或 approve=Allow/AllowSession?) then (allow)
-        :on_tool_start; execute_one;
-      else (deny)
-        :tool_result = "user denied";
-      endif
-      if (abort()?) then (yes)
-        :throw Cancelled; stop;
-      endif
-      :on_tool; staging.add(tool message);
-    endwhile
+    :逐个 tool_call 顺序执行
+    (审批 Allow 才 execute; Deny→denied;
+    abort→throw Cancelled;
+    staging.add(tool message));
   endif
   :++round;
-endwhile (no)
+repeat while (round <= max && !done?) is (yes) not (no)
 :commit：chat.add(user) + staging[prefix+1..]
 跳过 limit_note 与 System（仅成功时）;
 :usage_out / reasoning_out 回传; return final_text;
@@ -162,12 +157,19 @@ stop
 @startuml esc-precedence
 start
 :收到 Esc（非 CSI 序列）;
-if (preview_pane.open?) then (yes) :close_preview_pane; stop; endif
-if (sidebar_focus?) then (yes) :sidebar_focus=false; stop; endif
-if (streaming || compact_running?) then (yes) :abort_requested=true; stop; endif
-if (reasoning_menu_open?) then (yes) :dismiss; stop; endif
-if (model_menu_open?) then (yes) :dismiss; stop; endif
-:idle：无动作;
+if (preview_pane.open?) then (yes)
+  :close_preview_pane;
+elseif (sidebar_focus?) then (yes)
+  :sidebar_focus = false;
+elseif (streaming || compact_running?) then (yes)
+  :abort_requested = true;
+elseif (reasoning_menu_open?) then (yes)
+  :dismiss reasoning menu;
+elseif (model_menu_open?) then (yes)
+  :dismiss model menu;
+else (idle)
+  :无动作;
+endif
 stop
 @enduml
 ```
@@ -208,10 +210,14 @@ start
 :summary = provider.complete(build_compact_request);
 if (无模板 && !abort?) then (yes)
   :NUDGE 重试; summary = complete(nudge);
-  if (仍无模板?) then (yes) :error; endif
+  if (仍无模板?) then (yes)
+    :error;
+  endif
 endif
-if (abort?) then (yes) :aborted=true; 历史不动; stop; endif
-if (error?) then (yes) :历史不动; stop; endif
+if (abort || error?) then (yes)
+  :历史不动;
+  stop
+endif
 :主线程 join 后：chat = system + marked summary + tail;
 :save; 报告 pruned/nudged;
 stop
@@ -224,10 +230,12 @@ stop
 @startuml frame-activity
 start
 :poll(stdin, frame_ms);
-if (有输入?) then (yes) :键位分发（7.2）; endif
+if (有输入?) then (yes)
+  :键位分发（7.2）;
+endif
 :drain_tool_events / 完成 handler（models/probe/compact/sidebar/turn）;
 :tail = streaming ? deltas_snapshot : "";
-:extra_rows = 审批块 > _turn panel > 预览 pane;
+:extra_rows = 审批块 > turn panel > 预览 pane;
 :composer_display（反显光标）/ prompt=connection_state / status / sysinfo / sidebar;
 :screen.render(行级 diff + CSI 2026);
 stop
