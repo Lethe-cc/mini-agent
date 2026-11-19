@@ -110,7 +110,144 @@ Closed --> Closed : streaming/approval/compact 期间拒绝打开
 temp（不落盘）/ normal（原子写+锁）；`/session new|<id>` 进程内切换；
 退出时 normal 保存、temp 丢弃；`.lock` 防同 id 并发。
 
-## 7. 引用
+## 7. 详细流程图（activity / sequence，代码核对）
+
+### 7.1 run_turn 工具循环（core/loop.cpp）
+
+```plantuml
+@startuml run-turn-activity
+start
+:staging = copy(chat) + user;
+:round = 0;
+while (round <= max_tool_rounds?) is (yes)
+  :last_round = (round == max);
+  :tools_for_round = tools_enabled && !last_round ? tools_json : "";
+  if (tools_enabled && last_round?) then (yes)
+    :append_system_note(限轮提示) 折进首位 System;
+    if (无首位 System?) then (yes)
+      :staging.add(末尾 User 提示); limit_note = idx;
+    endif
+  endif
+  :result = ask_provider(staging, tools_for_round);
+  :累加 usage / reasoning（prompt 取末轮）;
+  if (!tools_enabled || !has_tool_calls || last_round?) then (yes)
+    :final_text = result.text; break;
+  else (no)
+    while (逐个 tool_call（顺序执行）?)
+      if (session_allowed 或 approve=Allow/AllowSession?) then (allow)
+        :on_tool_start; execute_one;
+      else (deny)
+        :tool_result = "user denied";
+      endif
+      if (abort()?) then (yes)
+        :throw Cancelled; stop;
+      endif
+      :on_tool; staging.add(tool message);
+    endwhile
+  endif
+  :++round;
+endwhile (no)
+:commit：chat.add(user) + staging[prefix+1..]
+跳过 limit_note 与 System（仅成功时）;
+:usage_out / reasoning_out 回传; return final_text;
+stop
+@enduml
+```
+
+失败/中断抛 ProviderError → 不 commit，历史停在上一轮边界（007 §5、008 §4）。
+
+### 7.2 中断/Esc 优先级（tui.cpp 输入分支）
+
+```plantuml
+@startuml esc-precedence
+start
+:收到 Esc（非 CSI 序列）;
+if (preview_pane.open?) then (yes) :close_preview_pane; stop; endif
+if (sidebar_focus?) then (yes) :sidebar_focus=false; stop; endif
+if (streaming || compact_running?) then (yes) :abort_requested=true; stop; endif
+if (reasoning_menu_open?) then (yes) :dismiss; stop; endif
+if (model_menu_open?) then (yes) :dismiss; stop; endif
+:idle：无动作;
+stop
+@enduml
+```
+
+Ctrl-C 升级链：preview→关 pane；streaming/compact→首次 abort、已 abort 再按→退出；
+idle→2s 内二次→退出，否则清 composer+提示。Ctrl-D 直接退出。审批期间键盘被审批独占。
+
+### 7.3 审批 worker↔主线程时序（tui_bridge.hpp）
+
+```plantuml
+@startuml approval-sequence
+participant Worker as W
+participant TurnBridge as B
+participant Main as M
+W -> B : publish_approval(call, preview)（arm 守卫）seq
+M -> B : 渲染审批块（extra_rows）
+M -> B : answer_approval(y/n/a/?) / 超时 / abort
+W -> B : wait_approval(seq,120s) → Answer/Timeout/Aborted
+alt Allow
+  W -> W : 重读一致才 execute_one
+else Deny/Timeout/Aborted
+  W -> B : disarm + push_tool_event(未执行)
+end
+W -> B : finish_running_tool(round)
+M -> B : drain_tool_events → 历史 [tool] 行
+@enduml
+```
+
+### 7.4 /compact 流程（tui_workers.cpp，015/017）
+
+```plantuml
+@startuml compact-activity
+start
+:backup = save_backup(session);
+:cut = find_retained_tail(msgs, 20000);
+:tail = msgs[cut..]; region = msgs[..cut];
+:previous = 旧 marked summary; prune_tool_outputs(region,4);
+:summary = provider.complete(build_compact_request);
+if (无模板 && !abort?) then (yes)
+  :NUDGE 重试; summary = complete(nudge);
+  if (仍无模板?) then (yes) :error; endif
+endif
+if (abort?) then (yes) :aborted=true; 历史不动; stop; endif
+if (error?) then (yes) :历史不动; stop; endif
+:主线程 join 后：chat = system + marked summary + tail;
+:save; 报告 pruned/nudged;
+stop
+@enduml
+```
+
+### 7.5 帧渲染管线（tui_frame.hpp，007 §5.6）
+
+```plantuml
+@startuml frame-activity
+start
+:poll(stdin, frame_ms);
+if (有输入?) then (yes) :键位分发（7.2）; endif
+:drain_tool_events / 完成 handler（models/probe/compact/sidebar/turn）;
+:tail = streaming ? deltas_snapshot : "";
+:extra_rows = 审批块 > _turn panel > 预览 pane;
+:composer_display（反显光标）/ prompt=connection_state / status / sysinfo / sidebar;
+:screen.render(行级 diff + CSI 2026);
+stop
+@enduml
+```
+
+## 8. 状态转移表（节选）
+
+| 机器 | 当前态 | 事件 | 下一态 | 副作用 |
+| --- | --- | --- | --- | --- |
+| conn | Unverified | probe 2xx | Verified | 提示符 `>` 绿 |
+| conn | Checking | 401/403 | Rejected | `!` 红 |
+| conn | * | 凭据变更 | Unverified | 重置 AuthProbe |
+| turn | Streaming | run_turn ok | Commit | 写 chat+save |
+| turn | Streaming | abort | Aborted | 不落盘 |
+| approval | Waiting | 120s | Timeout→Deny | disarm |
+| worker | Running | 再请求 | Stale | 不 join，完成后重发 |
+| pane | Open | Esc | Closed | 恢复鼠标 |
+
+## 9. 引用
 
 007 §5.6（帧/中断）、008 §5.4（审批）、010 §13（probe）、013（profile/auth）、
 017（compact）、018（pane）、ADR 001（session）、ADR 006（审批策略）。
