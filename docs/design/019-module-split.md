@@ -129,3 +129,9 @@ pty 195/0。input/帧渲染沿用同一扫描器。
 `dispatch_input_impl(Ctx&, LoopCtl&)` 与 `render_frame_impl(Ctx&)`，`continue`→`return LoopCtl::Next`、
 退出→`Exit`；run_loop 只留 poll/抽干/join/调度。沿用作用域感知扫描器重命名，逐段小步+pty 门禁。
 小型输入助手（hist_up/down、mark_edited、insert_sidebar_selection）可先随迁。
+
+**控制流陷阱（2026-11-19 实测）**：主循环输入分支内嵌 `for(i over buf)` 字节循环，其 `continue`
+指内层循环；外层 `continue` 才是“下一帧”；退出走 `goto done`（循环后清理标号）。三者同名不同义，
+正则/扫描器无法区分，**不得自动抽取**。LoopCtl 方案须人工/AST 逐条翻译：内层 continue 保留、
+外层 continue→`return Next`、goto done→`return Exit`，并保留 done 清理路径。此为最后一步，
+建议专注会话手工执行+pty 门禁。
