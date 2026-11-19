@@ -51,6 +51,7 @@
 #include "tui_sidebar.hpp"
 #include "tui_turn.hpp"
 #include "tui_slash.hpp"
+#include "tui_input.hpp"
 #include "tui_workers.hpp"
 
 namespace mini_agent::tui {
@@ -830,56 +831,29 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
         return handle_slash_impl(slash_ctx, line);
     };
 
-    auto hist_up = [&] {
-        if (hist_pos == 0)
-            return;
-        if (hist_pos == history.size())
-            history_draft = composer; // leaving the draft slot: keep it
-        composer = history[--hist_pos];
-        cursor = composer.size();
-    };
-    auto hist_down = [&] {
-        if (hist_pos == history.size())
-            return;
-        if (++hist_pos == history.size()) {
-            composer = history_draft;
-            history_draft.clear();
-        } else {
-            composer = history[hist_pos];
-        }
-        cursor = composer.size();
-    };
-    // Editing a recalled line parks the edit in the draft slot without
-    // moving hist_pos (bash semantics): Down returns to it later.
-    auto mark_edited = [&] {
-        if (hist_pos != history.size())
-            history_draft = composer;
-    };
-
-    // 018: insert the highlighted entry (file OR directory) as a workspace-
-    // relative path and leave focus. Enter uses this for files; `i` uses it for
-    // any entry, so a directory can still be handed to the model now that Enter
-    // navigates into it. Defined here (after mark_edited) for scope.
-    auto insert_sidebar_selection = [&]() -> bool {
-        if (sidebar_sel >= sidebar_result.paths.size() || sidebar_result.paths[sidebar_sel].empty())
-            return false;
-        const std::string& rawp = sidebar_result.paths[sidebar_sel];
-        std::string rel = rawp;
-        if (!rel.empty() && rel.front() == '/') {
-            std::error_code rec;
-            const auto ws = config.workspace.empty() ? std::filesystem::current_path()
-                                                     : std::filesystem::path(config.workspace);
-            const auto r = std::filesystem::relative(std::filesystem::path(rel), ws, rec);
-            if (!rec)
-                rel = r.string();
-        }
-        utf8_insert(composer, cursor, rel);
-        mark_edited();
-        screen.commit("[sidebar] inserted: " + sanitize_display(rel) +
-                      " · edit freely, Enter sends as usual");
-        sidebar_focus = false;
-        return true;
-    };
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wchanges-meaning"
+#endif
+    struct InputCtx {
+        decltype(hist_pos)& hist_pos;
+        decltype(history)& history;
+        decltype(history_draft)& history_draft;
+        decltype(composer)& composer;
+        decltype(cursor)& cursor;
+        decltype(sidebar_sel)& sidebar_sel;
+        decltype(sidebar_result)& sidebar_result;
+        decltype(config)& config;
+        decltype(screen)& screen;
+        decltype(sidebar_focus)& sidebar_focus;
+    } input_ctx{hist_pos, history, history_draft, composer, cursor, sidebar_sel, sidebar_result, config, screen, sidebar_focus};
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+    auto hist_up = [&] { hist_up_impl(input_ctx); };
+    auto hist_down = [&] { hist_down_impl(input_ctx); };
+    auto mark_edited = [&] { mark_edited_impl(input_ctx); };
+    auto insert_sidebar_selection = [&]() -> bool { return insert_sidebar_selection_impl(input_ctx); };
 
     for (;;) {
         struct pollfd pfd{STDIN_FILENO, POLLIN, 0};

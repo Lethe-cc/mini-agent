@@ -26,6 +26,7 @@ src/
 │   └── tui_workers.cpp/.hpp models 发现 / ctx probe / compact 摘要 worker（参数化）
 │   └── tui_turn.cpp/.hpp  TurnState（回合/审批共享状态）+ run_turn_worker
 │   └── tui_slash.hpp      斜杠命令分发 handle_slash_impl（模板 over run_loop 上下文）
+│   └── tui_input.hpp      输入助手 hist_up/down / mark_edited / insert_sidebar_selection（模板）
 ├── core/       Agent 内核
 │   ├── chat.cpp            Message / Chat 模型 + JSON
 │   ├── loop.cpp            run_turn 纯函数式会话循环
