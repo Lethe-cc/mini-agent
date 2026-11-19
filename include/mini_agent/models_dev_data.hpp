@@ -6,7 +6,7 @@
 // models.dev v1 context-window catalog, compact TSV:
 //   base_url \t model_id \t context_tokens \t output_tokens(0=unknown)
 // Source: https://models.dev/api.json (MIT, anomalyco/models.dev)
-// Rows: 8163
+// Rows: 8175
 namespace mini_agent {
 
 #if defined(__clang__)
@@ -329,7 +329,7 @@ https://api-gateway.merge.dev/v1/ai-sdk	mistral/mistral-medium-2505	128000	12800
 https://api-gateway.merge.dev/v1/ai-sdk	mistral/mistral-medium-latest	262144	262144
 https://api-gateway.merge.dev/v1/ai-sdk	mistral/mistral-small-latest	256000	256000
 https://api-gateway.merge.dev/v1/ai-sdk	mistral/pixtral-large-latest	128000	128000
-https://api-gateway.merge.dev/v1/ai-sdk	moonshot/kimi-k2.5	262144	262144
+https://api-gateway.merge.dev/v1/ai-sdk	moonshot/kimi-k2.5	131072	32768
 https://api-gateway.merge.dev/v1/ai-sdk	moonshot/kimi-k2.6	262144	262144
 https://api-gateway.merge.dev/v1/ai-sdk	moonshot/kimi-k2.7-code	262144	32768
 https://api-gateway.merge.dev/v1/ai-sdk	moonshot/kimi-k2.7-code-highspeed	262144	32768
@@ -981,6 +981,7 @@ https://api.cloudcode.one/v1	glm-5.3-flash	1000000	131072
 https://api.cloudcode.one/v1	glm-5v-turbo	200000	131072
 https://api.cloudcode.one/v1	mistral-large-4	1048576	262144
 https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1	@cf/aisingapore/gemma-sea-lion-v4-27b-it	128000	128000
+https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1	@cf/cloudflare/clairic-flash	65536	65536
 https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1	@cf/deepseek-ai/deepseek-r1-distill-qwen-32b	80000	80000
 https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1	@cf/deepseek-ai/deepseek-v4-flash-0731	1048576	1048576
 https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1	@cf/deepseek-ai/deepseek-v4-pro-0813	1048576	1048576
@@ -1148,7 +1149,7 @@ https://api.cortecs.ai/v1	gemma-3-27b-it	131000	110000
 https://api.cortecs.ai/v1	gemma-4-26b-a4b-it	262000	81920
 https://api.cortecs.ai/v1	gemma-4-31b-it	262000	262000
 https://api.cortecs.ai/v1	glm-4.7-flash	203000	203000
-https://api.cortecs.ai/v1	glm-5.2	1048576	1000000
+https://api.cortecs.ai/v1	glm-5.2	1048576	131072
 https://api.cortecs.ai/v1	glm-5.3	1048576	131072
 https://api.cortecs.ai/v1	glm-5.3-flash	1048576	131072
 https://api.cortecs.ai/v1	gpt-4.1	1047576	32768
@@ -1176,7 +1177,7 @@ https://api.cortecs.ai/v1	hermes-4-405b	128000	128000
 https://api.cortecs.ai/v1	inkling-2-small	1048000	131072
 https://api.cortecs.ai/v1	kimi-k2.6	256000	256000
 https://api.cortecs.ai/v1	kimi-k2.7-code	256000	256000
-https://api.cortecs.ai/v1	kimi-k3	1048576	1048576
+https://api.cortecs.ai/v1	kimi-k3	1024000	1024000
 https://api.cortecs.ai/v1	kimi-k3.1-pro	1048576	500000
 https://api.cortecs.ai/v1	kolibri-1	262144	81920
 https://api.cortecs.ai/v1	llama-3.3-70b-instruct	131000	131000
@@ -1246,6 +1247,7 @@ https://api.crossmodel.ai/v1	gemini/gemini-3.8-flash	1048576	65536
 https://api.crossmodel.ai/v1	gemini/gemini-4-argon	1048576	65536
 https://api.crossmodel.ai/v1	gemini/gemini-4-carbon	1048576	65536
 https://api.crossmodel.ai/v1	gemini/gemini-4-hydrogen	1048576	65536
+https://api.crossmodel.ai/v1	gemini/gemini-4-neon	1048576	65536
 https://api.crossmodel.ai/v1	minimax/minimax-m2.7	204800	131072
 https://api.crossmodel.ai/v1	minimax/minimax-m3	1024000	512000
 https://api.crossmodel.ai/v1	moonshot/kimi-k2.6	262000	262000
@@ -1375,6 +1377,7 @@ https://api.edenai.run/v3	arkanecloud/nvidia/nemotron-3-ultra-550b-a55b	512288	1
 https://api.edenai.run/v3	arkanecloud/openai/gpt-oss-120b	131072	131072
 https://api.edenai.run/v3	azure/gpt-4.1-nano	1047576	32768
 https://api.edenai.run/v3	azure/gpt-4.1-nano@eu	1047576	32768
+https://api.edenai.run/v3	azure/gpt-4.1-nano@us	1047576	32768
 https://api.edenai.run/v3	azure/gpt-5.1-codex	272000	128000
 https://api.edenai.run/v3	azure/gpt-5.1-codex-max	272000	128000
 https://api.edenai.run/v3	azure/gpt-5.1-codex-mini	272000	128000
@@ -1395,6 +1398,8 @@ https://api.edenai.run/v3	cloudflare/@cf/thinkingmachines/inkling-2-small	104857
 https://api.edenai.run/v3	cloudflare/@cf/zai-org/glm-4.7-flash	131072	131072
 https://api.edenai.run/v3	cohere/c4ai-aya-expanse-32b	128000	4000
 https://api.edenai.run/v3	cohere/command-a-03-2025	288000	8000
+https://api.edenai.run/v3	cohere/command-a-translate-08-2025	8992	8000
+https://api.edenai.run/v3	cohere/command-a-vision-07-2025	128000	8000
 https://api.edenai.run/v3	cohere/command-r-08-2024	128000	4000
 https://api.edenai.run/v3	cohere/command-r-plus-08-2024	128000	4000
 https://api.edenai.run/v3	cohere/command-r7b-12-2024	132000	4000
@@ -1491,6 +1496,7 @@ https://api.edenai.run/v3	google/gemini-3.8-flash	1048576	65536
 https://api.edenai.run/v3	google/gemini-4-argon	1048576	65536
 https://api.edenai.run/v3	google/gemini-4-carbon	1048576	65536
 https://api.edenai.run/v3	google/gemini-4-hydrogen	1048576	65536
+https://api.edenai.run/v3	google/gemini-4-neon	1048576	65536
 https://api.edenai.run/v3	google/gemini-flash-latest	1048576	65536
 https://api.edenai.run/v3	google/gemini-nano-banana-2.1	65536	32768
 https://api.edenai.run/v3	google/gemini-pro-latest	1048576	65536
@@ -1695,6 +1701,9 @@ https://api.edenai.run/v3	vertex/gemini-4-carbon@us	1048576	65536
 https://api.edenai.run/v3	vertex/gemini-4-hydrogen	1048576	65536
 https://api.edenai.run/v3	vertex/gemini-4-hydrogen@eu	1048576	65536
 https://api.edenai.run/v3	vertex/gemini-4-hydrogen@us	1048576	65536
+https://api.edenai.run/v3	vertex/gemini-4-neon	1048576	65536
+https://api.edenai.run/v3	vertex/gemini-4-neon@eu	1048576	65536
+https://api.edenai.run/v3	vertex/gemini-4-neon@us	1048576	65536
 https://api.edenai.run/v3	vertex/gemini-flash-latest	1048576	65536
 https://api.edenai.run/v3	vertex/gemini-nano-banana-2.1	131072	32768
 https://api.edenai.run/v3	vertex/gemini-pro-latest	1048576	65536
@@ -1880,6 +1889,7 @@ https://api.githubcopilot.com	gemini-3.8-flash	1000000	64000
 https://api.githubcopilot.com	gemini-4-argon	1048576	65536
 https://api.githubcopilot.com	gemini-4-carbon	1048576	65536
 https://api.githubcopilot.com	gemini-4-hydrogen	1048576	65536
+https://api.githubcopilot.com	gemini-4-neon	1048576	65536
 https://api.githubcopilot.com	gpt-5-mini	264000	64000
 https://api.githubcopilot.com	gpt-5.3-codex	400000	128000
 https://api.githubcopilot.com	gpt-5.4	1050000	128000
@@ -1894,12 +1904,16 @@ https://api.githubcopilot.com	gpt-6-luna	1050000	128000
 https://api.githubcopilot.com	gpt-6-sol	1050000	128000
 https://api.githubcopilot.com	gpt-6.1-sol	1050000	128000
 https://api.githubcopilot.com	gpt-6.1-terra	1050000	128000
+https://api.githubcopilot.com	gpt-6.2-astra	1050000	128000
+https://api.githubcopilot.com	gpt-6.2-sol	1050000	128000
 https://api.githubcopilot.com	grok-4.5	500000	128000
 https://api.githubcopilot.com	grok-4.6	500000	128000
 https://api.githubcopilot.com	grok-4.7	500000	128000
 https://api.githubcopilot.com	kimi-k2.7-code	256000	32000
 https://api.githubcopilot.com	kimi-k3	1048576	1048576
 https://api.githubcopilot.com	mai-code-1.1-flash	256000	128000
+https://api.githubcopilot.com	mai-code-2	1050000	128000
+https://api.githubcopilot.com	mai-code-2-flash	1050000	128000
 https://api.gmi-serving.com/v1	MiniMaxAI/MiniMax-M2.7	196608	131072
 https://api.gmi-serving.com/v1	MiniMaxAI/MiniMax-M3	1048576	512000
 https://api.gmi-serving.com/v1	Qwen/Qwen3.7-Max	1000000	131072
@@ -2062,6 +2076,7 @@ https://api.inceptionlabs.ai/v1	mercury-2.5	260000	65536
 https://api.inceptionlabs.ai/v1	mercury-3	1000000	131072
 https://api.inceptionlabs.ai/v1	mercury-edit-2	32000	8192
 https://api.inceptron.io/v1	deepseek-ai/DeepSeek-V4-Flash-0731	1048576	1048576
+https://api.inceptron.io/v1	deepseek-ai/DeepSeek-V4.1-Flash-1017	1048576	1048576
 https://api.inceptron.io/v1	moonshotai/Kimi-K2.6	262144	262144
 https://api.inceptron.io/v1	moonshotai/Kimi-K2.7-Code	262144	262144
 https://api.inceptron.io/v1	zai-org/GLM-5.3	1048576	1048576
@@ -2358,12 +2373,12 @@ https://api.kilo.ai/api/gateway	deepseek/deepseek-v3.2	163840	147456
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v3.2-exp	163840	147456
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v3.2-thinking	128000	8000
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-flash	1048576	393216
-https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-flash-0731	1048576	384000
+https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-flash-0731	1048576	943718
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-flash-vision-exp	1048575	943717
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-pro	1048576	393216
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4-pro-0813	1048576	943718
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash	1048576	943718
-https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-1017	1048576	943718
+https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-1017	1048576	393216
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-1017-fast	1048576	262144
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-1017-ultrafast	1048576	1048576
 https://api.kilo.ai/api/gateway	deepseek/deepseek-v4.1-flash-fast	1048576	32768
@@ -2394,13 +2409,14 @@ https://api.kilo.ai/api/gateway	google/gemini-3.8-flash	1048576	65536
 https://api.kilo.ai/api/gateway	google/gemini-4-argon	1048576	943718
 https://api.kilo.ai/api/gateway	google/gemini-4-carbon	1048576	943718
 https://api.kilo.ai/api/gateway	google/gemini-4-hydrogen	1048576	943718
+https://api.kilo.ai/api/gateway	google/gemini-4-neon	1048576	943718
 https://api.kilo.ai/api/gateway	google/gemini-nano-banana-2.1	65536	58982
 https://api.kilo.ai/api/gateway	google/gemini-omni-1.1-flash	131072	65536
 https://api.kilo.ai/api/gateway	google/gemini-omni-1.2-flash	131072	65536
 https://api.kilo.ai/api/gateway	google/gemini-omni-flash-preview	1000000	57920
 https://api.kilo.ai/api/gateway	google/gemma-2-27b-it	8192	2048
 https://api.kilo.ai/api/gateway	google/gemma-3-12b-it	131072	16384
-https://api.kilo.ai/api/gateway	google/gemma-3-27b-it	131072	117964
+https://api.kilo.ai/api/gateway	google/gemma-3-27b-it	131072	16384
 https://api.kilo.ai/api/gateway	google/gemma-3-4b-it	131072	16384
 https://api.kilo.ai/api/gateway	google/gemma-4-26b-a4b-it	262144	235929
 https://api.kilo.ai/api/gateway	google/gemma-4-31b-it	262144	16384
@@ -2417,6 +2433,7 @@ https://api.kilo.ai/api/gateway	inclusionai/ling-3.0-flash-vl	131072	32768
 https://api.kilo.ai/api/gateway	inclusionai/ling-3.0-tiny	262144	250000
 https://api.kilo.ai/api/gateway	inclusionai/ling-3.1-flash	1000000	262144
 https://api.kilo.ai/api/gateway	inclusionai/ling-3.1-flash-1019	1000000	262144
+https://api.kilo.ai/api/gateway	inclusionai/ling-3.2-flash:free	1048576	262144
 https://api.kilo.ai/api/gateway	inference-net/schematron-v2-small	128000	8192
 https://api.kilo.ai/api/gateway	inference-net/schematron-v2-turbo	128000	8192
 https://api.kilo.ai/api/gateway	interfaze/interfaze-beta	1000000	32000
@@ -2668,7 +2685,8 @@ https://api.kilo.ai/api/gateway	qwen/qwen3.8-max-prime	1000000	131072
 https://api.kilo.ai/api/gateway	qwen/qwen3.8-omni-flash	1000000	131072
 https://api.kilo.ai/api/gateway	qwen/qwen4-max	1000000	131072
 https://api.kilo.ai/api/gateway	recursive/flint-v1.0	262144	262144
-https://api.kilo.ai/api/gateway	reflection/beam-1.0-501b-a23b	1048576	943718
+https://api.kilo.ai/api/gateway	recursive/flint-v1.0:free	262144	235929
+https://api.kilo.ai/api/gateway	reflection/beam-1.0-501b-a23b	1048576	131072
 https://api.kilo.ai/api/gateway	reflection/beam-free	1048576	131072
 https://api.kilo.ai/api/gateway	rekaai/reka-edge	16384	14745
 https://api.kilo.ai/api/gateway	rekaai/reka-flash-3	65536	58982
@@ -2739,7 +2757,7 @@ https://api.kilo.ai/api/gateway	z-ai/glm-4.7-flash	131072	117964
 https://api.kilo.ai/api/gateway	z-ai/glm-4.7-flashx	200000	128000
 https://api.kilo.ai/api/gateway	z-ai/glm-5	202752	131072
 https://api.kilo.ai/api/gateway	z-ai/glm-5-turbo	202752	131072
-https://api.kilo.ai/api/gateway	z-ai/glm-5.1	202752	182476
+https://api.kilo.ai/api/gateway	z-ai/glm-5.1	204800	131072
 https://api.kilo.ai/api/gateway	z-ai/glm-5.2	1048576	943718
 https://api.kilo.ai/api/gateway	z-ai/glm-5.2-fast	1000000	128000
 https://api.kilo.ai/api/gateway	z-ai/glm-5.3	1048576	943718
@@ -2755,7 +2773,7 @@ https://api.kilo.ai/api/gateway	~anthropic/claude-opus-latest	1000000	128000
 https://api.kilo.ai/api/gateway	~anthropic/claude-sonnet-latest	1000000	128000
 https://api.kilo.ai/api/gateway	~deepseek/deepseek-flash-latest	1048576	943718
 https://api.kilo.ai/api/gateway	~deepseek/deepseek-pro-latest	1048576	393216
-https://api.kilo.ai/api/gateway	~deepseek/deepseek-v4-flash-latest	1048576	943718
+https://api.kilo.ai/api/gateway	~deepseek/deepseek-v4-flash-latest	1048576	384000
 https://api.kilo.ai/api/gateway	~google/gemini-flash-latest	1048576	943718
 https://api.kilo.ai/api/gateway	~google/gemini-pro-latest	1048576	943718
 https://api.kilo.ai/api/gateway	~moonshotai/kimi-latest	1048576	943718
@@ -3096,6 +3114,7 @@ https://api.llmgateway.io/v1	gemini-3.8-flash	1048576	1048576
 https://api.llmgateway.io/v1	gemini-4-argon	1048576	1048576
 https://api.llmgateway.io/v1	gemini-4-carbon	1048576	65536
 https://api.llmgateway.io/v1	gemini-4-hydrogen	1048576	65536
+https://api.llmgateway.io/v1	gemini-4-neon	1048576	65536
 https://api.llmgateway.io/v1	gemini-pro-latest	1048576	65536
 https://api.llmgateway.io/v1	gemma-4-26b-a4b-it	262144	32768
 https://api.llmgateway.io/v1	gemma-4-31b-it	262144	32768
@@ -3130,6 +3149,7 @@ https://api.llmgateway.io/v1	google-ai-studio/gemini-3.8-flash	1048576	65536
 https://api.llmgateway.io/v1	google-ai-studio/gemini-4-argon	1048576	1048576
 https://api.llmgateway.io/v1	google-ai-studio/gemini-4-carbon	1048576	1048576
 https://api.llmgateway.io/v1	google-ai-studio/gemini-4-hydrogen	1048576	65536
+https://api.llmgateway.io/v1	google-ai-studio/gemini-4-neon	1048576	65536
 https://api.llmgateway.io/v1	google-ai-studio/gemini-pro-latest	1048576	65536
 https://api.llmgateway.io/v1	google-vertex/gemini-3-flash-preview	1048576	65535
 https://api.llmgateway.io/v1	google-vertex/gemini-3.1-flash-lite	1048576	65536
@@ -3142,6 +3162,7 @@ https://api.llmgateway.io/v1	google-vertex/gemini-3.8-flash	1048576	65536
 https://api.llmgateway.io/v1	google-vertex/gemini-4-argon	1048576	1048576
 https://api.llmgateway.io/v1	google-vertex/gemini-4-carbon	1048576	1048576
 https://api.llmgateway.io/v1	google-vertex/gemini-4-hydrogen	1048576	65536
+https://api.llmgateway.io/v1	google-vertex/gemini-4-neon	1048576	65536
 https://api.llmgateway.io/v1	gpt-4.1	1000000	32768
 https://api.llmgateway.io/v1	gpt-4.1-mini	1000000	32768
 https://api.llmgateway.io/v1	gpt-4.1-nano	1000000	32768
@@ -3814,6 +3835,9 @@ https://api.novita.ai/openai	moonshotai/kimi-k3.1-pro	1048576	1048576
 https://api.novita.ai/openai	moonshotai/kimi-k3.1-pro-highspeed	1048576	1048576
 https://api.novita.ai/openai	nousresearch/hermes-2-pro-llama-3-8b	8192	8192
 https://api.novita.ai/openai	nvidia/nemotron-3-nano-30b-a3b	262144	32768
+https://api.novita.ai/openai	openai/gpt-6.1-terra	1050000	128000
+https://api.novita.ai/openai	openai/gpt-6.2-astra	1050000	128000
+https://api.novita.ai/openai	openai/gpt-6.2-sol	1050000	128000
 https://api.novita.ai/openai	openai/gpt-oss-120b	131072	32768
 https://api.novita.ai/openai	paddlepaddle/paddleocr-vl	16384	16384
 https://api.novita.ai/openai	qwen/qwen-mt-plus	16384	8192
@@ -3960,6 +3984,8 @@ https://api.ofox.ai/v1	openai/gpt-6-luna	1050000	128000
 https://api.ofox.ai/v1	openai/gpt-6-sol	1050000	128000
 https://api.ofox.ai/v1	openai/gpt-6.1-sol	1050000	128000
 https://api.ofox.ai/v1	openai/gpt-6.1-terra	1050000	128000
+https://api.ofox.ai/v1	openai/gpt-6.2-astra	1050000	128000
+https://api.ofox.ai/v1	openai/gpt-6.2-sol	1050000	128000
 https://api.ofox.ai/v1	qwen/qwen-flash	1000000	32000
 https://api.ofox.ai/v1	qwen/qwen-max	32000	8000
 https://api.ofox.ai/v1	qwen/qwen-plus	1000000	32000
@@ -4290,7 +4316,7 @@ https://api.pinference.ai/api/v1	google/gemini-3.7-flash	1048576	65536
 https://api.pinference.ai/api/v1	google/gemini-3.8-flash	1048576	65536
 https://api.pinference.ai/api/v1	google/gemini-4-argon	1048576	943718
 https://api.pinference.ai/api/v1	google/gemini-4-carbon	1048576	943718
-https://api.pinference.ai/api/v1	google/gemma-3-27b-it	131072	117964
+https://api.pinference.ai/api/v1	google/gemma-3-27b-it	131072	16384
 https://api.pinference.ai/api/v1	meta-llama/llama-3.3-70b-instruct	131072	115200
 https://api.pinference.ai/api/v1	meta/muse-spark-open	1048576	943718
 https://api.pinference.ai/api/v1	mistralai/mistral-large-2512	262144	209715
@@ -5087,6 +5113,7 @@ https://api.upstage.ai/v1/solar	solar-pro3	131072	8192
 https://api.upstage.ai/v1/solar	solar-pro4	524288	131072
 https://api.vivgrid.com/v1	claude-fable-5	1000000	128000
 https://api.vivgrid.com/v1	claude-fable-5-1	1000000	128000
+https://api.vivgrid.com/v1	claude-fable-5-2	1000000	128000
 https://api.vivgrid.com/v1	claude-haiku-5-5	1000000	128000
 https://api.vivgrid.com/v1	claude-opus-5	1000000	128000
 https://api.vivgrid.com/v1	claude-opus-5-5	1000000	128000
@@ -5121,6 +5148,9 @@ https://api.vivgrid.com/v1	gpt-6-luna	1050000	128000
 https://api.vivgrid.com/v1	gpt-6-sol	1050000	128000
 https://api.vivgrid.com/v1	gpt-6.1-sol	1050000	128000
 https://api.vivgrid.com/v1	gpt-6.1-terra	1050000	128000
+https://api.vivgrid.com/v1	gpt-6.2-astra	1000000	128000
+https://api.vivgrid.com/v1	gpt-6.2-sol	1000000	128000
+https://api.vivgrid.com/v1	hy4-flash	1048576	65536
 https://api.vivgrid.com/v1	kimi-k3	1000000	128000
 https://api.vivgrid.com/v1	viv-fast	1000000	256000
 https://api.vultrinference.com/v1	deepseek-v4-flash-0731	1048576	384000
@@ -5372,7 +5402,6 @@ https://cloud-api.near.ai/v1	openai/o3	200000	100000
 https://cloud-api.near.ai/v1	openai/o3-mini	200000	100000
 https://cloud-api.near.ai/v1	openai/o4-mini	200000	100000
 https://cloud-api.near.ai/v1	openai/whisper-large-v3	448	448
-https://cloud-api.near.ai/v1	qwen/qwen3.7-max	1000000	131072
 https://cloud-api.near.ai/v1	x-ai/grok-4.6	500000	500000
 https://cloud-api.near.ai/v1	x-ai/grok-4.7	500000	500000
 https://cloud-api.near.ai/v1	z-ai/glm-5.3	1000000	131072
@@ -5767,6 +5796,8 @@ https://inference.do-ai.run/v1	openai-gpt-6-astra	1050000	128000
 https://inference.do-ai.run/v1	openai-gpt-6-luna	1050000	128000
 https://inference.do-ai.run/v1	openai-gpt-6-sol	1050000	128000
 https://inference.do-ai.run/v1	openai-gpt-6.1-terra	1050000	128000
+https://inference.do-ai.run/v1	openai-gpt-6.2-astra	1050000	128000
+https://inference.do-ai.run/v1	openai-gpt-6.2-sol	1050000	128000
 https://inference.do-ai.run/v1	openai-gpt-oss-120b	128000	4096
 https://inference.do-ai.run/v1	openai-gpt-oss-20b	128000	4096
 https://inference.do-ai.run/v1	openai-o1	200000	100000
@@ -5932,7 +5963,6 @@ https://kenari.id/v1	gemini-3-6-flash	1048576	65536
 https://kenari.id/v1	gemini-3-7-flash	1048576	65536
 https://kenari.id/v1	gemini-3-8-flash	1048576	65536
 https://kenari.id/v1	gemini-3-8-flash-lite-tts	8192	16384
-https://kenari.id/v1	gemma-4-31b-it	262144	32768
 https://kenari.id/v1	glm-4-6v-flash:free	128000	32768
 https://kenari.id/v1	glm-4-7-flash:free	200000	131072
 https://kenari.id/v1	glm-5-2	1000000	131072
@@ -5942,6 +5972,8 @@ https://kenari.id/v1	gpt-5-6-luna	1050000	128000
 https://kenari.id/v1	gpt-5-6-sol	1050000	128000
 https://kenari.id/v1	gpt-6-1-sol	1050000	128000
 https://kenari.id/v1	gpt-6-1-terra	1050000	128000
+https://kenari.id/v1	gpt-6-2-astra	1050000	128000
+https://kenari.id/v1	gpt-6-2-sol	920000	128000
 https://kenari.id/v1	gpt-6-astra	1050000	128000
 https://kenari.id/v1	gpt-6-luna	1050000	128000
 https://kenari.id/v1	gpt-6-sol	1050000	128000
@@ -5975,7 +6007,6 @@ https://kenari.id/v1	muse-spark-1-2-contributor	1048576	131072
 https://kenari.id/v1	muse-spark-1-3	1048576	131072
 https://kenari.id/v1	muse-spark-1-3-contributor	1048576	131072
 https://kenari.id/v1	muse-wonder-1-0	1007997	131072
-https://kenari.id/v1	muse-wonder-full-1-0	1048576	131072
 https://kenari.id/v1	nano-banana-2	131072	32768
 https://kenari.id/v1	nano-banana-2-lite	65536	4096
 https://kenari.id/v1	nano-banana-pro	65536	32768
@@ -6154,10 +6185,7 @@ https://nano-gpt.com/api/v1	EVA-UNIT-01/EVA-LLaMA-3.33-70B-v0.0	32768	16384
 https://nano-gpt.com/api/v1	EVA-UNIT-01/EVA-LLaMA-3.33-70B-v0.1	32768	16384
 https://nano-gpt.com/api/v1	EVA-UNIT-01/EVA-Qwen2.5-32B-v0.2	16384	8192
 https://nano-gpt.com/api/v1	EVA-UNIT-01/EVA-Qwen2.5-72B-v0.2	16384	8192
-https://nano-gpt.com/api/v1	Envoid/Llama-3.05-NT-Storybreaker-Ministral-70B	16384	8192
-https://nano-gpt.com/api/v1	Envoid/Llama-3.05-Nemotron-Tenyxchat-Storybreaker-70B	16384	8192
 https://nano-gpt.com/api/v1	GLM-4.6-Derestricted-v5	131072	8192
-https://nano-gpt.com/api/v1	GalrionSoftworks/MN-LooseCannon-12B-v1	16384	8192
 https://nano-gpt.com/api/v1	Gemma-4-26B-A4B-MeroMero	262144	32768
 https://nano-gpt.com/api/v1	Gemma-4-26B-A4B-MeroMero:thinking	262144	32768
 https://nano-gpt.com/api/v1	Gemma-4-31B-Agares-v1	262144	262144
@@ -6181,59 +6209,32 @@ https://nano-gpt.com/api/v1	Gemma-4-31B-Queen	262144	16384
 https://nano-gpt.com/api/v1	Gemma-4-31B-SDFT-Heretic-RP	262144	262144
 https://nano-gpt.com/api/v1	Gemma-4-31B-StyleTune	262144	262144
 https://nano-gpt.com/api/v1	Gryphe/MythoMax-L2-13b	4096	3686
-https://nano-gpt.com/api/v1	LLM360/K2-Think	128000	32768
 https://nano-gpt.com/api/v1	LatitudeGames/Wayfarer-Large-70B-Llama-3.3	32768	16384
 https://nano-gpt.com/api/v1	Meta-Llama-3-1-8B-Instruct-FP8	128000	16384
-https://nano-gpt.com/api/v1	NeverSleep/Lumimaid-v0.2-70B	16384	8192
 https://nano-gpt.com/api/v1	Qwen3.5-27B-Blossom-V6.4-Derestricted	262144	262144
 https://nano-gpt.com/api/v1	Qwen3.5-27B-BlueStar-v3-Derestricted	262144	16384
 https://nano-gpt.com/api/v1	Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-Derestricted	262144	262144
 https://nano-gpt.com/api/v1	Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-Derestricted-Lite	262144	262144
 https://nano-gpt.com/api/v1	Qwen3.5-27B-Queen-Derestricted	262144	16384
 https://nano-gpt.com/api/v1	ReadyArt/MS3.2-The-Omega-Directive-24B-Unslop-v2.0	32768	32768
-https://nano-gpt.com/api/v1	Salesforce/Llama-xLAM-2-70b-fc-r	128000	16384
-https://nano-gpt.com/api/v1	Sao10K/L3-8B-Stheno-v3.2	16384	8192
-https://nano-gpt.com/api/v1	Sao10K/L3.1-70B-Euryale-v2.2	20480	16384
-https://nano-gpt.com/api/v1	Sao10K/L3.1-70B-Hanami-x1	32768	16384
 https://nano-gpt.com/api/v1	Sao10K/L3.3-70B-Euryale-v2.3	20480	16384
 https://nano-gpt.com/api/v1	Steelskull/L3.3-Cu-Mai-R1-70b	32768	16384
 https://nano-gpt.com/api/v1	Steelskull/L3.3-Electra-R1-70b	32768	16384
 https://nano-gpt.com/api/v1	Steelskull/L3.3-MS-Nevoria-70b	32768	16384
 https://nano-gpt.com/api/v1	Steelskull/L3.3-Nevoria-R1-70b	32768	16384
-https://nano-gpt.com/api/v1	TEE/deepseek-v3.2	164000	65536
 https://nano-gpt.com/api/v1	TEE/deepseek-v4.1-flash	1048576	384000
 https://nano-gpt.com/api/v1	TEE/gemma-4-26b-a4b-uncensored	65536	65536
 https://nano-gpt.com/api/v1	TEE/gemma-4-31b-it	262144	262144
 https://nano-gpt.com/api/v1	TEE/gemma4-31b	262144	131072
 https://nano-gpt.com/api/v1	TEE/gemma4-31b:thinking	262144	131072
-https://nano-gpt.com/api/v1	TEE/glm-5.1	202752	65535
-https://nano-gpt.com/api/v1	TEE/glm-5.1-thinking	202752	65535
-https://nano-gpt.com/api/v1	TEE/glm-5.2	1048576	131072
-https://nano-gpt.com/api/v1	TEE/glm-5.2:thinking	1048576	131072
 https://nano-gpt.com/api/v1	TEE/glm-5.3	1048576	131072
 https://nano-gpt.com/api/v1	TEE/glm-5.3-flash	1048576	131072
 https://nano-gpt.com/api/v1	TEE/gpt-oss-120b	131072	16384
 https://nano-gpt.com/api/v1	TEE/inkling-2-small	524288	131072
-https://nano-gpt.com/api/v1	TEE/kimi-k2.6	262144	65536
-https://nano-gpt.com/api/v1	TEE/kimi-k3	1048576	65535
 https://nano-gpt.com/api/v1	TEE/kimi-k3.1-pro	262144	262144
 https://nano-gpt.com/api/v1	TEE/llama3-3-70b	128000	16384
-https://nano-gpt.com/api/v1	TEE/qwen3.6-27b	262144	65536
 https://nano-gpt.com/api/v1	TEE/qwen3.6-35b-a3b	262144	262144
 https://nano-gpt.com/api/v1	TEE/qwen3.8-27b	262144	262144
-https://nano-gpt.com/api/v1	TheDrummer/Anubis-70B-v1	65536	16384
-https://nano-gpt.com/api/v1	TheDrummer/Anubis-70B-v1.1	32768	16384
-https://nano-gpt.com/api/v1	TheDrummer/Artemis-v1.1	262144	32768
-https://nano-gpt.com/api/v1	TheDrummer/Cydonia-24B-v2	32768	32768
-https://nano-gpt.com/api/v1	TheDrummer/Cydonia-24B-v4	32768	32768
-https://nano-gpt.com/api/v1	TheDrummer/Cydonia-24B-v4.1	131072	117964
-https://nano-gpt.com/api/v1	TheDrummer/Cydonia-24B-v4.3	65536	32768
-https://nano-gpt.com/api/v1	TheDrummer/Magidonia-24B-v4.3	32768	32768
-https://nano-gpt.com/api/v1	TheDrummer/Rocinante-12B-v1.1	16384	8192
-https://nano-gpt.com/api/v1	TheDrummer/UnslopNemo-12B-v4.1	8192	8192
-https://nano-gpt.com/api/v1	TheDrummer/artemis-31b-v1.2	65536	8192
-https://nano-gpt.com/api/v1	TheDrummer/skyfall-36b-v2	32768	29491
-https://nano-gpt.com/api/v1	VongolaChouko/Starcannon-Unleashed-12B-v1.0	16384	8192
 https://nano-gpt.com/api/v1	abacusai/Dracarys-72B-Instruct	32768	8192
 https://nano-gpt.com/api/v1	abliteration-ai/abliterated-model	262144	262134
 https://nano-gpt.com/api/v1	abliteration-ai/abliterated-model-large	1000000	999990
@@ -6402,7 +6403,6 @@ https://nano-gpt.com/api/v1	google/gemma-4-26b-a4b-it-cybersecurity	262144	32768
 https://nano-gpt.com/api/v1	google/gemma-4-26b-a4b-it:thinking	262144	131072
 https://nano-gpt.com/api/v1	google/gemma-4-31b-it	262144	131072
 https://nano-gpt.com/api/v1	google/gemma-4-31b-it:thinking	262144	131072
-https://nano-gpt.com/api/v1	google/gemma4-31b-splituntied	32768	32768
 https://nano-gpt.com/api/v1	heabsy/cyberheabsy	1048576	65536
 https://nano-gpt.com/api/v1	heabsy/qwen3.8-27b-uncensored-fast	1048576	235929
 https://nano-gpt.com/api/v1	hermes-high	1048576	131072
@@ -6427,6 +6427,8 @@ https://nano-gpt.com/api/v1	inclusionai/ling-3.1-flash	262144	32768
 https://nano-gpt.com/api/v1	inference-net/schematron-v2-small	128000	4096
 https://nano-gpt.com/api/v1	inference-net/schematron-v2-turbo	128000	8192
 https://nano-gpt.com/api/v1	inflatebot/MN-12B-Mag-Mell-R1	16384	8192
+https://nano-gpt.com/api/v1	jcartu/deepseek-v4.1-flash-1017-abliterated-lossless-csf	1048576	943718
+https://nano-gpt.com/api/v1	jiunsong/supergemma4-26b-uncensored	256000	8192
 https://nano-gpt.com/api/v1	kimi-k2-instruct-fast	131072	16384
 https://nano-gpt.com/api/v1	kitani/clover-2	200000	8192
 https://nano-gpt.com/api/v1	kitani/clover-2:thinking	200000	8192
@@ -6436,7 +6438,8 @@ https://nano-gpt.com/api/v1	liquid/lfm-2.5-24b-a2b	128000	8192
 https://nano-gpt.com/api/v1	liquid/lfm-3-1.7b	262144	8192
 https://nano-gpt.com/api/v1	longcat-2.0	1000000	131072
 https://nano-gpt.com/api/v1	longcat-2.0:thinking	1000000	131072
-https://nano-gpt.com/api/v1	lyber/kimi-k3.1-pro-abliterated	1048576	1048576
+https://nano-gpt.com/api/v1	lyber/deepseek-v4.1-flash-1017-abliterated	1048576	126976
+https://nano-gpt.com/api/v1	lyber/kimi-k3.1-pro-abliterated	1048576	262144
 https://nano-gpt.com/api/v1	meganova-ai/manta-flash-1.0	16384	16384
 https://nano-gpt.com/api/v1	meganova-ai/manta-mini-1.0	8192	8192
 https://nano-gpt.com/api/v1	meganova-ai/manta-pro-1.0	65536	32768
@@ -6466,7 +6469,7 @@ https://nano-gpt.com/api/v1	minimax/minimax-m2.5	204800	131072
 https://nano-gpt.com/api/v1	minimax/minimax-m2.7	204800	131072
 https://nano-gpt.com/api/v1	minimax/minimax-m2.7-turbo	204800	131072
 https://nano-gpt.com/api/v1	minimax/minimax-m3	512000	80000
-https://nano-gpt.com/api/v1	minimax/minimax-m3.1-flash	1048576	524288
+https://nano-gpt.com/api/v1	minimax/minimax-m3.1-flash	1000000	524288
 https://nano-gpt.com/api/v1	minimax/minimax-m3:thinking	512000	80000
 https://nano-gpt.com/api/v1	mistral-code-agent-latest	262144	32768
 https://nano-gpt.com/api/v1	mistral-code-latest	256000	32768
@@ -6519,15 +6522,14 @@ https://nano-gpt.com/api/v1	nex-agi/nex-n2.5-pro	262144	262144
 https://nano-gpt.com/api/v1	nex-agi/nex-n2.6	262144	262144
 https://nano-gpt.com/api/v1	nothingiisreal/L3.1-70B-Celeste-V0.1-BF16	32768	16384
 https://nano-gpt.com/api/v1	nvidia/Llama-3.1-Nemotron-70B-Instruct-HF	16384	8192
-https://nano-gpt.com/api/v1	nvidia/Llama-3.3-Nemotron-Super-49B-v1	128000	16384
 https://nano-gpt.com/api/v1	nvidia/nemotron-3-nano-30b-a3b	262144	235929
 https://nano-gpt.com/api/v1	nvidia/nemotron-3-super-120b-a12b	262144	16384
 https://nano-gpt.com/api/v1	nvidia/nemotron-3-super-120b-a12b:thinking	262144	16384
 https://nano-gpt.com/api/v1	nvidia/nemotron-3-ultra-550b-a55b	512288	65536
 https://nano-gpt.com/api/v1	nvidia/nemotron-3-ultra-550b-a55b:thinking	1000000	65536
 https://nano-gpt.com/api/v1	nvidia/nemotron-3.5-content-safety	131072	32768
-https://nano-gpt.com/api/v1	nvidia/nemotron-3.5-lightning	1000000	65536
-https://nano-gpt.com/api/v1	nvidia/nemotron-3.5-lightning:thinking	1000000	65536
+https://nano-gpt.com/api/v1	nvidia/nemotron-3.5-lightning	262144	65536
+https://nano-gpt.com/api/v1	nvidia/nemotron-3.5-lightning:thinking	262144	65536
 https://nano-gpt.com/api/v1	nvidia/nemotron-3.5-super-vl	262144	16384
 https://nano-gpt.com/api/v1	openai/gpt-4.1	1047576	32768
 https://nano-gpt.com/api/v1	openai/gpt-4.1-mini	1047576	32768
@@ -6586,16 +6588,19 @@ https://nano-gpt.com/api/v1	openai/o3	200000	100000
 https://nano-gpt.com/api/v1	openai/o3-pro-2025-06-10	200000	100000
 https://nano-gpt.com/api/v1	orca/orcacyber-flash-1.0	1048064	393216
 https://nano-gpt.com/api/v1	orca/orcacyber-flash-1.0:thinking	1048064	393216
+https://nano-gpt.com/api/v1	orca/orcacyber-glm-5.3	999488	128000
 https://nano-gpt.com/api/v1	orca/orcacyber-glm-5.3-flash	1048064	131072
+https://nano-gpt.com/api/v1	orca/orcacyber-hy4	1048064	65536
 https://nano-gpt.com/api/v1	orca/orcacyber-k3.1-pro	1048064	943718
 https://nano-gpt.com/api/v1	orca/orcacyber-mimo-flash	1048064	131072
 https://nano-gpt.com/api/v1	orca/orcacyber-minimax-m3.1-flash	261632	131072
 https://nano-gpt.com/api/v1	orca/orcacyber-qwen3.8-flash-next	261632	131072
+https://nano-gpt.com/api/v1	orca/orcacyber-ultra-1.0	1048064	131072
+https://nano-gpt.com/api/v1	orca/orcacyber-zero-1.0	999488	128000
 https://nano-gpt.com/api/v1	orca/orcacyber-zero-1.5	999488	128000
 https://nano-gpt.com/api/v1	ornith-ai/ornith-1.5-122b	262144	32768
 https://nano-gpt.com/api/v1	ornith-ai/ornith-1.5-35b-a3b	262144	32768
 https://nano-gpt.com/api/v1	ornith-ai/ornith-1.5-35b-a3b:thinking	262144	32768
-https://nano-gpt.com/api/v1	pamanseau/OpenReasoning-Nemotron-32B	32768	32768
 https://nano-gpt.com/api/v1	particle-ai/particle-1	1048576	131072
 https://nano-gpt.com/api/v1	perceptron/perceptron-mk1	32768	8192
 https://nano-gpt.com/api/v1	perceptron/perceptron-mk1.5	36864	8192
@@ -6624,9 +6629,7 @@ https://nano-gpt.com/api/v1	qwen/qwen3-coder-30b-a3b-instruct	128000	65536
 https://nano-gpt.com/api/v1	qwen/qwen3-coder-flash	128000	65536
 https://nano-gpt.com/api/v1	qwen/qwen3-coder-next	262144	65536
 https://nano-gpt.com/api/v1	qwen/qwen3-next-80b-a3b-instruct	262144	32768
-https://nano-gpt.com/api/v1	qwen/qwen3-next-80b-a3b-thinking	256000	32768
 https://nano-gpt.com/api/v1	qwen/qwen3-vl-235b-a22b-instruct	131072	32768
-https://nano-gpt.com/api/v1	qwen/qwen3-vl-235b-a22b-thinking	131072	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.5-122b-a10b	131072	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.5-122b-a10b:thinking	131072	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.5-27b	260096	65536
@@ -6661,7 +6664,6 @@ https://nano-gpt.com/api/v1	qwen/qwen3.8-27b-cybersecurity	262144	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.8-27b-darkidol	262144	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.8-27b-fable	1048576	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.8-27b-fimi	262144	32768
-https://nano-gpt.com/api/v1	qwen/qwen3.8-27b-hemmingway	262144	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.8-27b-kimiko	262144	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.8-27b-kiwen	262144	32768
 https://nano-gpt.com/api/v1	qwen/qwen3.8-27b-novelist	262144	32768
@@ -6708,14 +6710,12 @@ https://nano-gpt.com/api/v1	thinkingmachines/inkling	1040000	32768
 https://nano-gpt.com/api/v1	thinkingmachines/inkling:thinking	1040000	32768
 https://nano-gpt.com/api/v1	unbiased/pareto-26.10	1048576	131072
 https://nano-gpt.com/api/v1	unbiased/pareto-26.9	262144	131072
-https://nano-gpt.com/api/v1	undi95/remm-slerp-l2-13b	6144	4096
 https://nano-gpt.com/api/v1	universal-summarizer	32768	32768
 https://nano-gpt.com/api/v1	unsloth/gemma-3-12b-it	131072	16384
 https://nano-gpt.com/api/v1	unsloth/gemma-3-27b-it	128000	96000
 https://nano-gpt.com/api/v1	unsloth/gemma-3-4b-it	128000	8192
 https://nano-gpt.com/api/v1	upstage/solar-mini4	524288	131072
 https://nano-gpt.com/api/v1	upstage/solar-mini4:thinking	524288	131072
-https://nano-gpt.com/api/v1	upstage/solar-pro-3	131072	117964
 https://nano-gpt.com/api/v1	upstage/solar-pro4	524288	131072
 https://nano-gpt.com/api/v1	upstage/solar-pro4:thinking	524288	131072
 https://nano-gpt.com/api/v1	venice-uncensored	128000	8192
@@ -6728,8 +6728,8 @@ https://nano-gpt.com/api/v1	x-ai/grok-4.7	500000	500000
 https://nano-gpt.com/api/v1	x-ai/grok-build-0.1	256000	230400
 https://nano-gpt.com/api/v1	x-ai/grok-latest	500000	450000
 https://nano-gpt.com/api/v1	xiaomi/mimo-v2.5	1048576	131072
-https://nano-gpt.com/api/v1	xiaomi/mimo-v2.5-pro	1048576	131072
-https://nano-gpt.com/api/v1	xiaomi/mimo-v2.5-pro:thinking	1048576	131072
+https://nano-gpt.com/api/v1	xiaomi/mimo-v2.5-pro	262144	131072
+https://nano-gpt.com/api/v1	xiaomi/mimo-v2.5-pro:thinking	262144	131072
 https://nano-gpt.com/api/v1	xiaomi/mimo-v2.5:thinking	1048576	131072
 https://nano-gpt.com/api/v1	xiaomi/mimo-v2.6-flash	1048576	131072
 https://nano-gpt.com/api/v1	xiaomi/mimo-v2.6-flash-abliterated	1048576	65536
@@ -6737,7 +6737,6 @@ https://nano-gpt.com/api/v1	xiaomi/mimo-v2.6-flash-uncensored	1048576	65536
 https://nano-gpt.com/api/v1	xiaomi/mimo-v2.6-flash-uncensored:thinking	1048576	65536
 https://nano-gpt.com/api/v1	xiaomi/mimo-v2.6-pro	1048576	131072
 https://nano-gpt.com/api/v1	xiaomi/mimo-v2.6-pro-ultraspeed	1048576	131072
-https://nano-gpt.com/api/v1	xingchen-agi/xing4.0-29b-a4b	262144	262144
 https://nano-gpt.com/api/v1	xtools-at/deepseek-v4-pro-qwen3.5-9b-uncensored-heretic	32768	8192
 https://nano-gpt.com/api/v1	z-ai/GLM-4.5-Air	128000	98304
 https://nano-gpt.com/api/v1	z-ai/GLM-4.5-Air:thinking	128000	98304
@@ -6783,7 +6782,7 @@ https://nokeep.ai/v1	deepseek-v4.1-flash-1017-uncensored	1000000	131072
 https://nokeep.ai/v1	deepseek-v4.1-flash-uncensored	1000000	131072
 https://nokeep.ai/v1	glm-5.3-flash-uncensored	128000	32768
 https://oai.endpoints.kepler.ai.cloud.ovh.net/v1	gpt-oss-120b	131072	131072
-https://oai.endpoints.kepler.ai.cloud.ovh.net/v1	gpt-oss-20b	131072	131072
+https://oai.endpoints.kepler.ai.cloud.ovh.net/v1	gpt-oss-20b	131072	65536
 https://oai.endpoints.kepler.ai.cloud.ovh.net/v1	meta-llama-3_3-70b-instruct	131072	131072
 https://oai.endpoints.kepler.ai.cloud.ovh.net/v1	mistral-small-3.2-24b-instruct-2506	131072	131072
 https://oai.endpoints.kepler.ai.cloud.ovh.net/v1	qwen2.5-vl-72b-instruct	32768	32768
@@ -6951,6 +6950,7 @@ https://opencode.ai/inference/openai/v1	gemini-3.8-flash	1048576	65536
 https://opencode.ai/inference/openai/v1	gemini-4-argon	1048576	65536
 https://opencode.ai/inference/openai/v1	gemini-4-carbon	1048576	65536
 https://opencode.ai/inference/openai/v1	gemini-4-hydrogen	1048576	65536
+https://opencode.ai/inference/openai/v1	gemini-4-neon	1048576	65536
 https://opencode.ai/inference/openai/v1	glm-4.6	204800	131072
 https://opencode.ai/inference/openai/v1	glm-4.7	204800	131072
 https://opencode.ai/inference/openai/v1	glm-4.7-free	204800	131072
@@ -7049,6 +7049,7 @@ https://opencode.ai/inference/openai/v1	qwen3.8-max	262144	131072
 https://opencode.ai/inference/openai/v1	ring-2.6-1t-free	262000	66000
 https://opencode.ai/inference/openai/v1	space-bunny-free	1048576	524288
 https://opencode.ai/inference/openai/v1	step-5-preview-free	1000000	65536
+https://opencode.ai/inference/openai/v1	tidepool-alpha-free	1048576	131072
 https://opencode.ai/inference/openai/v1	trinity-large-preview-free	131072	131072
 https://opencode.ai/inference/openai/v1	x-preview-f-free	1000000	131072
 https://openrouter.ai/api/v1	aion-labs/aion-2.0	131072	32768
@@ -7100,12 +7101,12 @@ https://openrouter.ai/api/v1	deepseek/deepseek-v3.1-terminus	163840	147456
 https://openrouter.ai/api/v1	deepseek/deepseek-v3.2	163840	147456
 https://openrouter.ai/api/v1	deepseek/deepseek-v3.2-exp	163840	147456
 https://openrouter.ai/api/v1	deepseek/deepseek-v4-flash	1048576	393216
-https://openrouter.ai/api/v1	deepseek/deepseek-v4-flash-0731	1048576	384000
+https://openrouter.ai/api/v1	deepseek/deepseek-v4-flash-0731	1048576	943718
 https://openrouter.ai/api/v1	deepseek/deepseek-v4-flash-vision-exp	1048576	943717
 https://openrouter.ai/api/v1	deepseek/deepseek-v4-pro	1048576	393216
 https://openrouter.ai/api/v1	deepseek/deepseek-v4-pro-0813	1048576	943718
 https://openrouter.ai/api/v1	deepseek/deepseek-v4.1-flash	1048576	943718
-https://openrouter.ai/api/v1	deepseek/deepseek-v4.1-flash-1017	1048576	943718
+https://openrouter.ai/api/v1	deepseek/deepseek-v4.1-flash-1017	1048576	393216
 https://openrouter.ai/api/v1	dots-studio/dots-3-note-preview:free	512000	460800
 https://openrouter.ai/api/v1	elorian/glimpse	262144	256000
 https://openrouter.ai/api/v1	fireworks/ember-1	1048576	943718
@@ -7132,12 +7133,13 @@ https://openrouter.ai/api/v1	google/gemini-3.8-flash	1048576	65536
 https://openrouter.ai/api/v1	google/gemini-4-argon	1048576	943718
 https://openrouter.ai/api/v1	google/gemini-4-carbon	1048576	943718
 https://openrouter.ai/api/v1	google/gemini-4-hydrogen	1048576	943718
+https://openrouter.ai/api/v1	google/gemini-4-neon	1048576	943718
 https://openrouter.ai/api/v1	google/gemini-nano-banana-2.1	65536	58982
 https://openrouter.ai/api/v1	google/gemini-omni-1.1-flash	131072	65536
 https://openrouter.ai/api/v1	google/gemini-omni-1.2-flash	131072	65536
 https://openrouter.ai/api/v1	google/gemma-2-27b-it	8192	2048
 https://openrouter.ai/api/v1	google/gemma-3-12b-it	131072	16384
-https://openrouter.ai/api/v1	google/gemma-3-27b-it	131072	117964
+https://openrouter.ai/api/v1	google/gemma-3-27b-it	131072	16384
 https://openrouter.ai/api/v1	google/gemma-3-4b-it	131072	16384
 https://openrouter.ai/api/v1	google/gemma-4-26b-a4b-it	262144	235929
 https://openrouter.ai/api/v1	google/gemma-4-26b-a4b-it:free	262144	32768
@@ -7347,7 +7349,7 @@ https://openrouter.ai/api/v1	qwen/qwen3.8-max-prime	1000000	131072
 https://openrouter.ai/api/v1	qwen/qwen3.8-omni-flash	1000000	131072
 https://openrouter.ai/api/v1	qwen/qwen4-max	1000000	131072
 https://openrouter.ai/api/v1	recursive/flint-v1.0:free	262144	235929
-https://openrouter.ai/api/v1	reflection/beam-1.0-501b-a23b	1048576	943718
+https://openrouter.ai/api/v1	reflection/beam-1.0-501b-a23b	1048576	131072
 https://openrouter.ai/api/v1	rekaai/reka-edge	16384	14745
 https://openrouter.ai/api/v1	rekaai/reka-flash-3	65536	58982
 https://openrouter.ai/api/v1	relace/relace-apply-3	256000	128000
@@ -7406,7 +7408,7 @@ https://openrouter.ai/api/v1	z-ai/glm-4.7	204800	131072
 https://openrouter.ai/api/v1	z-ai/glm-4.7-flash	200000	117964
 https://openrouter.ai/api/v1	z-ai/glm-5	204800	131072
 https://openrouter.ai/api/v1	z-ai/glm-5-turbo	202752	131072
-https://openrouter.ai/api/v1	z-ai/glm-5.1	204800	182476
+https://openrouter.ai/api/v1	z-ai/glm-5.1	204800	131072
 https://openrouter.ai/api/v1	z-ai/glm-5.2	1048576	943718
 https://openrouter.ai/api/v1	z-ai/glm-5.3	1048576	943718
 https://openrouter.ai/api/v1	z-ai/glm-5.3-flash	1048576	943717
@@ -7420,7 +7422,7 @@ https://openrouter.ai/api/v1	~anthropic/claude-opus-latest	1000000	128000
 https://openrouter.ai/api/v1	~anthropic/claude-sonnet-latest	1000000	128000
 https://openrouter.ai/api/v1	~deepseek/deepseek-flash-latest	1048576	943718
 https://openrouter.ai/api/v1	~deepseek/deepseek-pro-latest	1048576	393216
-https://openrouter.ai/api/v1	~deepseek/deepseek-v4-flash-latest	1048576	943718
+https://openrouter.ai/api/v1	~deepseek/deepseek-v4-flash-latest	1048576	384000
 https://openrouter.ai/api/v1	~google/gemini-flash-latest	1048576	943718
 https://openrouter.ai/api/v1	~google/gemini-pro-latest	1048576	943718
 https://openrouter.ai/api/v1	~moonshotai/kimi-latest	1048576	943718
@@ -7597,6 +7599,7 @@ https://router.huggingface.co/v1	Qwen/Qwen3-235B-A22B	40960	16384
 https://router.huggingface.co/v1	Qwen/Qwen3-235B-A22B-Instruct-2507	262144	16384
 https://router.huggingface.co/v1	Qwen/Qwen3-235B-A22B-Thinking-2507	262144	81920
 https://router.huggingface.co/v1	Qwen/Qwen3-30B-A3B	40960	16384
+https://router.huggingface.co/v1	Qwen/Qwen3-30B-A3B-Instruct-2507	262144	16384
 https://router.huggingface.co/v1	Qwen/Qwen3-32B	131072	16384
 https://router.huggingface.co/v1	Qwen/Qwen3-8B	40960	32768
 https://router.huggingface.co/v1	Qwen/Qwen3-Coder-30B-A3B-Instruct	262144	65536
@@ -7632,12 +7635,16 @@ https://router.huggingface.co/v1	deepseek-ai/DeepSeek-V4-Pro	1048576	393216
 https://router.huggingface.co/v1	deepseek-ai/DeepSeek-V4-Pro-0813	1000000	384000
 https://router.huggingface.co/v1	deepseek-ai/DeepSeek-V4.1-Flash	1048576	384000
 https://router.huggingface.co/v1	deepseek-ai/DeepSeek-V4.1-Flash-1017	1048576	384000
+https://router.huggingface.co/v1	google/gemma-2-27b-it	8192	2048
 https://router.huggingface.co/v1	google/gemma-3-12b-it	131072	131072
 https://router.huggingface.co/v1	google/gemma-3-27b-it	131072	131072
 https://router.huggingface.co/v1	google/gemma-3-4b-it	131072	131072
 https://router.huggingface.co/v1	google/gemma-4-26B-A4B-it	262144	32768
 https://router.huggingface.co/v1	google/gemma-4-31B-it	262144	32768
+https://router.huggingface.co/v1	meta-llama/Llama-3.1-70B-Instruct	131072	4096
 https://router.huggingface.co/v1	meta-llama/Llama-3.1-8B-Instruct	131072	4096
+https://router.huggingface.co/v1	meta-llama/Llama-3.2-1B-Instruct	60000	32000
+https://router.huggingface.co/v1	meta-llama/Llama-3.2-3B-Instruct	80000	80000
 https://router.huggingface.co/v1	meta-llama/Llama-3.3-70B-Instruct	131072	4096
 https://router.huggingface.co/v1	meta-llama/Llama-Guard-4-12B	163840	163840
 https://router.huggingface.co/v1	moonshotai/Kimi-K2-Instruct	131072	16384
@@ -7653,6 +7660,7 @@ https://router.huggingface.co/v1	openai/gpt-oss-20b	131072	131072
 https://router.huggingface.co/v1	stepfun-ai/Step-3.5-Flash	262144	256000
 https://router.huggingface.co/v1	stepfun-ai/Step-3.7-Flash	262144	256000
 https://router.huggingface.co/v1	tencent/Hy3	262144	128000
+https://router.huggingface.co/v1	tencent/Hy4-flash	1048576	65536
 https://router.huggingface.co/v1	tencent/Hy4-preview	1000000	64000
 https://router.huggingface.co/v1	thinkingmachines/Inkling	1048576	1048576
 https://router.huggingface.co/v1	thinkingmachines/Inkling-2-Small	1048576	131072
@@ -7792,6 +7800,10 @@ https://router.requesty.ai/v1	gpt-6.1-sol	1050000	128000
 https://router.requesty.ai/v1	gpt-6.1-sol@eu	1050000	128000
 https://router.requesty.ai/v1	gpt-6.1-terra	1050000	128000
 https://router.requesty.ai/v1	gpt-6.1-terra@eu	1050000	128000
+https://router.requesty.ai/v1	gpt-6.2-astra	1050000	128000
+https://router.requesty.ai/v1	gpt-6.2-astra@eu	1050000	128000
+https://router.requesty.ai/v1	gpt-6.2-sol	1050000	128000
+https://router.requesty.ai/v1	gpt-6.2-sol@eu	1050000	128000
 https://router.requesty.ai/v1	grok-4.2-beta	2000000	30000
 https://router.requesty.ai/v1	grok-4.3	1000000	30000
 https://router.requesty.ai/v1	grok-4.5	500000	500000

@@ -122,3 +122,10 @@ worker 线程只读快照 + 写 bridge/result（join-then-read 纪律不变）�
 （/compact 的 `Chat history`）与字符串字面量含同名单词，全局正则会误改。最终用**作用域感知扫描**
 （逐字符区分代码/字符串/字符/注释/raw-string，仅重命名代码段）+ 内部局部预改名（history→hchat）成功，
 pty 195/0。input/帧渲染沿用同一扫描器。
+
+**input/帧渲染迁移方案（最后一步）**：二者是主 `for(;;)` 循环体（键位分发 ~900–1300、
+帧渲染 ~1300–1917），含 `continue`/循环控制，不能像 slash 那样整块搬为纯函数。方案：把循环体
+抽为 `enum class LoopCtl { Next, Exit, Render };` 返回的两个模板函数
+`dispatch_input_impl(Ctx&, LoopCtl&)` 与 `render_frame_impl(Ctx&)`，`continue`→`return LoopCtl::Next`、
+退出→`Exit`；run_loop 只留 poll/抽干/join/调度。沿用作用域感知扫描器重命名，逐段小步+pty 门禁。
+小型输入助手（hist_up/down、mark_edited、insert_sidebar_selection）可先随迁。
