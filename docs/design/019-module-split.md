@@ -74,7 +74,7 @@ CLI：
 - **P1 纯函数抽取** —— **已完成**（提交 `04b36f1`）：`md_geometry`、`subprocess`、`workspace`、`provider_parse`。零状态、行为保持；四 preset CTest 3/3 + pty TUI 195 PASS + CLI ALL PASS + check.py。
 - **P2 类/子命令抽取** —— **已完成**（CLI `a879bcd`；tools 拆分见后续提交）：CLI → `cli_common`/`cli_commands`/`cli_main`（1115→86）+ `session_serde`；tools → `tools_file`（FileRuntime）/`tools_git`（GitRuntime），tools.cpp 保留 registry+bash（1095→222）。**config_file/env 拆分暂缓**（config.cpp 777 行、env/file 合并高度耦合，价值低）。
 - **P3 TUI 状态对象 + screen 抽取** —— **screen 层已完成**：`tui_screen.hpp` 承载 RawMode/term size/tint/LiveScreen/split_ansi_paragraphs/steady_now（tui.cpp 3626→3195 行）；四 preset + pty 双环境（常规）验证。**TuiState 状态对象待建**，是 P4 的前提。
-- **P4 TUI 逻辑拆分** —— **进行中**：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`；**TurnState 首片**（回合/审批共享状态 + `run_turn_worker`）→ `tui_turn`；**slash 群** → `tui_slash.hpp`（`handle_slash_impl` 模板 over 引用上下文；作用域感知扫描重命名，只改代码段、保护字符串/注释；内部遮蔽局部 `history`→`hchat`；tui.cpp →1917）。**input 助手**（hist_up/down、mark_edited、insert_sidebar_selection）→ `tui_input.hpp`（tui.cpp →1891）。**主循环键位分发/帧渲染仍待实施**（LoopCtl 方案）。
+- **P4 TUI 逻辑拆分** —— **进行中**：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`；**TurnState 首片**（回合/审批共享状态 + `run_turn_worker`）→ `tui_turn`；**slash 群** → `tui_slash.hpp`（`handle_slash_impl` 模板 over 引用上下文；作用域感知扫描重命名，只改代码段、保护字符串/注释；内部遮蔽局部 `history`→`hchat`；tui.cpp →1917）。**input 助手**（hist_up/down、mark_edited、insert_sidebar_selection）→ `tui_input.hpp`；**idle 帧渲染** → `tui_frame.hpp`（`render_frame_impl`，纯渲染无控制流；tui.cpp →1694）。**主循环键位分发仍待实施**（LoopCtl，内层/外层 continue+goto done 须人工翻译）。
 
 每阶段一个提交；任何阶段测试不绿即回退该阶段。
 
