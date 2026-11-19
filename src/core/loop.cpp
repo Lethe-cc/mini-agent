@@ -1,7 +1,11 @@
 #include "mini_agent/loop.hpp"
 
 #include <chrono>
+#include <cstddef>
+#include <optional>
 #include <set>
+#include <string>
+#include <string_view>
 
 namespace mini_agent {
 namespace {
@@ -73,6 +77,10 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
 
     std::set<std::string> session_allowed; // Approval::AllowSession scope
     std::string final_text;
+    // Set when the max-rounds note had to travel as a tail User message
+    // (no leading System prompt to fold it into); commit skips this staging
+    // index so the note never reaches the stored history.
+    std::optional<std::size_t> limit_note;
     // v4: per-turn usage roll-up (see TurnOptions::usage_out semantics).
     TokenUsage turn_usage;
     bool usage_seen = false;
@@ -83,14 +91,28 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
         std::string tools_for_round = (tools_enabled && !last_round) ? tools_json : std::string();
         if (tools_enabled && last_round) {
             // Budget exhausted: ask for a final summary WITHOUT tools. The
-            // note is staging-only and is filtered out at commit time
-            // (008 5.2 max-rounds rule).
-            Message note;
-            note.role = Role::System;
-            note.content =
+            // note is staging-only and never persisted (008 5.2 max-rounds
+            // rule).
+            //
+            // It also must not sit at the tail as a System message: strict
+            // OpenAI-compatible gateways answer HTTP 400 "System message
+            // must be at the beginning." for any System message that is not
+            // messages[0] (live with vLLM behind LiteLLM, 2026-11-19), and
+            // the rejected round discards the whole turn. So fold it into
+            // the leading prompt; with no leading prompt (system_prompt
+            // disabled, pre-v3 session) fall back to a tail User message,
+            // which every template accepts.
+            static constexpr std::string_view kLimitNote =
                 "Tool round limit reached for this turn. Reply with your best summary now; "
                 "do not request more tools.";
-            staging.add(std::move(note));
+            const std::string folded = "\n\n" + std::string(kLimitNote);
+            if (!staging.append_system_note(folded)) {
+                Message note;
+                note.role = Role::User;
+                note.content = kLimitNote;
+                staging.add(std::move(note));
+                limit_note = staging.messages().size() - 1;
+            }
         }
         auto result = ask_provider(staging, provider, tools_for_round, on_delta, abort);
         // v4: last round's prompt_tokens wins (live context reading);
@@ -161,15 +183,18 @@ std::string run_turn(Chat& chat, Provider& provider, std::string_view user_input
     if (options.reasoning_out && turn_reasoning.seen) {
         *options.reasoning_out = turn_reasoning; // v4.2, same boundary
     }
-    // staging layout: [original prefix][user][assistant/tool ...], where
-    // the only System message that can appear after the prefix is the
-    // transient max-rounds note -- never persisted.
+    // staging layout: [original prefix][user][assistant/tool ...]. The
+    // transient max-rounds note either rode inside the leading System
+    // message of the copy above (never committed, since the loop starts at
+    // prefix + 1) or sits at `limit_note` as a tail User message.
     const std::size_t prefix = chat.messages().size();
     chat.add(std::move(user));
     for (std::size_t i = prefix + 1; i < staging.messages().size(); ++i) {
+        if (limit_note && i == *limit_note)
+            continue; // transient limit note
         const auto& message = staging.messages()[i];
         if (message.role == Role::System)
-            continue; // transient limit note
+            continue; // defensive: no System message belongs after the prefix
         chat.add(Message{message});
     }
     return final_text;

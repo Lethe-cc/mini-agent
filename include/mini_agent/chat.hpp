@@ -64,6 +64,16 @@ class Chat {
     // no such line exists. Everything else in the prompt is untouched.
     void update_system_workspace(const std::string& workspace);
 
+    // Appends `note` to the leading System message in place. Returns false
+    // (and changes nothing) when there is no leading System message.
+    //
+    // Exists because strict OpenAI-compatible gateways (vLLM behind
+    // LiteLLM) answer HTTP 400 "System message must be at the beginning."
+    // for any System message that is not messages[0], so a transient
+    // in-flight instruction has to ride inside the leading prompt rather
+    // than join the tail (see loop.cpp's max-rounds note).
+    bool append_system_note(std::string_view note);
+
   private:
     std::vector<Message> messages_;
 };

@@ -242,6 +242,7 @@ MCP server **惰性启动**：首次出现非空 tool_calls 需要远端执行�
 - D4：审批 UI 的 worker/主线程桥接用固定槽位 + 序号协议实现（无悬垂指针）；pty smoke 的 v2 审批断言未补，当前以单元/E2E 覆盖。
 - D5：`ToolRegistry::add()` 初版实现同步调用 `runtime->list()` 认领名字，违反 5.5 惰性启动——配置 HTTP MCP server 后 TUI 首帧被握手阻塞（维护者 2026-11-04 报告"启动很慢"）。已修复：add 不再 list，名字认领推迟到 `list()` 内（late-registered 路径已覆盖），`find()` 直接扫 runtime；修复后带 deepwiki 配置的首帧 6ms（pty 实测）。回归点：任何让启动触网的新调用都必须在 `ensure_started()` 之后。
 - D6：CLI `ask --tools ask` 初版在非 TTY 降级为 auto，违背本文 5.4 与 ADR 006（管道里静默执行 shell）。已改为降级 off + stderr 提示，并补 E2E；同时审批提示统一走 stderr 保 stdout 契约。
+- D7：**轮数上限提示的位置**（2026-11-19 真机 400）。初版在末轮往 staging 末尾追加一条 `role=system` 的"轮数已用完"提示（只在提交时按角色过滤、从不落盘）。严格 OpenAI 兼容网关（vLLM 经 LiteLLM，维护者 2026-11-19 实测）对不在 `messages[0]` 的 system 消息直接回 HTTP 400 `System message must be at the beginning.`（`Hosted_vllmException`），被拒的那一轮走失败轮回滚——整轮提问与已执行的工具结果全部丢弃。已改为：优先把提示折进首位 System 正文（新增 `Chat::append_system_note`，与 `update_system_workspace` 同族、就地改 staging 副本）；无首位 System 时（`system_prompt` 置空、v3 之前的旧 session）退化为末尾 **User** 消息，提交时按记录的下标跳过（不再单靠角色判别）。宽松网关（DashScope 兼容端点）历史上不报此错，故该缺陷只在部分 provider 上暴露。回归：`test_max_tool_rounds` 两条场景断言"最终请求里 System 唯一且在 0 位 / 无首位 prompt 时 System 为 0 条"+"提示文本从不落盘"（旧实现下四条断言均 FAIL，已验证）。
 - 其余按第 5 节实现。
 
 实现评审优化（2026-11-05 全模块回顾，已合入）：

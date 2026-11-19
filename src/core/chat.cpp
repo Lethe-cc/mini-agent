@@ -58,6 +58,13 @@ void Chat::update_system_workspace(const std::string& workspace) {
     content = content.substr(0, start) + marker + workspace + content.substr(end);
 }
 
+bool Chat::append_system_note(std::string_view note) {
+    if (messages_.empty() || messages_.front().role != Role::System)
+        return false;
+    messages_.front().content.append(note);
+    return true;
+}
+
 std::string chat_to_json(const Chat& chat) {
     nlohmann::json arr = nlohmann::json::array();
     for (const auto& message : chat.messages()) {

@@ -1456,6 +1456,7 @@ void test_max_tool_rounds() {
             ++n;
             last_tools = tools;
             last_history = c.messages().size();
+            last_request = c.messages();
             if (n < 4)
                 return CompletionResult{
                     "", {ToolCall{"t" + std::to_string(n), "echo", "{}"}}, {}, {}};
@@ -1463,6 +1464,7 @@ void test_max_tool_rounds() {
         }
         std::string last_tools;
         std::size_t last_history = 0;
+        std::vector<Message> last_request;
     } looper;
     auto registry = std::make_unique<ToolRegistry>();
     registry->add(std::unique_ptr<ToolRuntime>(new FakeRuntime()));
@@ -1473,9 +1475,57 @@ void test_max_tool_rounds() {
         run_turn(chat, looper, "go", [](std::string_view) {}, [] { return false; }, options);
     check(text == "gave up gracefully", "loop terminates at budget via no-tools summary");
     check(looper.last_tools.empty(), "final round advertises no tools");
-    // transient system note must not be persisted
-    for (const auto& m : chat.messages())
+    // Regression (2026-11-19): the max-rounds note must never travel as a
+    // System message that is not messages[0]. Strict gateways (vLLM behind
+    // LiteLLM) reject that with HTTP 400 "System message must be at the
+    // beginning." and the rejected round discards the whole turn. With no
+    // leading prompt the note goes out as a tail User message instead.
+    std::size_t systems = 0;
+    for (const auto& m : looper.last_request)
+        systems += m.role == Role::System ? 1 : 0;
+    check(systems == 0, "no System message when the session has no leading prompt");
+    check(!looper.last_request.empty() && looper.last_request.back().role == Role::User &&
+              looper.last_request.back().content.find("Tool round limit reached") !=
+                  std::string::npos,
+          "limit note travels as a tail User message");
+    // transient note must not be persisted (neither as a message nor as text)
+    for (const auto& m : chat.messages()) {
         check(m.role != Role::System, "limit note never stored");
+        check(m.content.find("Tool round limit reached") == std::string::npos,
+              "limit note text never stored");
+    }
+
+    // Normal session shape (leading System prompt, the case that hit the
+    // 400 live): the note must fold into that prompt, so the request keeps
+    // exactly one System message and it stays at index 0.
+    Chat with_prompt;
+    Message prompt;
+    prompt.role = Role::System;
+    prompt.content = "You are mini-agent.\n";
+    with_prompt.add(prompt);
+    Looper looper2;
+    TurnOptions prompt_options;
+    prompt_options.tools = registry.get();
+    prompt_options.max_tool_rounds = 3;
+    const std::string folded_text = run_turn(
+        with_prompt, looper2, "go", [](std::string_view) {}, [] { return false; }, prompt_options);
+    check(folded_text == "gave up gracefully", "folded path still ends the turn gracefully");
+    systems = 0;
+    for (const auto& m : looper2.last_request)
+        systems += m.role == Role::System ? 1 : 0;
+    check(systems == 1, "exactly one System message in the final request");
+    check(!looper2.last_request.empty() && looper2.last_request.front().role == Role::System,
+          "System message stays at index 0");
+    check(looper2.last_request.front().content.find("Tool round limit reached") !=
+              std::string::npos,
+          "limit note folded into the leading prompt");
+    check(!with_prompt.messages().empty() && with_prompt.messages().front().role == Role::System &&
+              with_prompt.messages().front().content.find("Tool round limit reached") ==
+                  std::string::npos,
+          "folded note never persisted into the stored prompt");
+    for (std::size_t i = 1; i < with_prompt.messages().size(); ++i)
+        check(with_prompt.messages()[i].role != Role::System,
+              "stored history keeps System only at index 0");
 }
 
 void test_mcp_cli_specs() {
