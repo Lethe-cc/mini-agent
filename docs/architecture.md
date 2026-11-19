@@ -141,6 +141,9 @@ stop
 
 ## 数据流与核心模型
 
+各状态机（连接/认证、回合生命周期、审批、后台 worker、预览 pane、session）的集中
+PlantUML 描述见 [020：状态流转](design/020-state-machines.md)；下述为数据模型摘要。
+
 - `Chat`：`system` + `user|assistant|toolResult` 消息序列；JSON 序列化含 `schema_version`（当前 1）；Role 预留 `Tool`、Message 预留恒空 `tool_calls`（工具调用扩展点）。
 - session 文件：`<sessions>/<id>.json`，元信息（id/title/model/时间）+ 消息历史；写路径 `tmp + rename` 原子替换，`.lock` 文件防同 id 并发打开（ADR 001）。
 - 配置合并：env > `config.json`；`/login`/`/model`/`/provider` 在 TUI 内写回文件（0600）。密钥在任何 stdout/日志面零输出（掩码显示 `***set***`）。三条命令**各自独立保存**，可任意顺序、分属不同进程分批录入；提示行统一走 `config_next_hint()`，只报 `config N/3 · next: <下一步>`而不重列全部命令，也不回显字段值（见 007 §5.6 规则 8）。日志侧 `Logger::redact_url()` 会将 `https://user:token@host` 的 userinfo 剥为 `***@`，防止将凭据内嵌到 base_url 时泄入日志。v6（2026-11-12，设计 [012](design/012-multi-provider.md)）引入 `providers` 命名档案表与 `active_provider`；v7（2026-11-14，设计 [013](design/013-named-providers.md)、[ADR 009](decisions/009-named-providers-schema-v2.md)）把档案表变为**唯一** LLM 持久化面：`schema_version=2`，顶层 base_url/api_key/model/context_window/reasoning_effort 五字段废弃，provider 强制命名（未命名态删除）。运行时生效值统一为 `AppConfig::current` = 活动档案 + 非空 env 叠加，由 `refresh_current()` **单向派生**（`sync_active_provider()` 已删除）；TUI 编辑命令直接改活动档案，无档案时自动创建 `default` 档案（首启零摩擦），CLI `--provider/--model` 只改本次进程的 current。v1 文件加载时一次性迁移（未命名顶层折成 default 档案，名冲突 default-2…），下次保存落 v2；旧二进制读 v2 被 schema 门禁拒绝（破坏性，有意）。env 限定名 `MINI_AGENT_MODEL=provider/model` 在每次派生时选档案（不改盘上选择）；三个 LLM env 非空覆盖**恒赢**，覆盖生效期间档案切换只写盘不生效（`/config` 标注 `env override in effect`）。
