@@ -7,6 +7,9 @@
 > 修正项：MRKL 的 arXiv 编号（原文写错）、Flowise 与 Daytona 已归档、Anthropic 多 Agent 文的现址、
 > Agent Skills 已捐给 AAIF、AutoGen 仓库并未归档（是维护模式）。星标与下载量随仓库/页面当天数字更新，仍属相对参考。
 > 未能在本环境访问的来源（例如 huggingface.co、部分 Google Cloud 页面）已在文末标注，不代表链接失效。
+>
+> **单一来源**：本文是学习资源的唯一权威文档；早期中文整理稿已并入本文并删除，不另维护副本。
+> 索引登记见 [references/README](references/README.md)。
 
 ---
 
