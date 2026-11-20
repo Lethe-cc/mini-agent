@@ -5,6 +5,6 @@
 3. 重要功能先执行 `workflows/design-feature.md`；简单任务可在任务描述中记录简短方案。
 4. 根据任务读取指定外部资料，记录关键版本、借鉴内容和本地差异。不默认克隆整个仓库。
 5. 小步实现并补测试；发现架构、依赖或授权边界变化时先确认。
-6. 运行基础检查和项目质量命令；若未接入业务门禁，明确说明不能据此判断业务正确性。
+6. 运行 `python scripts/check.py --require-initialized`（接入门禁后用 `--strict-project`；快速反馈可用 `--fast`）；CTest/pty 分层验证见 `docs/design/testing/`。若未接入业务门禁，明确说明不能据此判断业务正确性。
 7. 执行 `workflows/finalize-design.md`，同步最终设计和必要架构说明。
-8. 交付摘要、路径、验证结果和风险；不自动提交或推送。
+8. 交付摘要、路径、验证结果和风险。可自动提交（ADR 008 预授权，commit message 用英文）；推送留人工。
