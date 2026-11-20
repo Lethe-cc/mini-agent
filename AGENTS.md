@@ -12,6 +12,8 @@
 
 ## 按需阅读
 
+- 快速上手/跨机器交接：`docs/agent-handbook.md`（模块地图、工作约定、陷阱清单、验证速查、当前状态），新会话优先读。
+
 - 首次使用模板、引导用户完成项目：`docs/user-guide.md`；这是长篇使用手册，不要求每次任务全量加载。
 - 新功能：`workflows/implement-feature.md`；需要设计时同时读 `workflows/design-feature.md`。
 - 缺陷修复：`workflows/fix-bug.md`。
