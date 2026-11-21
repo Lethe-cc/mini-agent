@@ -1,6 +1,6 @@
 # 005：自写 MCP 客户端，传输抽象与 stdio / Streamable HTTP 双实现
 
-- 状态：提议（2026-11-02，待维护者评审；同日按维护者"同时支持 HTTP server + 传输抽象"要求修订，原稿仅 stdio。维护者同日已批复其中一点：**企业 OAuth 不做**，HTTP 认证维持静态 Bearer——该裁剪从"待评审默认"升格为已确认决策）。
+- 状态：**拟被 [ADR 010](010-mcp-full-client-cxxmcp.md) 取代**（2026-11-21 维护者方向输入"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"推翻本 ADR 的 tools-only 裁剪与版本钉死前提；ADR 010 仍为提议，未获批前本 ADR 描述的实现即现行代码事实）。原状态：提议（2026-11-02，待维护者评审；同日按维护者"同时支持 HTTP server + 传输抽象"要求修订，原稿仅 stdio。维护者同日已批复其中一点：**企业 OAuth 不做**，HTTP 认证维持静态 Bearer——该裁剪的存续见 [021 Q2](../design/021-mcp-full-client.md)）。
 - 日期与关联任务：2026-11-02；[008：mini-agent v2 技术方案](../design/008-mcp-tools.md)。
 - 决策人或审批依据：AI 起草，整体未获人工批复；唯一已获批复点为维护者 2026-11-02 对话确认"目前不做企业 OAuth"。接受前其余内容不得视为既定方向。
 
@@ -12,7 +12,7 @@ v2 需要让模型发现并调用外部工具，且维护者明确要求**同时
 
 - 方案 A（分层：RPC 内核 + Transport 抽象接口，stdio/Streamable HTTP 两个实现）：协议逻辑（initialize/版本协商/tools 三方法）只依赖"发送一条 JSON-RPC 消息/收取一条 JSON-RPC 消息"的抽象；新增传输（自定义 IPC、WebSocket 等）只加实现类，不改内核。零新依赖（HTTP 复用 libcurl）；代价是两种传输的消息时序模型不同（stdio 全双工字节流 vs HTTP 请求-响应内联返回），抽象必须容纳这一差异，接口设计要前置想清。
 - 方案 B（协议代码直接耦合 stdio 管道，HTTP 另写一套）：首版实现最快；但协议逻辑重复两份，版本协商/错误语义演进时双改，与"方便扩展"的诉求相反。
-- 方案 C（引入社区 C++ MCP SDK）：省实现量；候选库许可证与维护状态未核实（违背引入门槛），且其传输抽象是否覆盖本项目需求未知。
+- 方案 C（引入社区 C++ MCP SDK）：省实现量；候选库许可证与维护状态未核实（违背引入门槛），且其传输抽象是否覆盖本项目需求未知。**2026-11-21 更新**：四候选已完成元数据+许可证+构建层核对（cxxmcp=MIT/C++17/conformance 自述 client 501/501；mcp-cpp、mcp-cpp-sdk 为 C++20 与基线冲突；gopher-mcp 依赖最重），"未核实"不再是拒绝依据；在 tools-only 前提下方案 A 仍成立，但该前提已被同日方向输入推翻——方案 C 方向的完整评估与引入提议见 [ADR 010](010-mcp-full-client-cxxmcp.md)。
 - 方案 D（只做 stdio，HTTP 需求出现后再重构）：被维护者明确否决——本期就要 HTTP。
 
 ## 决策
@@ -32,4 +32,4 @@ v2 需要让模型发现并调用外部工具，且维护者明确要求**同时
 - 后续验证：stdio/HTTP 两个 mock server E2E、会话头与 404 重初始化路径、超时/连接失败折叠为 is_error（008 第 8 节计划，均未执行）。
 
 ## 关联
-[008](../design/008-mcp-tools.md) 第 4、5 节；[ADR 002](002-http-json-dependency.md)（curl/json 底座）、[ADR 003](003-tui-approach.md)（自写最小层取向）、[ADR 006](006-tool-approval-policy.md)；[references/agent-protocols.md](../references/agent-protocols.md)。
+[008](../design/008-mcp-tools.md) 第 4、5 节；[ADR 002](002-http-json-dependency.md)（curl/json 底座）、[ADR 003](003-tui-approach.md)（自写最小层取向）、[ADR 006](006-tool-approval-policy.md)；[references/agent-protocols.md](../references/agent-protocols.md)。取代提议：[ADR 010](010-mcp-full-client-cxxmcp.md) + [design 021](../design/021-mcp-full-client.md)（均待评审）。

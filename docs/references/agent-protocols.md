@@ -29,7 +29,7 @@
     - CLI 发行名 @agent-ruler/openmcp（omc）；官方模板 Python/TS/Java；server 经 stdio 或 HTTP 连接（与本项目两传输同域）
   - 在用远端示例：https://mcp.deepwiki.com/mcp （Streamable HTTP 公开 server，连通验证见"实际采用情况"）
 - 固定 commit SHA / tag / 产品版本：未固定。MCP 规范版本化明显，引用时以任务当天的规范版本号为准。
-- 最近核对日期与阅读状态：**2026-11-05 元数据+许可证核对**（GitHub 仓库元数据与 LICENSE 文件在线实读；源码仍未精读）。规范文本核对记录见"实际采用情况"。
+- 最近核对日期与阅读状态：**2026-11-21 C++ 候选深化核对**（四候选元数据 + README/LICENSE/DEPENDENCY_POLICY/CMake 层；cxxmcp 另实读 client/http_transport.hpp、client/session.hpp 头文件；源码仍未精读，conformance 数字均为项目自述未独立复跑）。前次 2026-11-05 元数据+许可证核对。规范文本核对记录见"实际采用情况"。
 - 许可证及核实依据：modelcontextprotocol 官方组（typescript-sdk、servers、inspector 的 LICENSE 当日实读一致）：**MIT→Apache-2.0 过渡授权**（新代码与规范贡献 Apache-2.0，文档 CC-BY-4.0；组内其余 SDK 按同政策对待，复制前仍须逐仓库确认条款细节）。GopherSecurity/gopher-mcp = **Apache-2.0**（当日实读）；caomengxuan666/cxxmcp = **MIT**（当日实读）；mark3labs/mcp-go = **MIT**（当日实读，Copyright Anthropic）。Neumann-Labs/mcp-cpp、yurirocha15/mcp-cpp-sdk、rust-mcp-stack/rust-mcp-sdk、官方组内其余 SDK、awesome 清单、openmcp-tutorial/document 及 openmcp SDK 具体仓库：**未核实**。**OpenMCP 冲突记录**：其文档站 FAQ 自称 MIT，但 openmcp-client 仓库根 LICENSE 当日实读为 **Apache-2.0**——引用以 LICENSE 文件为准。复制代码前必须逐仓库核实。
 
 ## 参考目的与范围
@@ -58,3 +58,10 @@
 - 开源实现参考的定位（2026-11-05）：① 规范灰区（超时、SSE 断流重连、会话过期重初始化各家差异）出现争议行为时的第二意见；② conformance 测试集可作本客户端的外部一致性验收工具（cxxmcp/yurirocha15 声明对官方 suite）；③ 未来引入服务器发起请求/progress/OAuth 等能力时的工程形态参照。引入任何代码前逐仓库二次核实许可证细节（官方组 MIT→Apache 过渡含贡献时点区分）并记 ADR；Apache-2.0 注意专利授权条款与 NOTICE 义务。
 - OpenMCP（LSTM-Kirigaya）已登记（2026-11-05）：文档站与仓库元数据当日实读，**源码未读、无实现级借鉴**；用途见「参考目的与范围」节。自称许可与 LICENSE 文件冲突已记录，借鉴任何代码前必须逐仓库二次核实并记 ADR。
 - 真实对端记录：deepwiki（https://mcp.deepwiki.com/mcp，Streamable HTTP、无鉴权）于 2026-11-04/05 由 mini-agent 客户端连通并全链路调用（tools/list 4 工具、tools/call 成功；其行为为 SSE 单响应、无进度流，与本项目实现兼容）。属"外部 API 事实"，非设计参考。
+- 2026-11-21 C++ SDK 候选深化核对（动因：维护者方向输入"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"，ADR 005 方案 C 的"未核实"拒绝依据需更新）：
+  - **cxxmcp**（master `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`，MIT 复核）：C++17 默认（17/20/23/26 可选）；34★/8 forks，pre-1.0 RC 形态、单一维护者，自称"官方 SDK candidate evidence 准备中"（**非官方**）。自述官方 conformance（modelcontextprotocol/conformance `--suite all`）server 272/272、client 501/501。协议协商 2024-11-05→2026-07-28 + DRAFT-2026-v1；stateless wire SEP-2575、tasks SEP-2663、skills SEP-2640、DPoP RFC 9449、OAuth 2.1/PKCE opt-in（`CXXMCP_ENABLE_AUTH=OFF` 默认）。依赖（DEPENDENCY_POLICY.md 实读）：vendored header-only tl::expected + nlohmann/json（与本项目同库）；HTTP/WebSocket 路径需 cpp-httplib（`CXXMCP_ENABLE_HTTP=OFF` 默认）；TLS 需 OpenSSL（`CXXMCP_ENABLE_OPENSSL=OFF` 默认）。CMake 模块化目标 protocol/transport/handler/peer/service/client/server/auth/sdk（client/server 默认 OFF）；find_package/Conan 2/vcpkg overlay/FetchContent/xmake 打包。客户端 API（头文件实读）：`McpClientSession` + typed DTO + `core::Result<T>`；Transport 为请求-响应级契约（send→Result<Response> + notification/server-request 双通道），分页内建（discover_all_tools）。
+  - **Neumann-Labs/mcp-cpp**：Apache-2.0（badge 层，未实读 LICENSE 全文）、C++20、65★、0.1 beta；core 仅 nlohmann、HTTP=cpp-httplib+OpenSSL；Transport/Session/Client 三层与 ADR 005 同构；无 conformance 声明。定位：第二意见参考。
+  - **yurirocha15/mcp-cpp-sdk**：Apache-2.0（badge）、C++20、1★、v0.3.0；Boost.Asio/Beast 协程 + OpenSSL + jsoncons；CI 跑官方 conformance（2025-11-25 基线）且公开缺口文件。依赖最重、社区最小；工程诚实度高可作对照。
+  - **GopherSecurity/gopher-mcp**：Apache-2.0（11-05 实读）、C++14 基线 + OpenSSL REQUIRED、156★/95 open issues、全传输 + 6 语言绑定，最重。
+  - 官方 SDK 组仍无 C++ 实现（TS/Python/Go/Java/Rust/C#/Swift）。
+  - 结论落档：[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（提议引入 cxxmcp，取代 ADR 005、修订 ADR 002）+ [design 021](../design/021-mcp-full-client.md)（M0 spike 否决门含独立复跑 conformance）。**均未获批，未引入任何代码**；conformance 自报数字在 spike 复跑前不得作为质量事实引用。
