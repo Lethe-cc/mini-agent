@@ -4,7 +4,7 @@
 - 状态：已实现（2026-11-05，M1–M4 全部落地，验证见第 8 节；待人工评审）。同日维护者批复 git 策略"commit 可自动，push 等人工"——[ADR 008](../decisions/008-git-tool-policy.md) 升为已接受并反映于 §4/§5.2/§6/Q2/Q3/Q4；实现偏差见第 9 节。
 - 关联任务：维护者 2026-11-05 提出阶段目标"agent 能否进行代码修改、项目开发"，补充范围："能够修改代码和文档，git 能力，diff 显示修订，以及其他所有和项目开发相关的能力"。承接 [008](008-mcp-tools.md)（v2 工具循环，已实现）。
 - 核对日期与适用版本：2026-11-05 实读本仓库 `src/tools/tools.cpp`、`src/core/loop.cpp`、`include/mini_agent/tools.hpp`、`include/mini_agent/loop.hpp`、`src/tui/tui.cpp`（审批区块与 `style_history_line`）、`src/core/config.cpp`（schema_version 1）、`src/cli/cli_main.cpp`（`ask --tools off|ask|auto`）。代码基线：main@725b21d。
-- 人工评审记录：维护者 2026-11-05 对话批复 git 策略："git 提交可以自动，push 等人工操作"（已落实至 [ADR 008](../decisions/008-git-tool-policy.md)，该 ADR 状态升为已接受；本文相应章节同日修订）。其余章节未获人工批复，推进方式仍为 AI 务实默认（design-first）。
+- 人工评审记录：维护者 2026-11-05 对话批复 git 策略："git 提交可以自动，push 等人工操作"（已落实至 [ADR 008](../decisions/008-git-tool-policy.md)，该 ADR 状态升为已接受；本文相应章节同日修订）。维护者 2026-11-21 对话批复 [ADR 007](../decisions/007-file-tools-workspace.md)"使用建议的方案"（A + D + session 级 workspace），该 ADR 升为已接受——文件工具形态与软性 workspace 边界的取舍获正式确认；本文整体（含偏差 D1–D7 与 Q1/Q4b/Q5）仍待人工评审。其余章节未获人工批复，推进方式仍为 AI 务实默认（design-first）。
 
 ## 1. 背景与目标
 
