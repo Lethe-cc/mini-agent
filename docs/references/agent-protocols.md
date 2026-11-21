@@ -29,7 +29,7 @@
     - CLI 发行名 @agent-ruler/openmcp（omc）；官方模板 Python/TS/Java；server 经 stdio 或 HTTP 连接（与本项目两传输同域）
   - 在用远端示例：https://mcp.deepwiki.com/mcp （Streamable HTTP 公开 server，连通验证见"实际采用情况"）
 - 固定 commit SHA / tag / 产品版本：未固定。MCP 规范版本化明显，引用时以任务当天的规范版本号为准。
-- 最近核对日期与阅读状态：**2026-11-21 C++ 候选深化核对**（四候选元数据 + README/LICENSE/DEPENDENCY_POLICY/CMake 层；cxxmcp 另实读 client/http_transport.hpp、client/session.hpp 头文件；源码仍未精读，conformance 数字均为项目自述未独立复跑）。前次 2026-11-05 元数据+许可证核对。规范文本核对记录见"实际采用情况"。
+- 最近核对日期与阅读状态：**2026-11-21 M0 spike**（cxxmcp client 路径源码选读 + 四 preset 编译 + mock/deepwiki 重放 + 官方 conformance runner v0.2.0-alpha.12 独立复跑，client 侧 2025-11-25 同口径 247/0 精确复现，见 [design 021 §8](../design/021-mcp-full-client.md)；server 272/272 仍系自述未复跑）。同日早前：四候选元数据 + README/LICENSE/DEPENDENCY_POLICY/CMake 层深化核对。前次 2026-11-05 元数据+许可证核对。规范文本核对记录见"实际采用情况"。
 - 许可证及核实依据：modelcontextprotocol 官方组（typescript-sdk、servers、inspector 的 LICENSE 当日实读一致）：**MIT→Apache-2.0 过渡授权**（新代码与规范贡献 Apache-2.0，文档 CC-BY-4.0；组内其余 SDK 按同政策对待，复制前仍须逐仓库确认条款细节）。GopherSecurity/gopher-mcp = **Apache-2.0**（当日实读）；caomengxuan666/cxxmcp = **MIT**（当日实读）；mark3labs/mcp-go = **MIT**（当日实读，Copyright Anthropic）。Neumann-Labs/mcp-cpp、yurirocha15/mcp-cpp-sdk、rust-mcp-stack/rust-mcp-sdk、官方组内其余 SDK、awesome 清单、openmcp-tutorial/document 及 openmcp SDK 具体仓库：**未核实**。**OpenMCP 冲突记录**：其文档站 FAQ 自称 MIT，但 openmcp-client 仓库根 LICENSE 当日实读为 **Apache-2.0**——引用以 LICENSE 文件为准。复制代码前必须逐仓库核实。
 
 ## 参考目的与范围
@@ -64,4 +64,4 @@
   - **yurirocha15/mcp-cpp-sdk**：Apache-2.0（badge）、C++20、1★、v0.3.0；Boost.Asio/Beast 协程 + OpenSSL + jsoncons；CI 跑官方 conformance（2025-11-25 基线）且公开缺口文件。依赖最重、社区最小；工程诚实度高可作对照。
   - **GopherSecurity/gopher-mcp**：Apache-2.0（11-05 实读）、C++14 基线 + OpenSSL REQUIRED、156★/95 open issues、全传输 + 6 语言绑定，最重。
   - 官方 SDK 组仍无 C++ 实现（TS/Python/Go/Java/Rust/C#/Swift）。
-  - 结论落档：[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（提议引入 cxxmcp，取代 ADR 005、修订 ADR 002）+ [design 021](../design/021-mcp-full-client.md)（M0 spike 否决门含独立复跑 conformance）。**均未获批，未引入任何代码**；conformance 自报数字在 spike 复跑前不得作为质量事实引用。
+  - 结论落档：[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（已接受，取代 ADR 005、修订 ADR 002）+ [design 021](../design/021-mcp-full-client.md)（M0 spike 否决门含独立复跑 conformance）。Q1–Q4 已批（2026-11-21）；**M0 spike 已执行并通过**（021 §8）：conformance 独立复跑 `--spec-version 2025-11-25` **247/0 与上游同口径自报精确一致**，最新 wire 42/48 场景 463 SUCCESS/0 FAILURE；6 个 draft-auth 场景因上游 `Client::~Client()` 析构缺陷挂起（021 §9，M1 范围外）。**未向 third_party/ 引入任何代码**；M1 vendoring 放行待维护者确认。

@@ -67,6 +67,7 @@ pty 支持 `--grep <标签>` 只门禁匹配断言；等待已自适应（勿改
 
 - 019 拆分：**P1–P4 全部完成**（键位分发 `c1a57f3` → `tui_keys.hpp`，LoopCtl 方案，见 019 §8）；
   **tui.cpp 3626→1268**。run_loop 仅剩 poll/抽干/join/完成回调调度 + done 清理。
+- MCP 迁移：[021](design/021-mcp-full-client.md) 已接受（Q1–Q4 已批），**M0 spike 通过**（四 preset、mock/deepwiki/线程重放、ASan/TSan 干净、conformance 2025-11-25 同口径 247/0 精确复现；6 draft-auth 场景挂起为上游析构缺陷，M1 范围外，见 021 §9）；M1 vendoring 放行待维护者确认。spike 产物在 gitignored `.references/`（cxxmcp 快照、conformance runner+Node22、构建与结果目录）。
 - 状态机集中描述：[020-state-machines.md](design/020-state-machines.md)（连接/回合/审批/worker/pane/session）。
 - 学习资源单一来源：[ai-agent-learning.md](ai-agent-learning.md)。
 

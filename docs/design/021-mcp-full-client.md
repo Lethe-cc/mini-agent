@@ -2,10 +2,10 @@
 
 ## 文档状态
 
-- 状态：**已接受（方向与开放问题已批）/ 实施进行中（M0 spike）**（2026-11-21）。**未实现、未向 third_party/ 引入任何第三方代码**；不改变任何现有行为。
+- 状态：**已接受（方向与开放问题已批）/ M0 spike 已通过（结果待人工确认放行 M1）**（2026-11-21）。**未实现、未向 third_party/ 引入任何第三方代码**；不改变任何现有行为。
 - 关联任务：维护者 2026-11-21 方向输入"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"；[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（已接受，取代 ADR 005）。
-- 核对日期、适用版本或代码修订：2026-11-21。本仓库基线 main `0730e4d`；cxxmcp master `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（元数据 + README/LICENSE/DEPENDENCY_POLICY/CMake + client 头文件层核对，源码未精读）。
-- 人工评审记录：维护者 2026-11-21 批复——Q1"批准"（ADR 010 + ADR 002 修订，依赖引入授权）；Q2"延续，但是未来可能会拓展"（OAuth 裁剪延续，auth 保持 OFF；未来启用须另行人审设计）；Q3"ok"（M1 期钉 2025-06-18，M2 再上移）；Q4"ok"（client 子集裁剪 vendoring，M0 确认依赖闭包后定裁剪清单）。整体设计文档的逐节人工评审仍未做；M0 spike 结果是迁移的否决门。
+- 核对日期、适用版本或代码修订：2026-11-21。本仓库基线 main `934f445`（Q1–Q4 批复落档）；cxxmcp master `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（M0 spike 中另选读 client.cpp/http_transport.cpp/request.hpp 及 conformance harness；全库仍未精读）。
+- 人工评审记录：维护者 2026-11-21 批复——Q1"批准"（ADR 010 + ADR 002 修订，依赖引入授权）；Q2"延续，但是未来可能会拓展"（OAuth 裁剪延续，auth 保持 OFF；未来启用须另行人审设计）；Q3"ok"（M1 期钉 2025-06-18，M2 再上移）；Q4"ok"（client 子集裁剪 vendoring，M0 确认依赖闭包后定裁剪清单）。整体设计文档的逐节人工评审仍未做；M0 spike 已执行并判定通过（§8），**M1 vendoring 放行待维护者确认**。
 
 ## 1. 背景与目标
 
@@ -90,13 +90,22 @@ cxxmcp transport 内部有接收线程（HTTP SSE/stdio 读）；本项目工具
 
 ## 8. 验证情况
 
+M0 spike 环境（2026-11-21，Debian Linux）：GCC 14.2.0 / Clang 19.1.7，CMake 3.31.6，OpenSSL 3.5.7；cxxmcp master `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（`.references/cxxmcp/`，codeload tarball，git clone 被网络阻断）；官方 conformance runner v0.2.0-alpha.12（`.references/conformance/`，需本地 Node ≥22：`.references/node22/`，系统 node 20 缺 `fs.globSync`）。spike 产物全部位于 gitignored `.references/`，未入仓库质量门禁。
+
 | 验收项 | 测试位置或证据 | 实际执行命令 | 结果 | 限制 |
 | --- | --- | --- | --- | --- |
-| M0：四 preset 编译 cxxmcp client-only | 待建（.references/ 内） | 未执行 | 未执行 | Q1 已批（2026-11-21），spike 启动 |
-| M0：官方 conformance client suite 独立复跑 | 待建（.references/ 内） | 未执行 | 未执行 | 自报 501/501 未验证 |
-| M0：mock + deepwiki 重放 | tests/mcp mock、tools/mcp_probe.py | 未执行 | 未执行 | — |
-| M1：现有全门禁重跑（四 preset CTest、pty、CLI、tidy、ASan、strict-project） | 既有测试资产 | 未执行 | 未执行 | — |
+| M0：四 preset 编译 cxxmcp client-only | `.references/spike-build/{gcc,clang}-{debug,release}/CMakeCache.txt` | `cmake -S .references/cxxmcp -B .references/spike-build/<preset> -DCMAKE_BUILD_TYPE=<Debug\|Release> -DCMAKE_CXX_COMPILER=<g++\|clang++> -DCXXMCP_BUILD_CLIENT=ON -DCXXMCP_BUILD_SERVER=OFF -DCXXMCP_ENABLE_HTTP=ON -DCXXMCP_ENABLE_OPENSSL=ON -DCXXMCP_ENABLE_AUTH=OFF && cmake --build <preset> -j` | **通过**：四 preset 全部编译成功 | client-only + HTTP + OpenSSL 组合；server/auth/examples/tests OFF |
+| M0：stdio mock 重放 | `.references/spike-harness/spike_client.cpp`（build-gcc） | `spike_client stdio python3 tests/mock_mcp_server.py <tmp>` | **通过**：8/8 PASS，协商 2025-06-18 | 现有 stdio mock 场景经 cxxmcp `McpClientSession` 重放 |
+| M0：HTTP mock 重放 | 同上；`tests/mock_mcp_http_server.py`（端口 8933） | `spike_client http http://127.0.0.1:8933/mcp` | **通过**：ALL PASS，含 -32601 ping 传播、DELETE→重握手恢复，协商 2025-06-18 | mock 为现有测试资产，非新增 |
+| M0：deepwiki 实测重放 | 同上 | `spike_client deepwiki https://mcp.deepwiki.com/mcp` | **通过**：ALL PASS（3 tools 发现 + 调用），协商 2025-06-18 | 真实外部端点，结果受网络时点影响 |
+| M0：并发桥接确认（§5.3） | 同上；build-asan（ASan+LSan）/ build-tsan（TSan） | `spike_client threads <url> 25`（4 worker 线程 × 25 次同步 call_tool）；stdio/http/deepwiki 三场景分别在 ASan、TSan 下重放 | **通过**：100/100 调用成功；ASan+LSan 干净 ×3；TSan 干净 ×3，无数据竞争/泄漏报告 | 4 线程同步调用模型 = turn worker 形态；sampling 的 server-request 桥接属 M2，未验 |
+| M0：官方 conformance client suite 独立复跑（最新协商 wire） | `.references/conf-results/`（42 场景 checks.json） | `node dist/index.js client --command <everything_client> --suite all --timeout 30000 -o .references/conf-results`（everything_client 以 AUTH=ON+OpenSSL GCC Release 单独构建） | **42/48 场景完成：463 SUCCESS / 0 FAILURE / 4 SKIPPED（sep-2640 skills，按设计跳过）/ 567 INFO（不计分）**；其余 6 个 draft-auth 场景挂起（见 §9 已知限制） | runner 比上游 2026-09-15 快照新（48 场景 vs 当时 501 checks 口径），总数不可直接对照 501/501；6 场景挂起为上游 SDK 析构缺陷，非 wire 一致性失败 |
+| M0：官方 conformance 钉 2025-11-25（上游同口径复现） | `.references/conf-results-20251125/`（19 场景） | 同上追加 `--spec-version 2025-11-25` | **通过**：247 passed / 0 failed / 0 warnings，runner 退出码 0——与上游 CONFORMANCE_STATUS.md 记载的 247/0 基线**逐项精确一致** | 这是与自报数字的严格同口径对照；最新 wire 的 463/0 为超集佐证 |
+| M0：许可证核实（ADR 010 前提 3） | `.references/cxxmcp/LICENSE`、vendored tl/json LICENSE、cpp-httplib LICENSE 实读 | 逐文件人工（AI）实读比对 | **通过**：cxxmcp MIT、cpp-httplib MIT、nlohmann/json MIT、tl::expected CC0，均兼容 | M1 vendoring 时须将 LICENSE 全文 + SHA 归档进 third_party/（义务未完成，仅核实完成） |
+| M1：现有全门禁重跑（四 preset CTest、pty、CLI、tidy、ASan、strict-project） | 既有测试资产 | 未执行 | 未执行 | M1 验收项 |
 | M2：各能力验收 | 届时设计 | 未执行 | 未执行 | — |
+
+**M0 判定：通过**。§5.1 四项否决门（四 preset 编译、mock/deepwiki 重放、conformance 独立复跑对照、并发桥接 ASan/TSan）全部达标；conformance 与自报基线在同口径（2025-11-25）下精确复现 247/0，最新 wire 超集 0 FAILURE。唯一未竟事项（6 个 draft-auth 场景挂起）已根因定位为上游 `Client::~Client()` 异常安全缺陷（见 §9），其触发条件（draft stateless wire + auth ON）在 M1 授权范围之外（Q2 auth OFF、Q3 钉 2025-06-18），不构成否决；作为已知限制记录并建议向上游报告。是否放行 M1 vendoring 由维护者确认。
 
 ## 9. 实现偏差与已知限制
 
@@ -109,13 +118,15 @@ cxxmcp transport 内部有接收线程（HTTP SSE/stdio 读）；本项目工具
 
 已知限制：
 
-- 上游 conformance 数字系自述；spike 复跑不达标即否决（ADR 010 已写明）。
+- **上游析构挂起缺陷（M0 发现，gdb 实证）**：draft 2026-07-28 stateless wire 下，auth 拒绝类场景（`auth/resource-mismatch`、`auth/iss-supported-missing`、`auth/iss-wrong-issuer`、`auth/iss-unexpected`、`auth/iss-normalized`、`auth/metadata-issuer-mismatch` 共 6 个）中客户端进程无法退出。根因链：`Client::request_async`（sdk/client/src/client.cpp:1822）对 `in_flight_requests_` 的递减写在 worker lambda 内、**非 RAII 保护**；conformance harness 的 auth 回调在 transport 内部调用 `[[noreturn]] fail()` 抛异常，越过递减点；`RequestHandle::spawn` 的 catch 把异常折叠为错误结果，但计数残留为 1；异常展开触发 `Client::~Client()`（client.cpp:2164）无限等待 `in_flight_requests_==0`。同场景在 2025-11-25 wire 下走同步 `initialize()` 主线程路径，<1s 干净退出且拒绝行为正确（server 侧 check `resource-mismatch-rejected: SUCCESS` 已捕获）；6 场景单独重跑均复现挂起（exit 124），非负载偶发。gdb 全线程回溯存证（`.references/conf-diag2/client-destructor-hang-gdb-bt.txt`）。**对 M1 无影响**：触发需 auth ON + draft stateless wire，两者均不在 M1 授权内（Q2/Q3）；M2 上移版本基线前须确认上游修复或本地规避（如 RAII 计数守卫），建议向上游报告。
+- conformance 复跑口径漂移：本地 runner v0.2.0-alpha.12 场景数（48）多于上游 2026-09-15 自报快照，`--suite all` 总数不可直接对照 501/501；已用 `--spec-version 2025-11-25` 同口径精确复现 247/0 作为对照锚（§8）。runner 需 Node ≥22（本仓库环境为本地 `.references/node22/`）。
+- runner 超时 kill 走 `shell:true` 的包装 shell，超时后 client 进程可能残留（孤儿），长跑套件需人工核对进程清理。
 - 双 HTTP/TLS 栈为接受的长期代价，统一栈不在本设计射程。
 
 ## 最终核对
 
 - [x] 接口、配置、路径与当前代码一致（自写侧）；cxxmcp 侧标注为外部核对事实。
-- [x] 已实现与规划内容清楚区分（全文为规划，spike 未执行）。
+- [x] 已实现与规划内容清楚区分（正文仍为规划；M0 spike 已在 `.references/` 内执行并落证据，仓库代码零改动）。
 - [x] 外部来源、版本和实际采用内容可追溯（SHA + 核对层级如实标注）。
 - [x] 验证结果有证据，未执行事项如实标明。
 - [ ] 索引与架构总览按需更新（索引已登记；architecture.md 待接受后随实现更新）。

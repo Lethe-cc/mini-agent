@@ -30,7 +30,7 @@
 
 1. ~~维护者显式批准本 ADR（依赖引入授权）。~~ **已满足**：维护者 2026-11-21 批复 Q1"批准"。
 2. ~~ADR 002 修订获批~~ **已满足**：同批批复覆盖 ADR 002 修订（MCP 子系统豁免"零新增依赖"取向，登记 cxxmcp（vendored，固定 tag/SHA + LICENSE 归档）+ cpp-httplib（vendored header-only）+ OpenSSL（系统库，新增运行期依赖点；LLM 传输仍走 libcurl，双栈共存为已知代价）），修订记录见 [ADR 002](002-http-json-dependency.md)。
-3. 引入前逐仓库二次核实许可证与 vendored 组件署名义务（tl::expected、nlohmann/json、cpp-httplib 各自 LICENSE），沿用 ADR 002 的 vendoring 纪律。**未完成**，M0 spike 期间在 `.references/` 内核验，M1 vendoring 前完成归档。
+3. 引入前逐仓库二次核实许可证与 vendored 组件署名义务（tl::expected、nlohmann/json、cpp-httplib 各自 LICENSE），沿用 ADR 002 的 vendoring 纪律。**核实已完成**（M0 spike，2026-11-21，`.references/` 内逐文件实读：cxxmcp MIT、cpp-httplib MIT、nlohmann/json MIT、tl::expected CC0，见 [021 §8](../design/021-mcp-full-client.md)）；**归档未完成**——M1 vendoring 时须将各 LICENSE 全文 + 固定 SHA 落入 `third_party/`，归档完成前不得引入代码。
 
 **边界（2026-11-21 批复随附）**：M0 spike 是否放行迁移由 spike 结果决定——四 preset 编译、mock/deepwiki 重放、conformance 独立复跑、并发桥接任一不达标即回到方案 A；OAuth/auth 目标保持 OFF（Q2"延续，但是未来可能会拓展"——延续 2026-11-02 裁剪，未来启用须另行人审设计，不在本次授权内）。
 
