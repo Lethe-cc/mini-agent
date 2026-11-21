@@ -164,7 +164,7 @@ PlantUML 描述见 [020：状态流转](design/020-state-machines.md)；下述�
 
 | 能力 | v1 状态 | 预留 |
 | --- | --- | --- |
-| 工具调用 (function calling) | **v2 已实现**（2026-11-04，待人工评审） | [008](design/008-mcp-tools.md)：run_turn 多轮循环 + ToolRegistry + 内置 run_bash（默认逐次人审，ADR 006 提议）+ MCP 客户端（传输抽象 + stdio/Streamable HTTP，ADR 005 提议） |
+| 工具调用 (function calling) | **v2 已实现**（2026-11-04，待人工评审） | [008](design/008-mcp-tools.md)：run_turn 多轮循环 + ToolRegistry + 内置 run_bash（默认逐次人审，ADR 006 已接受）+ MCP 客户端（传输抽象 + stdio/Streamable HTTP，ADR 005 提议） |
 | 编码能力（文件编辑/工作区/diff 审批/git 本地提交/system prompt） | **v3 已实现**（2026-11-05，待人工评审） | [009](design/009-coding-v3.md)：FileRuntime 五工具 + 软性 workspace 边界（ADR 007）+ 自写 unified diff 审批块 + GitRuntime（无 push，ADR 008 已接受）+ 默认 system prompt + CLI `--cwd`/`--tools allowlist` |
 | 上下文压缩 | **手动 /compact 已实现**（2026-11-14，[015](design/015-context-compact.md)，待人工评审）；自动压缩仍不做 | 有界转录摘要替换历史（保留 System）；溢出错误窄模式提示；自动阈值触发留作后续 |
 | 多 Agent / 编排 | 不实现 | `run_turn(Chat&, Provider&)` 参数注入、无全局单例 |
