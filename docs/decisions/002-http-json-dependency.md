@@ -1,8 +1,8 @@
 # 002：LLM 传输依赖 libcurl，JSON 使用 nlohmann/json
 
-- 状态：已接受（2026-11-01，见决策人栏）。
-- 日期与关联任务：2026-10-31；[007：mini-agent 第一版技术方案](../design/007-agent-v1.md)。
-- 决策人或审批依据：维护者 2026-11-01 指示"开始第一步的开发"，据其批准按本 ADR 建议方案实施；未单独逐条批复。
+- 状态：已接受（2026-11-01，见决策人栏）；**2026-11-21 修订**（MCP 子系统依赖豁免，随 [ADR 010](010-mcp-full-client-cxxmcp.md) 同批获批）。
+- 日期与关联任务：2026-10-31；[007：mini-agent 第一版技术方案](../design/007-agent-v1.md)。修订：2026-11-21；[021：MCP 全能力客户端迁移设计](../design/021-mcp-full-client.md)。
+- 决策人或审批依据：维护者 2026-11-01 指示"开始第一步的开发"，据其批准按本 ADR 建议方案实施；未单独逐条批复。2026-11-21 修订依据：维护者对 021 Q1 批复"批准"（含本 ADR 的 MCP 豁免修订，真实记录）。
 
 ## 背景
 
@@ -19,6 +19,16 @@ Agent 内核必须通过 HTTPS 调用 LLM API 并解析 JSON（请求体、响�
 建议方案 A：CMake `find_package(CURL)` 硬依赖系统 libcurl；nlohmann/json 以 vendoring 单头文件方式置于 `third_party/nlohmann/`，落地时**必须**先核实其 LICENSE 文本并记录来源 release tag 与 commit SHA，未核实前不得引入。若维护者倾向零第三方源码，降级讨论方案 C。
 
 注：本 ADR 登记的是依赖策略；OpenAI 兼容接口的协议细节属于"必须核对"事实，见 [references/agent-protocols.md](../references/agent-protocols.md)，实现前对照选定服务方当天文档。
+
+## 2026-11-21 修订：MCP 子系统依赖豁免（随 ADR 010 获批）
+
+本 ADR 的"不无故新增依赖"取向对 **MCP 子系统**显式豁免，登记以下新增依赖点（决策依据与备选对比见 [ADR 010](010-mcp-full-client-cxxmcp.md)，形态与门禁见 [021 §5](../design/021-mcp-full-client.md)）：
+
+- **cxxmcp**（caomengxuan666/cxxmcp，MIT）：vendored 源码子集（client-only）置于 `third_party/cxxmcp/`，固定 tag/SHA + LICENSE 归档；含其 vendored header-only tl::expected 与 nlohmann/json。
+- **cpp-httplib**（MIT）：vendored 单头，供 cxxmcp HTTP 传输路径。
+- **OpenSSL**（系统库）：cxxmcp TLS 后端，新增运行期系统依赖点。
+
+边界与既有纪律不变：LLM 传输仍走 libcurl（双 HTTP/TLS 栈共存为已接受代价，统一是后续独立议题）；vendoring 纪律（引入前逐仓库实读 LICENSE、记录来源 SHA、升级走独立评审）沿用本 ADR 与 ADR 004 先例；豁免不推广到其他子系统——MCP 之外新增依赖仍须独立 ADR。前置门禁：021 M0 spike 通过且许可证核验完成前，不得向 `third_party/` 引入上述代码。
 
 ## 后果
 

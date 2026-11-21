@@ -1,8 +1,8 @@
 # 005：自写 MCP 客户端，传输抽象与 stdio / Streamable HTTP 双实现
 
-- 状态：**拟被 [ADR 010](010-mcp-full-client-cxxmcp.md) 取代**（2026-11-21 维护者方向输入"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"推翻本 ADR 的 tools-only 裁剪与版本钉死前提；ADR 010 仍为提议，未获批前本 ADR 描述的实现即现行代码事实）。原状态：提议（2026-11-02，待维护者评审；同日按维护者"同时支持 HTTP server + 传输抽象"要求修订，原稿仅 stdio。维护者同日已批复其中一点：**企业 OAuth 不做**，HTTP 认证维持静态 Bearer——该裁剪的存续见 [021 Q2](../design/021-mcp-full-client.md)）。
+- 状态：**已被 [ADR 010](010-mcp-full-client-cxxmcp.md) 取代**（2026-11-21 维护者批复 021 Q1"批准"；方向输入"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"推翻本 ADR 的 tools-only 裁剪与版本钉死前提。**取代的是决策方向，不是代码事实**：021 M3 移除 legacy 前，本 ADR 描述的自写三层仍是现行实现，git 历史保留作回退底座）。原状态：提议（2026-11-02，待维护者评审；同日按维护者"同时支持 HTTP server + 传输抽象"要求修订，原稿仅 stdio。维护者同日已批复其中一点：**企业 OAuth 不做**，HTTP 认证维持静态 Bearer——该裁剪经 2026-11-21 021 Q2 批复"延续，但是未来可能会拓展"延续至 cxxmcp 时代，auth 目标保持 OFF）。
 - 日期与关联任务：2026-11-02；[008：mini-agent v2 技术方案](../design/008-mcp-tools.md)。
-- 决策人或审批依据：AI 起草，整体未获人工批复；唯一已获批复点为维护者 2026-11-02 对话确认"目前不做企业 OAuth"。接受前其余内容不得视为既定方向。
+- 决策人或审批依据：AI 起草，整体未获人工批复即被取代；已获批复点为维护者 2026-11-02"目前不做企业 OAuth"与 2026-11-21 的延续确认。
 
 ## 背景
 
@@ -32,4 +32,4 @@ v2 需要让模型发现并调用外部工具，且维护者明确要求**同时
 - 后续验证：stdio/HTTP 两个 mock server E2E、会话头与 404 重初始化路径、超时/连接失败折叠为 is_error（008 第 8 节计划，均未执行）。
 
 ## 关联
-[008](../design/008-mcp-tools.md) 第 4、5 节；[ADR 002](002-http-json-dependency.md)（curl/json 底座）、[ADR 003](003-tui-approach.md)（自写最小层取向）、[ADR 006](006-tool-approval-policy.md)；[references/agent-protocols.md](../references/agent-protocols.md)。取代提议：[ADR 010](010-mcp-full-client-cxxmcp.md) + [design 021](../design/021-mcp-full-client.md)（均待评审）。
+[008](../design/008-mcp-tools.md) 第 4、5 节；[ADR 002](002-http-json-dependency.md)（curl/json 底座）、[ADR 003](003-tui-approach.md)（自写最小层取向）、[ADR 006](006-tool-approval-policy.md)；[references/agent-protocols.md](../references/agent-protocols.md)。取代记录：[ADR 010](010-mcp-full-client-cxxmcp.md)（已接受，2026-11-21）+ [design 021](../design/021-mcp-full-client.md)（方向已批，M0 spike 为迁移否决门）。

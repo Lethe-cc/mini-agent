@@ -1,8 +1,8 @@
-# 010：MCP 全能力客户端路线——引入 cxxmcp（提议，取代 ADR 005）
+# 010：MCP 全能力客户端路线——引入 cxxmcp（已接受，取代 ADR 005）
 
-- 状态：提议（2026-11-21，待维护者评审）。
+- 状态：已接受（2026-11-21，维护者批复 021 Q1"批准"，含本 ADR 与 ADR 002 修订）。
 - 日期与关联任务：2026-11-21；[021：MCP 全能力客户端迁移设计](../design/021-mcp-full-client.md)。
-- 决策人或审批依据：方向输入为维护者 2026-11-21 对话"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"（真实记录）。**依赖引入本身未获批复**——本 ADR 与 [ADR 002](002-http-json-dependency.md) 的冲突解除前不得引入任何第三方代码；AI 起草，无审批记录。
+- 决策人或审批依据：方向输入为维护者 2026-11-21 对话"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"；依赖引入授权为维护者同日对 [021 Q1](../design/021-mcp-full-client.md) 的批复"批准"（真实记录，同批 Q2"延续，但是未来可能会拓展"、Q3/Q4 按建议默认）。生效前提 1、2 已满足；前提 3（引入前逐仓库许可证二次核实）仍为 M1 vendoring 前置义务，未完成前不得向 `third_party/` 引入代码。
 
 ## 背景
 
@@ -28,9 +28,11 @@
 
 **生效前提（缺一不可）**：
 
-1. 维护者显式批准本 ADR（依赖引入授权）。
-2. ADR 002 修订获批：MCP 子系统豁免"零新增依赖"取向，登记 cxxmcp（vendored，固定 tag/SHA + LICENSE 归档）+ cpp-httplib（vendored header-only）+ OpenSSL（系统库，新增运行期依赖点；LLM 传输仍走 libcurl，双栈共存为已知代价）。
-3. 引入前逐仓库二次核实许可证与 vendored 组件署名义务（tl::expected、nlohmann/json、cpp-httplib 各自 LICENSE），沿用 ADR 002 的 vendoring 纪律。
+1. ~~维护者显式批准本 ADR（依赖引入授权）。~~ **已满足**：维护者 2026-11-21 批复 Q1"批准"。
+2. ~~ADR 002 修订获批~~ **已满足**：同批批复覆盖 ADR 002 修订（MCP 子系统豁免"零新增依赖"取向，登记 cxxmcp（vendored，固定 tag/SHA + LICENSE 归档）+ cpp-httplib（vendored header-only）+ OpenSSL（系统库，新增运行期依赖点；LLM 传输仍走 libcurl，双栈共存为已知代价）），修订记录见 [ADR 002](002-http-json-dependency.md)。
+3. 引入前逐仓库二次核实许可证与 vendored 组件署名义务（tl::expected、nlohmann/json、cpp-httplib 各自 LICENSE），沿用 ADR 002 的 vendoring 纪律。**未完成**，M0 spike 期间在 `.references/` 内核验，M1 vendoring 前完成归档。
+
+**边界（2026-11-21 批复随附）**：M0 spike 是否放行迁移由 spike 结果决定——四 preset 编译、mock/deepwiki 重放、conformance 独立复跑、并发桥接任一不达标即回到方案 A；OAuth/auth 目标保持 OFF（Q2"延续，但是未来可能会拓展"——延续 2026-11-02 裁剪，未来启用须另行人审设计，不在本次授权内）。
 
 ## 后果
 
@@ -41,4 +43,4 @@
 
 ## 关联
 
-[021 设计](../design/021-mcp-full-client.md)；取代 [ADR 005](005-mcp-transport-abstraction.md)（其 tools-only/版本钉死前提已被方向输入推翻；OAuth 裁剪批复的存续见 021 Q2）；修订 [ADR 002](002-http-json-dependency.md)（待批）；[ADR 003](003-tui-approach.md)（自写最小层取向的既有豁免先例：md4c，ADR 004）；[ADR 006](006-tool-approval-policy.md)（不受影响，审批在工具层）；[references/agent-protocols.md](../references/agent-protocols.md)。
+[021 设计](../design/021-mcp-full-client.md)；取代 [ADR 005](005-mcp-transport-abstraction.md)（其 tools-only/版本钉死前提已被方向输入推翻；OAuth 裁剪批复延续，见 021 Q2 批复记录）；修订 [ADR 002](002-http-json-dependency.md)（2026-11-21 修订已批）；[ADR 003](003-tui-approach.md)（自写最小层取向的既有豁免先例：md4c，ADR 004）；[ADR 006](006-tool-approval-policy.md)（不受影响，审批在工具层）；[references/agent-protocols.md](../references/agent-protocols.md)。

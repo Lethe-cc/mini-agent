@@ -2,10 +2,10 @@
 
 ## 文档状态
 
-- 状态：**草案 / 待人工评审**（2026-11-21）。纯提案，**未实现、未引入任何第三方代码、未执行 spike**；不改变任何现有行为。
-- 关联任务：维护者 2026-11-21 方向输入"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"；[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（提议，取代 ADR 005）。
-- 核对日期、适用版本或代码修订：2026-11-21。本仓库基线 main `b718a9a`；cxxmcp master `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（元数据 + README/LICENSE/DEPENDENCY_POLICY/CMake + client 头文件层核对，源码未精读）。
-- 人工评审记录：无。依赖引入未获批复；生效前提见 ADR 010。
+- 状态：**已接受（方向与开放问题已批）/ 实施进行中（M0 spike）**（2026-11-21）。**未实现、未向 third_party/ 引入任何第三方代码**；不改变任何现有行为。
+- 关联任务：维护者 2026-11-21 方向输入"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"；[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（已接受，取代 ADR 005）。
+- 核对日期、适用版本或代码修订：2026-11-21。本仓库基线 main `0730e4d`；cxxmcp master `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（元数据 + README/LICENSE/DEPENDENCY_POLICY/CMake + client 头文件层核对，源码未精读）。
+- 人工评审记录：维护者 2026-11-21 批复——Q1"批准"（ADR 010 + ADR 002 修订，依赖引入授权）；Q2"延续，但是未来可能会拓展"（OAuth 裁剪延续，auth 保持 OFF；未来启用须另行人审设计）；Q3"ok"（M1 期钉 2025-06-18，M2 再上移）；Q4"ok"（client 子集裁剪 vendoring，M0 确认依赖闭包后定裁剪清单）。整体设计文档的逐节人工评审仍未做；M0 spike 结果是迁移的否决门。
 
 ## 1. 背景与目标
 
@@ -92,7 +92,7 @@ cxxmcp transport 内部有接收线程（HTTP SSE/stdio 读）；本项目工具
 
 | 验收项 | 测试位置或证据 | 实际执行命令 | 结果 | 限制 |
 | --- | --- | --- | --- | --- |
-| M0：四 preset 编译 cxxmcp client-only | 待建 | 未执行 | 未执行 | spike 未启动（依赖未获批） |
+| M0：四 preset 编译 cxxmcp client-only | 待建（.references/ 内） | 未执行 | 未执行 | Q1 已批（2026-11-21），spike 启动 |
 | M0：官方 conformance client suite 独立复跑 | 待建（.references/ 内） | 未执行 | 未执行 | 自报 501/501 未验证 |
 | M0：mock + deepwiki 重放 | tests/mcp mock、tools/mcp_probe.py | 未执行 | 未执行 | — |
 | M1：现有全门禁重跑（四 preset CTest、pty、CLI、tidy、ASan、strict-project） | 既有测试资产 | 未执行 | 未执行 | — |
@@ -100,12 +100,15 @@ cxxmcp transport 内部有接收线程（HTTP SSE/stdio 读）；本项目工具
 
 ## 9. 实现偏差与已知限制
 
-未实现，无偏差。已知限制/开放问题：
+未实现，无偏差。开放问题批复记录（维护者 2026-11-21）：
 
-- **Q1（依赖批准）**：ADR 010 + ADR 002 修订是否批准？未批则本设计整体不生效。
-- **Q2（OAuth 裁剪存续）**：2026-11-02"企业 OAuth 不做"批复是否延续到 cxxmcp 时代（auth 目标保持 OFF）？建议延续，待确认。
-- **Q3（协议基线）**：M1 行为保持期是否仍钉 2025-06-18（cxxmcp 支持协商范围覆盖之），M2 再上移？建议如此，避免迁移期双重变量。
-- **Q4（裁剪入库形态）**：cxxmcp 源码子集裁剪 vendoring vs 全树 vendoring + CMake 目标关闭——前者审计面小但升级 diff 复杂，后者反之。建议子集裁剪，M0 确认依赖闭包后定。
+- **Q1（依赖批准）——已批**："批准"。ADR 010 已接受、ADR 002 修订已批（MCP 子系统豁免登记 cxxmcp/cpp-httplib/OpenSSL）。引入仍受两道门约束：M0 spike 通过 + 引入前逐仓库许可证核实（ADR 010 前提 3）。
+- **Q2（OAuth 裁剪存续）——延续，保留拓展空间**："延续，但是未来可能会拓展"。auth 目标保持 OFF；未来启用 OAuth/DPoP 须另行人审设计（新 ADR 或本设计增补），不在本次授权内。
+- **Q3（协议基线）——按建议**："ok"。M1 行为保持期钉 2025-06-18（回退 2025-03-26 语义按 cxxmcp 协商实测确认），M2 再上移基线。
+- **Q4（裁剪入库形态）——按建议**："ok"。client 子集裁剪 vendoring；具体裁剪清单在 M0 确认依赖闭包后于 third_party/cxxmcp/README 记录。
+
+已知限制：
+
 - 上游 conformance 数字系自述；spike 复跑不达标即否决（ADR 010 已写明）。
 - 双 HTTP/TLS 栈为接受的长期代价，统一栈不在本设计射程。
 
