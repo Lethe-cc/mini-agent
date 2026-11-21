@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 状态：**草案 / 待人工评审**（2026-11-16）。纯提案，**未实现、未提交**；不改变任何现有行为。
+- 状态：**已实现 / 待人工评审**（2026-11-16 起草；2026-11-21 P4 收官，P1–P4 全部落地——P1 `04b36f1`、P2 `a879bcd`、P4 `c1a57f3`，实施记录见 §5/§8）。行为保持拆分；TuiState 完整状态对象未建，以 TurnState 首片 + Ctx 引用替代（§8）。
 - 动因：维护者 2026-11-16 提出"每个代码文件都很长，考虑拆成较小/较抽象的模块"。本文给出可行的、行为保持的分阶段拆分方案。
 - 核对基线：main `b419ba8`（018 合入后）。行数实测见 §1。
 - 约束：不新增第三方依赖；保持依赖方向 `mini-agent → agent_core → {curl,json,md4c,spdlog}`（core 不含 CLI/TUI，TUI 不含 HTTP）；保持 `run_turn(Chat&,Provider&)` 纯函数式入口；每阶段以现有测试（unit + pty 双环境 + 四 preset）为门禁。
@@ -73,7 +73,7 @@ CLI：
 
 - **P1 纯函数抽取** —— **已完成**（提交 `04b36f1`）：`md_geometry`、`subprocess`、`workspace`、`provider_parse`。零状态、行为保持；四 preset CTest 3/3 + pty TUI 195 PASS + CLI ALL PASS + check.py。
 - **P2 类/子命令抽取** —— **已完成**（CLI `a879bcd`；tools 拆分见后续提交）：CLI → `cli_common`/`cli_commands`/`cli_main`（1115→86）+ `session_serde`；tools → `tools_file`（FileRuntime）/`tools_git`（GitRuntime），tools.cpp 保留 registry+bash（1095→222）。**config_file/env 拆分暂缓**（config.cpp 777 行、env/file 合并高度耦合，价值低）。
-- **P3 TUI 状态对象 + screen 抽取** —— **screen 层已完成**：`tui_screen.hpp` 承载 RawMode/term size/tint/LiveScreen/split_ansi_paragraphs/steady_now（tui.cpp 3626→3195 行）；四 preset + pty 双环境（常规）验证。**TuiState 状态对象待建**，是 P4 的前提。
+- **P3 TUI 状态对象 + screen 抽取** —— **screen 层已完成**：`tui_screen.hpp` 承载 RawMode/term size/tint/LiveScreen/split_ansi_paragraphs/steady_now（tui.cpp 3626→3195 行）；四 preset + pty 双环境（常规）验证。TuiState 完整状态对象未单独建：P4 以 `TurnState` 首片（tui_turn）+ 键位分发 `Ctx` 引用聚合替代达成同等解耦（见 §8），完整状态对象化留作后续可选重构。
 - **P4 TUI 逻辑拆分** —— **已完成**（键位分发提交 `c1a57f3`）：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`；**TurnState 首片**（回合/审批共享状态 + `run_turn_worker`）→ `tui_turn`；**slash 群** → `tui_slash.hpp`（`handle_slash_impl` 模板 over 引用上下文；作用域感知扫描重命名，只改代码段、保护字符串/注释；内部遮蔽局部 `history`→`hchat`；tui.cpp →1917）。**input 助手**（hist_up/down、mark_edited、insert_sidebar_selection）→ `tui_input.hpp`；**idle 帧渲染** → `tui_frame.hpp`（`render_frame_impl`，纯渲染无控制流；tui.cpp →1694）。**主循环键位分发** → `tui_keys.hpp`（`dispatch_input_impl(Ctx&, buf, n)` 返回 `LoopCtl`；406 行字节循环整段迁出，控制流按 §8 人工翻译；tui.cpp **1694→1268**）。
 
 每阶段一个提交；任何阶段测试不绿即回退该阶段。
