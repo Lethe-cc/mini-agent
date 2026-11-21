@@ -65,8 +65,8 @@ pty 支持 `--grep <标签>` 只门禁匹配断言；等待已自适应（勿改
 
 ## 6. 当前状态与剩余工作
 
-- 019 拆分：P1–P3 完成；P4 完成 preview/sidebar/workers/turn/slash/input/frame；**tui.cpp 3626→1694**。
-  剩余：主循环键位分发（LoopCtl 方案，见 019 §8）。
+- 019 拆分：**P1–P4 全部完成**（键位分发 `c1a57f3` → `tui_keys.hpp`，LoopCtl 方案，见 019 §8）；
+  **tui.cpp 3626→1268**。run_loop 仅剩 poll/抽干/join/完成回调调度 + done 清理。
 - 状态机集中描述：[020-state-machines.md](design/020-state-machines.md)（连接/回合/审批/worker/pane/session）。
 - 学习资源单一来源：[ai-agent-learning.md](ai-agent-learning.md)。
 

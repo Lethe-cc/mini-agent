@@ -74,7 +74,7 @@ CLI：
 - **P1 纯函数抽取** —— **已完成**（提交 `04b36f1`）：`md_geometry`、`subprocess`、`workspace`、`provider_parse`。零状态、行为保持；四 preset CTest 3/3 + pty TUI 195 PASS + CLI ALL PASS + check.py。
 - **P2 类/子命令抽取** —— **已完成**（CLI `a879bcd`；tools 拆分见后续提交）：CLI → `cli_common`/`cli_commands`/`cli_main`（1115→86）+ `session_serde`；tools → `tools_file`（FileRuntime）/`tools_git`（GitRuntime），tools.cpp 保留 registry+bash（1095→222）。**config_file/env 拆分暂缓**（config.cpp 777 行、env/file 合并高度耦合，价值低）。
 - **P3 TUI 状态对象 + screen 抽取** —— **screen 层已完成**：`tui_screen.hpp` 承载 RawMode/term size/tint/LiveScreen/split_ansi_paragraphs/steady_now（tui.cpp 3626→3195 行）；四 preset + pty 双环境（常规）验证。**TuiState 状态对象待建**，是 P4 的前提。
-- **P4 TUI 逻辑拆分** —— **进行中**：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`；**TurnState 首片**（回合/审批共享状态 + `run_turn_worker`）→ `tui_turn`；**slash 群** → `tui_slash.hpp`（`handle_slash_impl` 模板 over 引用上下文；作用域感知扫描重命名，只改代码段、保护字符串/注释；内部遮蔽局部 `history`→`hchat`；tui.cpp →1917）。**input 助手**（hist_up/down、mark_edited、insert_sidebar_selection）→ `tui_input.hpp`；**idle 帧渲染** → `tui_frame.hpp`（`render_frame_impl`，纯渲染无控制流；tui.cpp →1694）。**主循环键位分发仍待实施**（LoopCtl，内层/外层 continue+goto done 须人工翻译）。
+- **P4 TUI 逻辑拆分** —— **已完成**（键位分发提交 `c1a57f3`）：预览 → `tui_preview`；侧栏扫描 → `tui_sidebar`；models/probe/compact worker → `tui_workers`；**TurnState 首片**（回合/审批共享状态 + `run_turn_worker`）→ `tui_turn`；**slash 群** → `tui_slash.hpp`（`handle_slash_impl` 模板 over 引用上下文；作用域感知扫描重命名，只改代码段、保护字符串/注释；内部遮蔽局部 `history`→`hchat`；tui.cpp →1917）。**input 助手**（hist_up/down、mark_edited、insert_sidebar_selection）→ `tui_input.hpp`；**idle 帧渲染** → `tui_frame.hpp`（`render_frame_impl`，纯渲染无控制流；tui.cpp →1694）。**主循环键位分发** → `tui_keys.hpp`（`dispatch_input_impl(Ctx&, buf, n)` 返回 `LoopCtl`；406 行字节循环整段迁出，控制流按 §8 人工翻译；tui.cpp **1694→1268**）。
 
 每阶段一个提交；任何阶段测试不绿即回退该阶段。
 
@@ -93,7 +93,7 @@ CLI：
 
 - 不引入新依赖、不改公共 API/退出码/日志红线；不重写 LiveScreen 帧模型；不做"真滚动窗口"等未实现能力；不合并/重命名现有公共头。
 
-## 8. P4 剩余：TuiState 设计（决策完备；首片 turn/审批已实施）
+## 8. P4 TuiState 设计与实施记录（已全部落地）
 
 **首片已落地**（`tui_turn.hpp/.cpp`）：`TurnState` 拥有 bridge/审批原子量/session_allowed_tools(+mutex)/
 config_snapshot/tool_registry/max_tool_rounds/approval_policy/result/reasoning_live；run_loop 以引用别名
@@ -135,3 +135,18 @@ pty 195/0。input/帧渲染沿用同一扫描器。
 正则/扫描器无法区分，**不得自动抽取**。LoopCtl 方案须人工/AST 逐条翻译：内层 continue 保留、
 外层 continue→`return Next`、goto done→`return Exit`，并保留 done 清理路径。此为最后一步，
 建议专注会话手工执行+pty 门禁。
+
+**键位分发落地（2026-11-19，提交 `c1a57f3`）**：406 行 POLLIN 字节循环整段迁入
+`src/tui/tui_keys.hpp` 的 `dispatch_input_impl(Ctx& S, const char* buf, ssize_t n)`，
+返回 `enum class LoopCtl { Next, Exit, Render }`。签名带 buf/n 是因为 ESC 解析会改 `i` 并
+回读缓冲区，函数须拥有整个内层字节循环。实际翻译结果：内层 `continue` 原样保留；
+4 处 `goto done`（streaming/compact 双 Ctrl-C、空闲 2s 内双 Ctrl-C、Ctrl-D、`/exit`）→
+`return LoopCtl::Exit`，调用点收到 Exit 后执行 `goto done` 走原清理路径；**键位分发段内不存在
+外层 continue**（仅有的两处外层 continue 在 compact_done/turn_done 完成回调里，按设计留在
+run_loop），故 `Next` 当前保留未用（头文件注释已说明）。状态名 `S.` 前缀由一次性作用域感知
+工具 `tools/p4_migrate.py` 完成（跳过字符串/注释/成员访问/遮蔽局部量），控制流与去缩进人工执行；
+5 个本地 lambda（handle_slash/hist_up/hist_down/mark_edited/insert_sidebar_selection）保持
+裸名转发 `*_impl(S)`。SlashCtx 补 `tab_state` 引用成员；InputCtx 及 4 个包装 lambda 因此死代码化，
+一并删除。完成回调（models/compact/probe/sidebar/turn_done）与 `done:` 清理**有意不抽**，
+保留各自 goto/continue 于 run_loop。验证：四 preset CTest 3/3 零告警、pty TUI 195/0
+（常规 + 宽 USER=abcdefghijklmnopqrstuvwxyz）、CLI ALL PASS、check.py --strict-project PASS。
