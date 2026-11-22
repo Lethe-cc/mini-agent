@@ -199,11 +199,11 @@ TransportFactory default_transport_factory();
 
 // cxxmcp backend session (design 021 §5.1, ADR 010): defined in
 // src/mcp/mcp_cxxmcp.cpp, the only TU that includes the vendored SDK.
-// Selected via MINI_AGENT_MCP_BACKEND=cxxmcp (default legacy) when the
-// McpClient factory is EMPTY (production routing, used by
-// build_tool_registry). Any non-null factory -- including
-// default_transport_factory() -- forces the legacy path; test fakes
-// rely on this.
+// The DEFAULT when the McpClient factory is EMPTY (production routing,
+// used by build_tool_registry); MINI_AGENT_MCP_BACKEND=legacy opts back
+// to the self-written path (rollback hatch until M3 removes it). Any
+// non-null factory -- including default_transport_factory() -- forces
+// the legacy path; test fakes rely on this.
 std::unique_ptr<McpSession> make_cxxmcp_session(const McpServerConfig& config,
                                                 std::chrono::milliseconds handshake_timeout,
                                                 std::chrono::milliseconds call_timeout);

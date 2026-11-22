@@ -160,17 +160,19 @@ bool McpClient::ensure_started(std::string* error) {
     }
     if (!rpc_) {
         // Backend switch (design 021 §5.1). An empty factory means
-        // production routing: the env selects the session and each
-        // backend owns its transport internally. An injected factory
+        // production routing: cxxmcp is the default since the M1 gates
+        // went green (2026-11-22); MINI_AGENT_MCP_BACKEND=legacy is the
+        // rollback escape hatch until legacy removal in M3. Any other
+        // value falls back to the cxxmcp default. An injected factory
         // (test fakes) always takes the legacy path and the switch is
         // bypassed. The switch must run BEFORE any factory call -- the
         // default factory always yields a transport, so consulting it
         // first would make the cxxmcp branch unreachable (M1 phase B
         // erratum, fixed in phase C).
         const char* backend = std::getenv("MINI_AGENT_MCP_BACKEND");
-        const bool use_cxxmcp =
-            !factory_ && backend != nullptr && std::string_view(backend) == "cxxmcp";
-        if (use_cxxmcp) {
+        const bool use_legacy =
+            backend != nullptr && std::string_view(backend) == "legacy";
+        if (!factory_ && !use_legacy) {
             rpc_ = make_cxxmcp_session(config_, handshake_timeout_, call_timeout_);
         } else {
             auto transport = factory_ ? factory_(config_) : default_transport_factory()(config_);

@@ -503,9 +503,20 @@ void test_backend_switch_selection() {
         check(client.ensure_started(&error), "empty factory default backend starts");
         (void)client.list();
         client.restart();
-        check(tools_list_id() == 2,
-              "no env defaults to legacy (monotonic ids)");
+        check(tools_list_id() == 1,
+              "no env defaults to cxxmcp since the M1 flip (SDK ids)");
     }
+    ::setenv("MINI_AGENT_MCP_BACKEND", "legacy", 1);
+    {
+        McpClient client(config, {}, std::chrono::seconds(10), std::chrono::seconds(5));
+        std::string error;
+        check(client.ensure_started(&error), "env=legacy rollback starts");
+        (void)client.list();
+        client.restart();
+        check(tools_list_id() == 2,
+              "env=legacy escapes back to the self-written path (monotonic ids)");
+    }
+    ::unsetenv("MINI_AGENT_MCP_BACKEND");
 }
 
 } // namespace
