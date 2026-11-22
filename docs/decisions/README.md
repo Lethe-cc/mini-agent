@@ -14,6 +14,7 @@
 | [008：git 工具策略](008-git-tool-policy.md) | **已接受**（2026-11-05 维护者批复"commit 可自动，push 人工"） | 只读三件套 + add/commit 随审批档位（含 diff 预览与历史区可见性）；永不提供 push/remote 类工具；AGENTS.md 红线同步改"不自动推送" |
 | [009：provider 强制命名与配置 schema v2](009-named-providers-schema-v2.md) | **已接受**（2026-11-14 维护者批复"全部默认，开始实现"） | 废弃顶层 LLM 五字段，`providers`+`active_provider` 单一事实来源 + 运行时 `current` 单向派生；v1 一次性迁移；破坏性变更，推翻 012 §4 兼容性取舍；关联 [design 013](../design/013-named-providers.md) |
 | [010：MCP 全能力客户端路线（cxxmcp）](010-mcp-full-client-cxxmcp.md) | **已接受；生效前提全部关闭**（2026-11-21 批复 021 Q1；2026-11-22 前提 3 归档完成，M1 已实现、默认翻转 cxxmcp） | 引入 cxxmcp（MIT/C++17，vendored 固定 SHA）取代自写 MCP 三层，扩展至 resources/prompts/sampling/elicitation/tasks 并跟随协议演进；取代 005、修订 002（OpenSSL/cpp-httplib 豁免）；M1 全门禁验收见 [design 021](../design/021-mcp-full-client.md) §8（待人工评审，M2/M3 未启动） |
+| [011：MCP 服务端请求审批策略](011-mcp-server-request-approval.md) | **提议**（2026-11-22 立项送审；维护者对 022 Q2 批复"ok"授权立项，文本待逐条人审） | sampling/elicitation per-server 默认 OFF（OFF 不声明 capability）；独立 ServerRequestBridge 审批队列（不复用工具审批固定槽，防交叉死锁）；sampling 逐次审批含内容预览、无"本会话允许"档位；elicitation Form 填写即审批、Url 一律 Decline；非交互/超时一律明确拒绝；关联 [design 022](../design/022-mcp-capabilities-m2.md) §4 T4–T6/§5.2–5.3/§6，ADR 006 工具审批语义不动 |
 
 使用 [ADR 模板](../../templates/adr.md) 新增决策，按 `001-decision-name.md` 命名并在上表登记标题、状态和关联设计。
 

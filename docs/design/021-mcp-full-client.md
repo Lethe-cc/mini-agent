@@ -54,7 +54,7 @@
 
 - **M0 spike（引入前的否决门）**：`.references/` clone cxxmcp 固定 SHA；四 preset（GCC/Clang × Debug/Release）编译 client-only + HTTP + OpenSSL 组合；用其客户端重放现有 stdio/HTTP mock 场景与 deepwiki 实测；**独立复跑官方 conformance runner client suite**，与自报 501/501 对照；确认 §5.3 桥接可行。任一不达标 ⇒ 本设计废弃，回 ADR 010 方案 A，vendored 代码不进 third_party/。
 - **M1 底座替换（行为保持）**：third_party/cxxmcp/ vendoring（含 tl::expected/cpp-httplib，LICENSE/SHA 归档）；新 `McpClient` 门面内部改用 `McpClientSession`，对 tools 层保持现接口（工具发现/调用/错误折叠为 is_error/诊断尾）；`MINI_AGENT_MCP_BACKEND=legacy|cxxmcp` 双轨开关，默认 legacy 直至 M1 验收全绿后翻转；现有 mock E2E、mcp_probe、deepwiki、pty/CLI 门禁全部重跑。**已完成（2026-11-22）**：全门禁通过（§8 M1 行），默认已翻转为 cxxmcp（`90a30b7`）；`legacy` 为显式回滚值，注入非空 TransportFactory（测试 fake）仍强制走 legacy 路径。
-- **M2 能力扩展**：resources/prompts（发现 + 读取/获取，UI 注入形态届时细化设计）→ sampling/elicitation（服务端发起请求的审批与 UI，须过 ADR 006 同款人审设计）→ tasks（长任务状态机，参考 [020 状态机文档](020-state-machines.md) 增补）；版本基线随 cxxmcp 协商能力上移，测试 mock 同步升级。细化设计已产出：[022](022-mcp-capabilities-m2.md)（草案/待评审，2026-11-22）。
+- **M2 能力扩展**：resources/prompts（发现 + 读取/获取，UI 注入形态届时细化设计）→ sampling/elicitation（服务端发起请求的审批与 UI，须过 ADR 006 同款人审设计）→ tasks（长任务状态机，参考 [020 状态机文档](020-state-machines.md) 增补）；版本基线随 cxxmcp 协商能力上移，测试 mock 同步升级。细化设计已产出：[022](022-mcp-capabilities-m2.md)（2026-11-22 维护者批复 Q1–Q5，方向已获批、M2a 进入实现；M2b 对应 [ADR 011](../decisions/011-mcp-server-request-approval.md) 提议/待人审）。
 - **M3 收尾**：默认翻转后移除 legacy 路径与自写三层（git 历史保留）；文档/架构总览同步。
 
 ### 5.2 依赖与构建

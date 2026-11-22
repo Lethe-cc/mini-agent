@@ -2,10 +2,10 @@
 
 ## 文档状态
 
-- 状态：**草案 / 待人工评审**（2026-11-22）。本文是 [021](021-mcp-full-client.md) §5.1 M2 的细化设计；未获批前不进入实现。M2b（sampling/elicitation）含审批与 UI 行为变化，须过 ADR 006 同款人审，且预计需要一篇新 ADR（编号届时顺延，下文暂称"ADR-M2b"）。
-- 关联任务：[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（已接受）；021 §5.1"M2 能力扩展"；维护者 Q3 批复"M1 期钉 2025-06-18，M2 再上移"。
-- 核对日期、适用版本或代码修订：2026-11-22，基线 main `6a2bd79`（M1 已翻转默认后端）。SDK 事实按 vendored cxxmcp `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（VERSION 1.3.0）头文件/源码实读核对，行号见 §3；全库仍未精读。
-- 人工评审记录：无（本文档为草案，§4 取舍与 §5.4 待裁决问题需维护者批复）。
+- 状态：**方向已获批 / M2a 进入实现**（2026-11-22 维护者批复 Q1–Q5，见 §5.6）。本文是 [021](021-mcp-full-client.md) §5.1 M2 的细化设计。M2b（sampling/elicitation）含审批与 UI 行为变化，对应 [ADR 011](../decisions/011-mcp-server-request-approval.md)（**提议，待人工评审**）——其获批前 M2b 不进入实现；M2a（纯出站，零新审批面）随 Q1 批复放行。整体文档逐节人工评审仍未做。
+- 关联任务：[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（已接受）；[ADR 011](../decisions/011-mcp-server-request-approval.md)（提议）；021 §5.1"M2 能力扩展"；维护者 Q3 批复"M1 期钉 2025-06-18，M2 再上移"。
+- 核对日期、适用版本或代码修订：2026-11-22，基线 main `de4be80`（022 草案落档）。SDK 事实按 vendored cxxmcp `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（VERSION 1.3.0）头文件/源码实读核对，行号见 §3；全库仍未精读。
+- 人工评审记录：维护者 2026-11-22 对话批复——Q1"认可"（T1/T3 合成工具 + /prompt 注入形态）；Q2"ok"（T4–T6 审批语义，sampling 不设"本会话允许"档位；据此立项 ADR 011 送审，**其文本仍待人审**）；Q3"可以"（T9 加字段不 bump schema_version）；Q4"认可"（T8 版本目标 2025-11-25 + 上游析构缺陷复核前置）；Q5 反问"部分并行更好吗？"——答复并采用**受控部分并行**（§5.6 Q5、§7），M2a 在两种排期下均先行。逐节人工评审未做。
 
 ## 1. 背景与目标
 
@@ -59,9 +59,9 @@ SDK 事实（vendored 树实读，2026-11-22；路径前缀 `third_party/cxxmcp/
 | T1 | resources/prompts 暴露形态 | **合成工具**：每 server 注册 `mcp_resources`（list/read 子动作）与 `mcp_prompts`（list/get 子动作）两个虚拟工具，走既有 ToolRuntime/审批/注册表管线 | 自动注入 system prompt；新增独立 slash-only 面 | 零新审批面（复用 ADR 006 tool_approval）；模型按需拉取不炸上下文；slash 面（/mcp 详情）作为人类入口另行小改 | — |
 | T2 | 资源内容缓存 | M2a 不做内容缓存，只做元数据列表缓存 + list_changed 失效 | ttl_ms 驱动的内容缓存 | 首版从简；读取走 server 现值，语义最安全；缓存留观察后评估 | — |
 | T3 | prompts 呈现 | `/mcp prompts <server>` 列出；`/prompt <server>/<name> [k=v...]` 获取并把 messages 注入当前会话（user 角色文本块；非文本块降级为描述占位） | 仅作为模型工具 | prompts 的设计意图就是用户主动触发模板；工具面（T1）同时保留给模型 | — |
-| T4 | sampling/elicitation 开关 | **per-server 配置字段，默认 OFF**；OFF 时不声明对应 capabilities，server 依约不发起 | 全局开关；默认 ON+审批兜底 | 021 §6 已定"默认关"；per-server 粒度与 mcp_servers 配置形态一致；不声明能力是最干净的拒绝 | ADR-M2b（待写） |
-| T5 | 服务端请求审批 | 新增 **ServerRequestBridge 队列**（TurnBridge 旁挂），UI 在 poll 循环消费；sampling 逐次审批（含内容预览），elicitation Form 逐字段填写即审批 | 复用工具审批固定槽；无审批直接执行 | 固定槽会被工具审批占用产生交叉死锁；队列天然支持 turn 内多请求；elicitation 本身就是问用户，填写=同意 | ADR-M2b |
-| T6 | 非交互/超时语义 | 无 UI 消费方（CLI ask、TUI worker 未接管）或超时（沿用 120s）→ sampling 返回 error、elicitation 返回 Decline；不挂起 | 阻塞等待 | SDK handler 在 transport 线程同步执行（§3），挂起会冻结整个连接；CLI 无审批 UI，与 ADR 006 ask 模式 --tools off 的保守取向一致 | ADR-M2b |
+| T4 | sampling/elicitation 开关 | **per-server 配置字段，默认 OFF**；OFF 时不声明对应 capabilities，server 依约不发起 | 全局开关；默认 ON+审批兜底 | 021 §6 已定"默认关"；per-server 粒度与 mcp_servers 配置形态一致；不声明能力是最干净的拒绝 | [ADR 011](../decisions/011-mcp-server-request-approval.md)（提议） |
+| T5 | 服务端请求审批 | 新增 **ServerRequestBridge 队列**（TurnBridge 旁挂），UI 在 poll 循环消费；sampling 逐次审批（含内容预览），elicitation Form 逐字段填写即审批 | 复用工具审批固定槽；无审批直接执行 | 固定槽会被工具审批占用产生交叉死锁；队列天然支持 turn 内多请求；elicitation 本身就是问用户，填写=同意 | [ADR 011](../decisions/011-mcp-server-request-approval.md) |
+| T6 | 非交互/超时语义 | 无 UI 消费方（CLI ask、TUI worker 未接管）或超时（沿用 120s）→ sampling 返回 error、elicitation 返回 Decline；不挂起 | 阻塞等待 | SDK handler 在 transport 线程同步执行（§3），挂起会冻结整个连接；CLI 无审批 UI，与 ADR 006 ask 模式 --tools off 的保守取向一致 | [ADR 011](../decisions/011-mcp-server-request-approval.md) |
 | T7 | tasks 触发形态 | M2c 仅当 server 声明 `tasks.tools_call` 时，`call_tool` 超时策略升级为"可选 task 化"：合成工具 `mcp_tasks`（list/get/result/cancel）+ 工具调用侧 `task=true` 参数透传 | 自动把所有慢工具 task 化 | 显式可控；状态机/UI 增量最小；InputRequired 态对接 T5 队列 | — |
 | T8 | 版本上移 | 白名单扩为 `2025-11-25/2025-06-18/2025-03-26/2024-11-05`，首选 2025-11-25；**硬前置：上游析构缺陷修复确认**（§6） | 直升 2026-07-28；维持 2025-06-18 | 2026-07-28/DRAFT 面太新且 conformance 覆盖未复核；2025-11-25 是 SDK 默认且 M0 conformance 已覆盖；Q3 批复"M2 再上移" | — |
 | T9 | 配置 schema | **加字段不升 schema_version**（新字段全部可选、缺省=旧行为，v2 读端向后兼容） | bump 到 3 | 现有读端对未知字段宽容、写端 only-additive；无破坏性变化不必制造版本墙（若评审认为要显式版本墙则改 bump，见 Q3） | — |
@@ -108,7 +108,7 @@ bool has_resources() const; bool has_prompts() const;  // 握手 capabilities �
 **sampling 执行体**：handler 收到 `CreateMessageParams` → 经 §5.3 桥发布审批（预览=server 名 + messages 摘要 + max_tokens）→ 用户批准后，在 **worker/turn 侧**用 `Provider::complete_chat` 执行（system_prompt/messages 转 Chat；temperature/stop_sequences M2b 忽略并在审批预览注明；params.tools 非空 ⇒ 拒绝，因未声明该子能力）→ 结果回填 `CreateMessageResult{role:"assistant",content:text,model:实际模型名}`。拒绝/超时 ⇒ error response（T6）。**执行线程**：不得在 transport 线程调 LLM（长阻塞冻结连接）——桥协议为"transport 线程发布请求并等待带超时的应答"，LLM 调用发生在 UI 侧消费线程；等待上限 = 审批 120s + LLM 调用超时（沿用 provider 现值），超限回 error。
 **elicitation 执行体**：Form 模式 → 桥发布表单（message + schema 字段表）→ TUI 渲染逐字段输入（string/number/boolean/enum primitive），提交=Accept+content，Esc=Decline，超时=Decline（T6）；SDK 侧 form_schema_validation 不开启（校验交给 UI 输入约束 + server）。Url 模式 ⇒ Decline。`notifications/elicitation/complete` 忽略（未声明 url）。
 
-**审批语义与 ADR 006 的关系**：工具审批固定槽协议不动；ServerRequestBridge 是独立队列，UI 渲染为独立面板行（样式沿用工具审批行）。`ask` 非交互子命令：即使配置开了 sampling/elicitation，无 UI 消费方一律按 T6 拒绝（capabilities 照常声明——server 请求得到明确拒绝而非静默）。此语义整体进 ADR-M2b 人审。
+**审批语义与 ADR 006 的关系**：工具审批固定槽协议不动；ServerRequestBridge 是独立队列，UI 渲染为独立面板行（样式沿用工具审批行）。`ask` 非交互子命令：即使配置开了 sampling/elicitation，无 UI 消费方一律按 T6 拒绝（capabilities 照常声明——server 请求得到明确拒绝而非静默）。此语义整体已立项为 [ADR 011](../decisions/011-mcp-server-request-approval.md)（提议，待人审；维护者 Q2"ok"为送审依据，非对文本的批准）。
 
 ### 5.3 线程桥：ServerRequestBridge（M2b 核心，M2a 通知复用）
 
@@ -143,13 +143,19 @@ transport 接收线程                    UI poll 线程（TUI main / CLI 无）
 - **硬前置（021 §9）**：上游 `request_async` 的 `in_flight_requests_` 非 RAII 递减缺陷在本 vendored SHA 仍存在（client.cpp:1822 `++in_flight_requests_` 后裸 lambda 递减；~Client :2164 无超时等待）——auth 关闭时该路径不可达，M1 已验证；版本上移本身不触发 auth，但 2025-11-25 conformance 面更广，上移 PR 必须附带该缺陷的可达性复核（或上游修复 bump vendored SHA，或本地 RAII guard 补丁并登记偏差）。
 - vendoring 裁剪清单核对：M2 用到的 handler 分发/DTO 代码是否都在 client-only 闭包内——`handle_request` 的 sampling/elicitation 分支在 client.cpp（已入库），sampling.hpp/elicitation.hpp/task.hpp 已入库；实施 M2a 首 PR 时按 `third_party/cxxmcp/README.md` 清单逐项核对，缺文件则按 vendoring 纪律补录（固定同 SHA），**不得**顺手引入 auth/server 目标。
 
-### 5.6 待裁决问题（评审时批复）
+### 5.6 裁决记录（2026-11-22 维护者对话）
 
-- **Q1（T1/T3）**：resources/prompts 走合成工具 + `/prompt` 注入的形态是否认可？备选是自动上下文注入（不推荐，炸 token）。
-- **Q2（T4–T6）**：sampling/elicitation per-server 默认 OFF、独立审批队列、非交互一律拒绝——是否按此写 ADR-M2b 送审？sampling 逐次审批是否要加"本会话允许"档位（工具审批有 allow-session，服务端请求面建议首版不给，防 server 连续采样刷配额）？
-- **Q3（T9）**：配置只加字段不 bump schema_version，是否接受？
-- **Q4（T8）**：版本目标 2025-11-25（非 2026-07-28），且以上游析构缺陷复核为前置，是否认可？
-- **Q5**：M2a/M2b/M2c 严格串行（每期独立验收+人审）还是 M2a 先行、M2b/M2c 设计并行？建议严格串行。
+- **Q1（T1/T3）**："认可"——合成工具 + `/prompt` 注入形态定案。
+- **Q2（T4–T6）**："ok"——per-server 默认 OFF、独立审批队列、非交互一律拒绝定案；sampling **不设**"本会话允许"档位（防 server 连续采样刷配额）。据此立项 [ADR 011](../decisions/011-mcp-server-request-approval.md) 送审（提议；M2b 实现待其人工批复）。
+- **Q3（T9）**："可以"——加可选字段、不 bump schema_version 定案。
+- **Q4（T8）**："认可"——版本目标 2025-11-25、上游析构缺陷复核为硬前置定案。
+- **Q5**：维护者反问"部分并行更好吗？"——答复：**受控部分并行优于严格串行**，因为 M2b 的关键路径是 ADR 人审而非代码，M2c 与 M2b 代码面几乎不重叠；但版本上移必须串行设门。采用排期（开发并行，**验收与合并严格串行**，每期独立门禁全绿+人审）：
+  1. 波次 1（并行）：M2a 实现 ∥ ADR 011 人审 + M2b 设计细化。
+  2. 门：M2a 验收 + 人审。
+  3. 波次 2（并行）：版本上移 PR（前置=析构缺陷可达性复核，§5.5）∥ M2b 实现（前置=ADR 011 获批）。
+  4. 波次 3：M2c 实现（合并前置=版本上移已合并；InputRequired 接线前置=M2b 桥已合并，核心 tasks 面可先行）。
+  - 并行争用面：`McpClient` 门面头与双 mock 为共享文件，合并顺序 M2a → 上移/M2b（先过门先合，后者 rebase）→ M2c；每个 PR 独立可 revert。
+  - 本排期为 AI 对 Q5 的答复与工作假设（维护者反问未明示定案）；M2a 先行在两种排期下不变，若维护者要求严格串行只需推迟波次 2/3 的并行，不影响已合并内容。
 
 ## 6. 异常与安全
 
@@ -163,7 +169,7 @@ transport 接收线程                    UI poll 线程（TUI main / CLI 无）
 
 - 默认行为零变化：新配置字段缺省 OFF/无；未配置时 capabilities 仍为空对象、白名单上移只影响与新版 server 的协商结果（旧 server 协商回旧版本，行为同 M1）。
 - 回滚：M2a 合成工具可用配置级禁用（server 不声明能力即不注册）；M2b 配置 OFF 即回到 M1 语义；版本上移单独 PR，可独立 revert。legacy 回滚开关在 M3 前继续有效，但 **legacy 路径不实现 M2 能力**（自写三层无入站请求入口）——开启 M2 能力的 server 在 legacy 后端下按"能力不可用"降级并在 /mcp 详情注明。
-- 发布节奏：M2a → 验收+人审 → M2b（先 ADR-M2b 获批）→ 验收+人审 → 版本上移 PR → M2c → 验收+人审。每期独立提交链，门禁全绿才进下一期。
+- 发布节奏（Q5 答复采用受控部分并行，§5.6）：开发可并行（M2a ∥ ADR 011 人审；版本上移 ∥ M2b 实现；M2c 核心随上移之后），**验收与合并严格串行**——每期独立提交链，门禁全绿+人审后才合并下一依赖项；M2b 合并硬前置=ADR 011 获批，M2c 合并硬前置=版本上移已合并。
 
 ## 8. 验证情况
 
@@ -189,8 +195,8 @@ transport 接收线程                    UI poll 线程（TUI main / CLI 无）
 
 ## 最终核对
 
-- [x] 模板结构完整；状态为草案，未自称人审通过。
-- [x] SDK/项目事实按 vendored SHA 与 main `6a2bd79` 实读核对（§3 行号）。
+- [x] 模板结构完整；Q1–Q5 已批复（§5.6），ADR 011 仍为提议未自称获批；逐节人审未做。
+- [x] SDK/项目事实按 vendored SHA 与 main `de4be80` 实读核对（§3 行号）。
 - [x] 验证计划全部标注未执行；无计划冒充结果。
-- [ ] 维护者批复 §5.6 Q1–Q5；ADR-M2b 立项与送审。
-- [ ] 获批后更新 docs/design/README.md 状态列并进入 implement-feature 工作流。
+- [x] 维护者批复 §5.6 Q1–Q5（2026-11-22）；ADR 011 已立项送审（提议，文本待人审）。
+- [x] docs/design/README.md 状态列已更新（2026-11-22）；M2a 进入 implement-feature 工作流，M2b 待 ADR 011 人审。
