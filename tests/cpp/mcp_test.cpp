@@ -5,7 +5,9 @@
 // framework dependency, mirroring agent_test.cpp.
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -241,7 +243,9 @@ void test_stdio_transport_real_child() {
     config.transport = "stdio";
     config.command = "python3";
     config.args = {script};
-    McpClient client(config, default_transport_factory(), std::chrono::seconds(20),
+    // Empty factory = production routing: MINI_AGENT_MCP_BACKEND selects
+    // the session backend, so CTest runs cover legacy AND cxxmcp here.
+    McpClient client(config, {}, std::chrono::seconds(20),
                      std::chrono::seconds(15));
     std::string error;
     if (!client.ensure_started(&error)) {
@@ -271,7 +275,7 @@ void test_stdio_transport_dies_clean() {
     config.transport = "stdio";
     config.command = "python3";
     config.args = {"-c", "import sys; sys.exit(3)"};
-    McpClient client(config, default_transport_factory(), std::chrono::seconds(10),
+    McpClient client(config, {}, std::chrono::seconds(10),
                      std::chrono::seconds(5));
     auto defs = client.list();
     check(defs.empty() && !client.alive(), "immediately-exiting child marks client down (no hang)");
@@ -316,7 +320,7 @@ void test_http_transport_round_trip() {
     config.name = "http";
     config.transport = "http";
     config.url = "http://127.0.0.1:" + port + "/mcp";
-    McpClient client(config, default_transport_factory(), std::chrono::seconds(3),
+    McpClient client(config, {}, std::chrono::seconds(3),
                      std::chrono::seconds(10));
 
     // Server boot race: retry handshake a few times (client restarts
@@ -402,6 +406,108 @@ void test_call_restart_after_child_death() {
     check(spawned.size() == before + 2, "retry budget is exactly one restart");
 }
 
+// Phase B erratum regression (design 021 §5.1): the backend switch must
+// engage for production routing (empty factory). An inline stdio server
+// records every client message. The stdio wire is identical by design,
+// so the discriminator is the request id sequence: legacy ids are
+// strictly monotonic across handshake + tools/list (1,2), while the
+// cxxmcp session restarts its low-level counter after Client::initialize
+// (tools/list carries id 1). A non-null factory (test fakes included)
+// must keep forcing legacy regardless of the env.
+void test_backend_switch_selection() {
+    using namespace mini_agent;
+    const char* script =
+        "import json,sys\n"
+        "log=open(sys.argv[1],'w')\n"
+        "for line in sys.stdin:\n"
+        "    try: m=json.loads(line)\n"
+        "    except Exception: continue\n"
+        "    log.write(json.dumps(m)+'\\n');log.flush()\n"
+        "    rid=m.get('id');method=m.get('method')\n"
+        "    if rid is None: continue\n"
+        "    if method=='initialize':\n"
+        "        r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'probe','version':'0'}}\n"
+        "    elif method=='tools/list': r={'tools':[]}\n"
+        "    else: r={}\n"
+        "    sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':rid,'result':r})+'\\n')\n"
+        "    sys.stdout.flush()\n";
+    char path[] = "/tmp/mcp_backend_probe_XXXXXX";
+    const int fd = ::mkstemp(path);
+    if (fd < 0) {
+        std::cout << "SKIP backend switch probe: mkstemp failed\n";
+        return;
+    }
+    ::close(fd);
+    struct PathGuard {
+        const char* path;
+        ~PathGuard() {
+            ::unlink(path);
+        }
+    } guard{path};
+
+    McpServerConfig config;
+    config.name = "probe";
+    config.transport = "stdio";
+    config.command = "python3";
+    config.args = {"-c", script, path};
+
+    // Extract the numeric id of the tools/list request from the log
+    // (python json.dumps writes `"id": N`; tolerate absent spacing).
+    auto tools_list_id = [&path]() -> long long {
+        std::ifstream in(path);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.find("tools/list") == std::string::npos)
+                continue;
+            auto pos = line.find("\"id\":");
+            if (pos == std::string::npos)
+                continue;
+            pos += 5;
+            while (pos < line.size() && (line[pos] == ' ' || line[pos] == ':'))
+                ++pos;
+            return std::strtoll(line.c_str() + pos, nullptr, 10);
+        }
+        return -1;
+    };
+
+    ::setenv("MINI_AGENT_MCP_BACKEND", "cxxmcp", 1);
+    {
+        McpClient client(config, {}, std::chrono::seconds(10), std::chrono::seconds(5));
+        std::string error;
+        if (!client.ensure_started(&error)) {
+            // python3 missing is an environment condition, not a bug.
+            std::cout << "SKIP backend switch probe: " << error << "\n";
+            ::unsetenv("MINI_AGENT_MCP_BACKEND");
+            return;
+        }
+        (void)client.list();
+        client.restart(); // flush + tear down the child before reading
+        check(tools_list_id() == 1,
+              "empty factory + env=cxxmcp engages cxxmcp (SDK id counter restarts)");
+    }
+    {
+        // Injected factory forces legacy even with env=cxxmcp.
+        McpClient client(config, default_transport_factory(), std::chrono::seconds(10),
+                         std::chrono::seconds(5));
+        std::string error;
+        check(client.ensure_started(&error), "injected default factory still starts");
+        (void)client.list();
+        client.restart();
+        check(tools_list_id() == 2,
+              "non-null factory bypasses the switch (legacy monotonic ids)");
+    }
+    ::unsetenv("MINI_AGENT_MCP_BACKEND");
+    {
+        McpClient client(config, {}, std::chrono::seconds(10), std::chrono::seconds(5));
+        std::string error;
+        check(client.ensure_started(&error), "empty factory default backend starts");
+        (void)client.list();
+        client.restart();
+        check(tools_list_id() == 2,
+              "no env defaults to legacy (monotonic ids)");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -422,6 +528,8 @@ int main(int argc, char** argv) {
         test_http_transport_round_trip();
     if (only == 0 || only == 7)
         test_call_restart_after_child_death();
+    if (only == 0 || only == 8)
+        test_backend_switch_selection();
     if (failures) {
         std::cerr << failures << " mcp check(s) failed\n";
         return EXIT_FAILURE;

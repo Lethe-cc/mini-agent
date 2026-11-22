@@ -159,16 +159,22 @@ bool McpClient::ensure_started(std::string* error) {
         return false;
     }
     if (!rpc_) {
-        auto transport = factory_(config_);
-        if (!transport) {
-            // No injected transport (production uses the default factory):
-            // the backend switch (design 021 §5.1) applies here. cxxmcp
-            // sessions own their transport internally; injected factories
-            // (test fakes) always take the legacy path.
-            const char* backend = std::getenv("MINI_AGENT_MCP_BACKEND");
-            if (backend != nullptr && std::string_view(backend) == "cxxmcp") {
-                rpc_ = make_cxxmcp_session(config_, handshake_timeout_, call_timeout_);
-            } else {
+        // Backend switch (design 021 §5.1). An empty factory means
+        // production routing: the env selects the session and each
+        // backend owns its transport internally. An injected factory
+        // (test fakes) always takes the legacy path and the switch is
+        // bypassed. The switch must run BEFORE any factory call -- the
+        // default factory always yields a transport, so consulting it
+        // first would make the cxxmcp branch unreachable (M1 phase B
+        // erratum, fixed in phase C).
+        const char* backend = std::getenv("MINI_AGENT_MCP_BACKEND");
+        const bool use_cxxmcp =
+            !factory_ && backend != nullptr && std::string_view(backend) == "cxxmcp";
+        if (use_cxxmcp) {
+            rpc_ = make_cxxmcp_session(config_, handshake_timeout_, call_timeout_);
+        } else {
+            auto transport = factory_ ? factory_(config_) : default_transport_factory()(config_);
+            if (!transport) {
                 // Failed / exhausted factory (one-shot test fakes included):
                 // stay down instead of wrapping a null transport.
                 down_ = true;
@@ -177,7 +183,6 @@ bool McpClient::ensure_started(std::string* error) {
                     *error = last_error_;
                 return false;
             }
-        } else {
             rpc_ = std::make_unique<McpRpcClient>(std::move(transport));
         }
     }
@@ -491,9 +496,10 @@ std::unique_ptr<ToolRegistry> build_tool_registry(const AppConfig& config, std::
     // entirely when git is missing or the workspace is no repository.
     registry->add(std::make_unique<GitRuntime>(workspace, config.tool_timeout_seconds));
     if (!config.mcp_servers.empty()) {
-        auto factory = default_transport_factory();
         for (const auto& server : config.mcp_servers) {
-            registry->add(std::make_unique<McpClient>(server, factory));
+            // Empty factory = production routing: MINI_AGENT_MCP_BACKEND
+            // selects the backend (design 021 §5.1), default legacy.
+            registry->add(std::make_unique<McpClient>(server, TransportFactory{}));
         }
         if (note)
             *note = std::to_string(config.mcp_servers.size()) + " mcp server(s) configured";
