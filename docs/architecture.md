@@ -45,17 +45,19 @@ package "agent_core (静态库)" {
   [log.cpp\nspdlog 包装（脱敏）] as LOG
   [tools.cpp\nToolRegistry / run_bash\nv3 FileRuntime + GitRuntime\nrun_subprocess / preview+disarm] as TOOLS
   [diff.cpp\n行级 LCS unified diff（v3）] as DIFF
-  [mcp_stdio / mcp_http\nMCP 客户端（stdio + HTTP）] as MCP
+  [mcp_rpc 门面 + McpSession 接缝\nmcp_cxxmcp（默认）\nmcp_stdio / mcp_http（legacy 回滚）] as MCP
 }
 
 package "vendored 第三方 (许可证见目录内记录)" {
   [nlohmann/json\n单头文件] as JSON
   [md4c v0.6.0\nC 解析器] as MD4C
   [spdlog\nheader-only] as SPDLOG
+  [cxxmcp client-only\n(含 cpp-httplib/tl/json)] as CXXMCP
 }
 
 node "外部依赖" {
   [libcurl\n(系统包)] as CURL
+  [OpenSSL\n(系统包，MCP TLS)] as SSL
   [git\n(系统包，v3 惰性探测)] as GITCMD
   [/bin/bash\n(系统)] as SHELL
 }
@@ -81,7 +83,10 @@ TOOLS --> MCP : McpClient runtime
 TOOLS --> FS : workspace 内文件读写\n(边界 resolve_within_workspace)
 TOOLS --> GITCMD : 固定 argv git -C\n(仅本地；无 push)
 TOOLS --> SHELL : /bin/bash -lc (run_bash)
-MCP --> SHELL : stdio 子进程 / CURL: HTTP
+MCP --> CXXMCP : 默认后端（021 M1）
+MCP --> SHELL : stdio 子进程
+MCP --> CURL : legacy HTTP（回滚开关）
+CXXMCP --> SSL : cpp-httplib TLS
 PROVIDER --> CURL : HTTPS + SSE
 PROVIDER ..> JSON
 CHAT ..> JSON
@@ -96,7 +101,7 @@ note bottom of TUI : 渲染核心与网络分离：\nworker 线程只 append del
 @enduml
 ```
 
-依赖方向约束：`mini-agent → agent_core → {curl, nlohmann, md4c, spdlog}`；core 内不含 CLI 参数解析，TUI 不含 HTTP 细节；`loop::run_turn(Chat&, Provider&)` 为纯函数式入口，配置参数注入、无全局单例（多 Agent 扩展点）。源码自 019 起按模块分层于 `src/{cli,tui,core,provider,tools,mcp,render}/`（内部头随模块，公共契约在 `include/mini_agent/`）。TUI 内部：`tui_render.cpp` 纯函数渲染/补全（经 tui.hpp 单测），`tui_screen.hpp` 终端/LiveScreen，`tui_preview`/`tui_sidebar` 参数化预览/侧栏扫描，`tui.cpp` 保留 run_loop 编排与状态（TuiState 待建，019 P4）；均为行为保持重构。
+依赖方向约束：`mini-agent → agent_core → {curl, nlohmann, md4c, spdlog, cxxmcp(client-only)→OpenSSL}`（cxxmcp 为 ADR 002 修订豁免，ADR 010；SDK 头只进 `src/mcp/mcp_cxxmcp.cpp`，不泄漏公共头）；core 内不含 CLI 参数解析，TUI 不含 HTTP 细节；`loop::run_turn(Chat&, Provider&)` 为纯函数式入口，配置参数注入、无全局单例（多 Agent 扩展点）。源码自 019 起按模块分层于 `src/{cli,tui,core,provider,tools,mcp,render}/`（内部头随模块，公共契约在 `include/mini_agent/`）。TUI 内部：`tui_render.cpp` 纯函数渲染/补全（经 tui.hpp 单测），`tui_screen.hpp` 终端/LiveScreen，`tui_preview`/`tui_sidebar` 参数化预览/侧栏扫描，`tui.cpp` 保留 run_loop 编排与状态（TuiState 待建，019 P4）；均为行为保持重构。
 
 ## TUI 帧模型（渲染与刷新）
 
@@ -151,6 +156,7 @@ PlantUML 描述见 [020：状态流转](design/020-state-machines.md)；下述�
 - 登录状态（2026-11-02）：上述同一次 `GET /models` 兼作认证探针（**零额外请求**），`ProviderError::http_status()` 用于区分“密钥被拒”（401/403 → rejected）与“未连上”（unreachable）；`auth_status_line` / `auth_log_token` 分类 verified / rejected / refused / unreachable / unverified，展示于历史区与 `/config` 的 `login=` 行。凭据一变即重置结论；启动不探测（不击穿冷启动预算）；日志 `login status=… models=N [http_status=N]`（见 007 §5.6 规则 9）。**聊天请求也作为认证探针**（2026-11-02 修复）：主线程在回合结束把 `chat/completions` 的结果折叠进同一个 `AuthProbe`（成功=verified，401/403=rejected），聊天来源的证据在日志中以 `source=chat` 字段区分（`AuthProbe` 本身不带来源字段），因此不跑 `/models`、或 provider 不开放 `/models` 时也能正确显示连通；verdict 变化只记一条 `login … source=chat` 日志，不再往历史区打 `[auth]` 行（提示符即反馈），abort 不改变结论。v6：`AuthProbe` 扩为 per-profile map，提示符与 `/config` 的 login 状态取**活动档案**的 verdict；`/login <name>` 只重置目标档案的结论。v7：map 键为档案名（env-only 态运行时用空名键，不落盘），verdict 取**生效档案**（`current.name`，env 限定名可钉住另一档案）；聊天回合结束折叠进 `current.name` 对应探针。
 - v2 工具层（2026-11-04，使用者文档见 [MCP 与工具使用指南](mcp-usage.md)）：`run_turn(TurnOptions)` 内层循环消费 OpenAI 兼容 `delta.tool_calls`（lenient 解析 4 类网关形状；未知形状报结构指纹错误，指纹仅含字段名与类型、无值）。工具源经 `ToolRegistry` 聚合：内置 `run_bash`（fork/exec `/bin/bash -lc`，超时杀进程组、输出 32 KiB 首尾截断）与 MCP server（`mcp.hpp` 三层：McpTransport 抽象 / McpRpcClient id 关联 / McpClient tools 对话；stdio=子进程换行分隔 JSON-RPC，Streamable HTTP=POST+SSE+会话头，仅静态 Bearer）。工具名命名空间 `server__tool`（分隔符与净化规则受 function-name 字符集约束，见 008 偏差 D1）。审批默认逐次 y/N/a/?（worker 与主线程以固定槽位+序号桥接），策略 `tool_approval=ask|allowlist|off`，env `MINI_AGENT_TOOL_APPROVAL` 覆盖、`MINI_AGENT_NO_MCP=1` 全禁。日志事件 `tools/tool_exec/tool_approve/mcp_*` 仅元数据；工具输出进 TUI 前过 `sanitize_display`。session 含工具数据自动升 `schema_version=2`，v1 构建按更高版本规则拒绝。
 - v3 编码工具层（2026-11-05 实现，设计 [009](design/009-coding-v3.md)，待人工评审）：注册表装配顺序 run_bash → **FileRuntime** → **GitRuntime** → MCP。`FileRuntime` 五工具（read_file 行号读 / write_file / edit_file 唯一匹配 fail-closed / list_dir / search_text 行级子串或正则），路径经 `resolve_within_workspace`（weakly_canonical + 末段 symlink 复查）限 session workspace 根内（软边界，ADR 007 已接受；run_bash 子进程同步 `chdir` workspace）。`GitRuntime` 五工具（status/diff/log/add/commit，固定 argv `git -C <ws> --no-pager`，模型文本永不进 shell；无 push/pull/reset 面，远端操作留人工，ADR 008 已接受）；git/仓库可用性**惰性探测** memoize，不可用时 `alive()=false` 工具整体缺席。写侧工具经 `ToolRuntime::preview/disarm` 钩子向审批块提供 unified diff（`src/tools/diff.cpp` 自写行级 LCS，零依赖），预览 arm 竞态守卫、执行前重读不一致即拒绝（009 §5.3），拒绝走 disarm。新 session 注入默认 system prompt（`build_system_prompt`，`system_prompt` config 可覆写/禁用；`/cwd` 改 `Chat::update_system_workspace` 单行重写）；session `meta.workspace` 持久化边界。CLI：`--cwd`、`--tools allowlist`（名单外 fail-closed 拒绝，脚本安全档）。进程管理去重为共享 `run_subprocess`（execvp；超时杀进程组/abort 同 v2）。日志红线不变：仅元数据（相对路径/字节数/状态），diff 正文与文件内容不入日志。
+- MCP 底座迁移 M1（2026-11-22 实现，[ADR 010](decisions/010-mcp-full-client-cxxmcp.md) + 设计 [021](design/021-mcp-full-client.md)，待人工评审）：`McpClient` 门面下新增 `McpSession` 接缝，**默认后端为 vendored cxxmcp**（client-only 固定 SHA `3c25a8af`，`third_party/cxxmcp/`，SDK 头只进 `src/mcp/mcp_cxxmcp.cpp`）；自写三层（mcp_stdio/mcp_http/mcp_rpc 实现）保留为回滚路径，`MINI_AGENT_MCP_BACKEND=legacy` 显式选回（M3 删除）。测试注入非空 TransportFactory 仍强制 legacy。tools 层接口/审批/命名空间零变化；双后端 10 场景逐字回放 7 项一致 + 3 项已接受偏差（404 中途恢复更快、非标错误码丢前缀、无 result 回包 fail-closed，021 §9）；HTTP 栈双轨：LLM=libcurl、MCP=cpp-httplib+OpenSSL（已接受代价）。协议钉 2025-06-18（Q3），auth OFF（Q2）。
 - provider 连通状态标志（2026-11-02）：输入提示符本身即状态标志——`connection_state()` 从配置 + 上一次 `AuthProbe` 推导出 `ConnState`，`prompt_marker()` 将其渲染为带样式的 1 列前缀（`?` 暗色未配置 / `?` 黄未验证 / `~` 青探测中 / `>` 绿已验证 / `!` 红被拒 / `x` 品红不可达）。零额外请求与零额外行，marker 不含文本因此不可能泄露 endpoint 或密钥；图形与颜色双重编码，`/help` 提供图例（见 007 §5.6 规则 10）。
 
 ## 错误处理与安全边界
@@ -158,13 +164,13 @@ PlantUML 描述见 [020：状态流转](design/020-state-machines.md)；下述�
 - 失败轮回滚：`ProviderError`（网络/HTTP/协议）只渲染进历史区，Chat 与 session 文件保持上一轮状态；中断轮同样不落盘。
 - 退出码：`ask` 0 成功 / 1 运行时错误 / 2 配置错误；`--help`/`--version`/`version` 不触网、不读密钥。构建身份：CMake configure 时嵌入版本/短 commit（未提交改动带 `-dirty`）/UTC 构建时间；TUI 与 line-mode 启动横幅首段带版本，TUI `/version` 与 CLI `version` 输出同一三行信息（0.8.0 起）。
 - 无内置权限系统：进程以其用户权限运行文件/网络/凭据访问；需要边界时自行容器化或最小权限运行。
-- 供应链：vendored 第三方（nlohmann/md4c/spdlog）附许可证与来源记录于 `third_party/`；新增依赖前核实许可证并记 ADR。
+- 供应链：vendored 第三方（nlohmann/md4c/spdlog/cxxmcp client-only 含 cpp-httplib/tl/json）附许可证与来源记录于 `third_party/`；新增依赖前核实许可证并记 ADR（cxxmcp 豁免记录见 ADR 002 修订 + ADR 010）。
 
 ## 未实现与扩展点
 
 | 能力 | v1 状态 | 预留 |
 | --- | --- | --- |
-| 工具调用 (function calling) | **v2 已实现**（2026-11-04，待人工评审） | [008](design/008-mcp-tools.md)：run_turn 多轮循环 + ToolRegistry + 内置 run_bash（默认逐次人审，ADR 006 已接受）+ MCP 客户端（传输抽象 + stdio/Streamable HTTP，ADR 005 提议） |
+| 工具调用 (function calling) | **v2 已实现**（2026-11-04，待人工评审） | [008](design/008-mcp-tools.md)：run_turn 多轮循环 + ToolRegistry + 内置 run_bash（默认逐次人审，ADR 006 已接受）+ MCP 客户端（stdio/Streamable HTTP；**M1 起默认 cxxmcp 底座**，ADR 005 被 ADR 010 替代，legacy 为回滚开关；resources/prompts/sampling/elicitation/tasks 扩展为 021 M2） |
 | 编码能力（文件编辑/工作区/diff 审批/git 本地提交/system prompt） | **v3 已实现**（2026-11-05，待人工评审） | [009](design/009-coding-v3.md)：FileRuntime 五工具 + 软性 workspace 边界（ADR 007 已接受）+ 自写 unified diff 审批块 + GitRuntime（无 push，ADR 008 已接受）+ 默认 system prompt + CLI `--cwd`/`--tools allowlist` |
 | 上下文压缩 | **手动 /compact 已实现**（2026-11-14，[015](design/015-context-compact.md)，待人工评审）；自动压缩仍不做 | 有界转录摘要替换历史（保留 System）；溢出错误窄模式提示；自动阈值触发留作后续 |
 | 多 Agent / 编排 | 不实现 | `run_turn(Chat&, Provider&)` 参数注入、无全局单例 |
@@ -179,6 +185,7 @@ PlantUML 描述见 [020：状态流转](design/020-state-machines.md)；下述�
 - 严格项目门禁（configure → build → CTest）：`python3 scripts/check.py --strict-project`
 - 手工冒烟（pty 驱动 TUI + mock SSE）：`python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent`
 - 单元契约：`build/<preset>/agent_test`（chat/session/loop/config/log/md/tui 纯函数）
-- MCP 客户端契约：`build/<preset>/mcp_test`（RPC/对话层 fake transport + stdio/http mock E2E，ctest `mcp.client`）
+- MCP 客户端契约：`build/<preset>/mcp_test`（RPC/对话层 fake transport + stdio/http mock E2E + 后端开关选择，ctest `mcp.client`；默认 cxxmcp，`MINI_AGENT_MCP_BACKEND=legacy` 复跑同套）
+- MCP 双后端回放：`python3 tools/mcp_parity_check.py --build-dir build/linux-gcc-debug`（10 场景逐字对比，7 项一致 + 3 项已接受偏差即退出 0，见 [021](design/021-mcp-full-client.md) §9）
 - 远端 CI（`.github/workflows/project.yml`）：四 preset 矩阵（`cpp`）+ pty TUI/CLI 冒烟（`smoke`，loopback mock、零凭据）+ clang-tidy/ASan/UBSan（`quality`）。pty 冒烟仍不入 `quality_commands`（时序敏感、需 pty），但自 2026-11-14 起由 CI 门禁（此前仅本地手工）。
 - 冷启动预算（成功标准 #1，≤100ms）：`python3 tools/cold_start_check.py ./build/linux-gcc-debug/mini-agent`（`--version` 启动代理 + 即时 mock 的 ask 全就绪路径，中位数门禁；CI `smoke` job 同命令）。

@@ -2,7 +2,7 @@
 
 - 状态：已接受（2026-11-21，维护者批复 021 Q1"批准"，含本 ADR 与 ADR 002 修订）。
 - 日期与关联任务：2026-11-21；[021：MCP 全能力客户端迁移设计](../design/021-mcp-full-client.md)。
-- 决策人或审批依据：方向输入为维护者 2026-11-21 对话"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"；依赖引入授权为维护者同日对 [021 Q1](../design/021-mcp-full-client.md) 的批复"批准"（真实记录，同批 Q2"延续，但是未来可能会拓展"、Q3/Q4 按建议默认）。生效前提 1、2 已满足；前提 3（引入前逐仓库许可证二次核实）仍为 M1 vendoring 前置义务，未完成前不得向 `third_party/` 引入代码。
+- 决策人或审批依据：方向输入为维护者 2026-11-21 对话"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"；依赖引入授权为维护者同日对 [021 Q1](../design/021-mcp-full-client.md) 的批复"批准"（真实记录，同批 Q2"延续，但是未来可能会拓展"、Q3/Q4 按建议默认）。生效前提 1、2、3 均已满足（前提 3 核实于 M0、归档于 M1 阶段 A `9f344c3`，见下）。M1 已实现并全门禁验收，默认后端已翻转 cxxmcp（2026-11-22，[021 §8](../design/021-mcp-full-client.md)）。
 
 ## 背景
 
@@ -30,7 +30,7 @@
 
 1. ~~维护者显式批准本 ADR（依赖引入授权）。~~ **已满足**：维护者 2026-11-21 批复 Q1"批准"。
 2. ~~ADR 002 修订获批~~ **已满足**：同批批复覆盖 ADR 002 修订（MCP 子系统豁免"零新增依赖"取向，登记 cxxmcp（vendored，固定 tag/SHA + LICENSE 归档）+ cpp-httplib（vendored header-only）+ OpenSSL（系统库，新增运行期依赖点；LLM 传输仍走 libcurl，双栈共存为已知代价）），修订记录见 [ADR 002](002-http-json-dependency.md)。
-3. 引入前逐仓库二次核实许可证与 vendored 组件署名义务（tl::expected、nlohmann/json、cpp-httplib 各自 LICENSE），沿用 ADR 002 的 vendoring 纪律。**核实已完成**（M0 spike，2026-11-21，`.references/` 内逐文件实读：cxxmcp MIT、cpp-httplib MIT、nlohmann/json MIT、tl::expected CC0，见 [021 §8](../design/021-mcp-full-client.md)）；**归档未完成**——M1 vendoring 时须将各 LICENSE 全文 + 固定 SHA 落入 `third_party/`，归档完成前不得引入代码。
+3. 引入前逐仓库二次核实许可证与 vendored 组件署名义务（tl::expected、nlohmann/json、cpp-httplib 各自 LICENSE），沿用 ADR 002 的 vendoring 纪律。**核实已完成**（M0 spike，2026-11-21，`.references/` 内逐文件实读：cxxmcp MIT、cpp-httplib MIT、nlohmann/json MIT、tl::expected CC0，见 [021 §8](../design/021-mcp-full-client.md)）；**归档已完成**（M1 阶段 A `9f344c3`，2026-11-22：LICENSE 全文 + 固定 SHA + 裁剪清单落入 [third_party/cxxmcp/README](../../third_party/cxxmcp/README.md)，56 文件逐字节比对上游一致）。前提 3 关闭。
 
 **边界（2026-11-21 批复随附）**：M0 spike 是否放行迁移由 spike 结果决定——四 preset 编译、mock/deepwiki 重放、conformance 独立复跑、并发桥接任一不达标即回到方案 A；OAuth/auth 目标保持 OFF（Q2"延续，但是未来可能会拓展"——延续 2026-11-02 裁剪，未来启用须另行人审设计，不在本次授权内）。
 

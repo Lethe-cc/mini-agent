@@ -19,7 +19,7 @@ mini-agent：C++17 单二进制终端 AI Agent（OpenAI 兼容 SSE + 工具审�
 | src/core | 内核 | loop(run_turn) / chat / session(+serde) / config / context / log |
 | src/provider | OpenAI 兼容 | provider_openai / provider_parse / models_dev |
 | src/tools | 工具层 | tools(registry+bash) / tools_file / tools_git / subprocess / workspace / diff |
-| src/mcp | MCP 客户端 | mcp_rpc / mcp_stdio / mcp_http |
+| src/mcp | MCP 客户端 | mcp_rpc（门面+开关）/ mcp_cxxmcp（默认后端，唯一 include SDK）/ mcp_stdio / mcp_http（legacy 回滚） |
 | src/render | 渲染 | md / md_geometry / highlight |
 
 测试：`tests/cpp`（CTest）、`tests/pty_*_smoke.py`（端到端）、`tests/test_*.py`（模板）。
@@ -45,6 +45,8 @@ cmake --build --preset linux-gcc-debug && ctest --test-dir build/linux-gcc-debug
 python tests/pty_tui_smoke.py build/linux-gcc-debug/mini-agent   # TUI 端到端(~85s)
 python tests/pty_cli_smoke.py build/linux-gcc-debug/mini-agent   # CLI(~11s)
 python tools/cold_start_check.py build/linux-gcc-debug/mini-agent # ≤100ms
+python tools/mcp_parity_check.py --build-dir build/linux-gcc-debug # 双后端回放（7 一致+3 已接受偏差=退出0）
+MINI_AGENT_MCP_BACKEND=legacy ctest --test-dir build/linux-gcc-debug # legacy 回滚路径复跑
 ```
 
 四 preset：linux-{gcc,clang}-{debug,release}。分层门禁与用例清单见 [design/testing/](design/testing/README.md)。
@@ -67,7 +69,7 @@ pty 支持 `--grep <标签>` 只门禁匹配断言；等待已自适应（勿改
 
 - 019 拆分：**P1–P4 全部完成**（键位分发 `c1a57f3` → `tui_keys.hpp`，LoopCtl 方案，见 019 §8）；
   **tui.cpp 3626→1268**。run_loop 仅剩 poll/抽干/join/完成回调调度 + done 清理。
-- MCP 迁移：[021](design/021-mcp-full-client.md) 已接受（Q1–Q4 已批），**M0 spike 通过**（四 preset、mock/deepwiki/线程重放、ASan/TSan 干净、conformance 2025-11-25 同口径 247/0 精确复现；6 draft-auth 场景挂起为上游析构缺陷，M1 范围外，见 021 §9）；M1 vendoring 放行待维护者确认。spike 产物在 gitignored `.references/`（cxxmcp 快照、conformance runner+Node22、构建与结果目录）。
+- MCP 迁移：[021](design/021-mcp-full-client.md) **M1 已实现并全门禁验收，默认后端已翻转 cxxmcp**（2026-11-22，待人工评审）。vendored client-only 固定 SHA `3c25a8af`（`third_party/cxxmcp/`，56 文件逐字节上游一致，LICENSE 归档）；`McpSession` 接缝双轨，`MINI_AGENT_MCP_BACKEND=legacy` 回滚开关保留至 M3；测试注入非空 factory 仍强制 legacy。双后端回放 `tools/mcp_parity_check.py`：7 项一致 + 3 项已接受偏差（404 恢复/非标错误码/无 result fail-closed，021 §9）。M0 spike 证据（四 preset、deepwiki、conformance 247/0）在 gitignored `.references/`；6 draft-auth 场景挂起为上游析构缺陷，**M2 引入 handler 前须确认修复**（021 §9 已知限制）。M2（resources/prompts/sampling/elicitation/tasks）与 M3（删 legacy）未启动。
 - 状态机集中描述：[020-state-machines.md](design/020-state-machines.md)（连接/回合/审批/worker/pane/session）。
 - 学习资源单一来源：[ai-agent-learning.md](ai-agent-learning.md)。
 

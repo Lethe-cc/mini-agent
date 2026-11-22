@@ -2,10 +2,10 @@
 
 ## 文档状态
 
-- 状态：**已接受（方向与开放问题已批）/ M0 spike 已通过（结果待人工确认放行 M1）**（2026-11-21）。**未实现、未向 third_party/ 引入任何第三方代码**；不改变任何现有行为。
+- 状态：**已接受 / M0 spike 通过 / M1 底座替换已实现并全门禁验收，默认后端已翻转为 cxxmcp**（2026-11-22）。`third_party/cxxmcp/` vendoring 已入库（client-only 闭包，固定 SHA + LICENSE 归档）；生产默认路由 cxxmcp，`MINI_AGENT_MCP_BACKEND=legacy` 为回滚开关（M3 删除自写路径前有效）。
 - 关联任务：维护者 2026-11-21 方向输入"未来要 resources/prompts/sampling/elicitation/tasks/追新版本"；[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（已接受，取代 ADR 005）。
-- 核对日期、适用版本或代码修订：2026-11-21。本仓库基线 main `934f445`（Q1–Q4 批复落档）；cxxmcp master `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（M0 spike 中另选读 client.cpp/http_transport.cpp/request.hpp 及 conformance harness；全库仍未精读）。
-- 人工评审记录：维护者 2026-11-21 批复——Q1"批准"（ADR 010 + ADR 002 修订，依赖引入授权）；Q2"延续，但是未来可能会拓展"（OAuth 裁剪延续，auth 保持 OFF；未来启用须另行人审设计）；Q3"ok"（M1 期钉 2025-06-18，M2 再上移）；Q4"ok"（client 子集裁剪 vendoring，M0 确认依赖闭包后定裁剪清单）。整体设计文档的逐节人工评审仍未做；M0 spike 已执行并判定通过（§8），**M1 vendoring 放行待维护者确认**。
+- 核对日期、适用版本或代码修订：M0/批复 2026-11-21（基线 main `934f445`）；M1 实现与验收 2026-11-22（阶段 A `9f344c3` → B `aa3838e`/勘误 `32bb3a6` → C `90e3233` → D `cdd4b8a`/翻转 `90a30b7`）。cxxmcp master `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（VERSION 1.3.0；M0/M1 中选读 client.cpp/http_transport.cpp/request.hpp/serialization.cpp/initialize.hpp 及 conformance harness；全库仍未精读）。
+- 人工评审记录：维护者 2026-11-21 批复——Q1"批准"（ADR 010 + ADR 002 修订，依赖引入授权）；Q2"延续，但是未来可能会拓展"（OAuth 裁剪延续，auth 保持 OFF；未来启用须另行人审设计）；Q3"ok"（M1 期钉 2025-06-18，M2 再上移）；Q4"ok"（client 子集裁剪 vendoring，M0 确认依赖闭包后定裁剪清单）。M0 spike 判定通过后维护者 2026-11-22 批复"继续"放行 M1。整体设计文档的逐节人工评审仍未做；M1 实现与翻转按 §8 证据交付，**待人工评审**。
 
 ## 1. 背景与目标
 
@@ -48,12 +48,12 @@
 | 能力分期 | M2 内 resources/prompts 先，sampling/elicitation 次，tasks 后 | 一次全开 | resources/prompts 是纯客户端请求，风险最低；sampling/elicitation 引入服务端发起请求，需审批与 UI 设计；tasks 需长任务状态机与 UI | — |
 | 回退底座 | 保留自写实现的 git 历史 + 迁移期双轨开关 | 直接删除自写代码 | pre-1.0 上游风险的对冲；M1 验证全绿前不删 | — |
 
-## 5. 详细设计（规划，未实现）
+## 5. 详细设计（M0/M1 已实现；M2/M3 为规划。as-built 偏差见 §9）
 
 ### 5.1 分期
 
 - **M0 spike（引入前的否决门）**：`.references/` clone cxxmcp 固定 SHA；四 preset（GCC/Clang × Debug/Release）编译 client-only + HTTP + OpenSSL 组合；用其客户端重放现有 stdio/HTTP mock 场景与 deepwiki 实测；**独立复跑官方 conformance runner client suite**，与自报 501/501 对照；确认 §5.3 桥接可行。任一不达标 ⇒ 本设计废弃，回 ADR 010 方案 A，vendored 代码不进 third_party/。
-- **M1 底座替换（行为保持）**：third_party/cxxmcp/ vendoring（含 tl::expected/cpp-httplib，LICENSE/SHA 归档）；新 `McpClient` 门面内部改用 `McpClientSession`，对 tools 层保持现接口（工具发现/调用/错误折叠为 is_error/诊断尾）；`MINI_AGENT_MCP_BACKEND=legacy|cxxmcp` 双轨开关，默认 legacy 直至 M1 验收全绿后翻转；现有 mock E2E、mcp_probe、deepwiki、pty/CLI 门禁全部重跑。
+- **M1 底座替换（行为保持）**：third_party/cxxmcp/ vendoring（含 tl::expected/cpp-httplib，LICENSE/SHA 归档）；新 `McpClient` 门面内部改用 `McpClientSession`，对 tools 层保持现接口（工具发现/调用/错误折叠为 is_error/诊断尾）；`MINI_AGENT_MCP_BACKEND=legacy|cxxmcp` 双轨开关，默认 legacy 直至 M1 验收全绿后翻转；现有 mock E2E、mcp_probe、deepwiki、pty/CLI 门禁全部重跑。**已完成（2026-11-22）**：全门禁通过（§8 M1 行），默认已翻转为 cxxmcp（`90a30b7`）；`legacy` 为显式回滚值，注入非空 TransportFactory（测试 fake）仍强制走 legacy 路径。
 - **M2 能力扩展**：resources/prompts（发现 + 读取/获取，UI 注入形态届时细化设计）→ sampling/elicitation（服务端发起请求的审批与 UI，须过 ADR 006 同款人审设计）→ tasks（长任务状态机，参考 [020 状态机文档](020-state-machines.md) 增补）；版本基线随 cxxmcp 协商能力上移，测试 mock 同步升级。
 - **M3 收尾**：默认翻转后移除 legacy 路径与自写三层（git 历史保留）；文档/架构总览同步。
 
@@ -83,7 +83,7 @@ cxxmcp transport 内部有接收线程（HTTP SSE/stdio 读）；本项目工具
 
 ## 7. 兼容性与发布
 
-- 双轨开关期 legacy 默认，行为零变化；翻转后 legacy 保留一个版本周期再删（M3）。
+- 双轨开关期 legacy 默认，行为零变化；翻转后 legacy 保留一个版本周期再删（M3）。**现状（2026-11-22）：已翻转**，cxxmcp 为默认，legacy 经 env 显式选择。
 - 回滚：开关拨回 legacy 即回自写路径（M3 前）；M3 后回滚 = revert 提交。
 - 可观测性：diagnostics_tail 语义保留（cxxmcp 诊断信息映射进现有日志红线，不含密钥/正文）。
 - 冷启动：OpenSSL 初始化成本纳入 cold_start_check 复测；超预算则延迟初始化 MCP 子系统。
@@ -101,17 +101,52 @@ M0 spike 环境（2026-11-21，Debian Linux）：GCC 14.2.0 / Clang 19.1.7，CMa
 | M0：并发桥接确认（§5.3） | 同上；build-asan（ASan+LSan）/ build-tsan（TSan） | `spike_client threads <url> 25`（4 worker 线程 × 25 次同步 call_tool）；stdio/http/deepwiki 三场景分别在 ASan、TSan 下重放 | **通过**：100/100 调用成功；ASan+LSan 干净 ×3；TSan 干净 ×3，无数据竞争/泄漏报告 | 4 线程同步调用模型 = turn worker 形态；sampling 的 server-request 桥接属 M2，未验 |
 | M0：官方 conformance client suite 独立复跑（最新协商 wire） | `.references/conf-results/`（42 场景 checks.json） | `node dist/index.js client --command <everything_client> --suite all --timeout 30000 -o .references/conf-results`（everything_client 以 AUTH=ON+OpenSSL GCC Release 单独构建） | **42/48 场景完成：463 SUCCESS / 0 FAILURE / 4 SKIPPED（sep-2640 skills，按设计跳过）/ 567 INFO（不计分）**；其余 6 个 draft-auth 场景挂起（见 §9 已知限制） | runner 比上游 2026-09-15 快照新（48 场景 vs 当时 501 checks 口径），总数不可直接对照 501/501；6 场景挂起为上游 SDK 析构缺陷，非 wire 一致性失败 |
 | M0：官方 conformance 钉 2025-11-25（上游同口径复现） | `.references/conf-results-20251125/`（19 场景） | 同上追加 `--spec-version 2025-11-25` | **通过**：247 passed / 0 failed / 0 warnings，runner 退出码 0——与上游 CONFORMANCE_STATUS.md 记载的 247/0 基线**逐项精确一致** | 这是与自报数字的严格同口径对照；最新 wire 的 463/0 为超集佐证 |
-| M0：许可证核实（ADR 010 前提 3） | `.references/cxxmcp/LICENSE`、vendored tl/json LICENSE、cpp-httplib LICENSE 实读 | 逐文件人工（AI）实读比对 | **通过**：cxxmcp MIT、cpp-httplib MIT、nlohmann/json MIT、tl::expected CC0，均兼容 | M1 vendoring 时须将 LICENSE 全文 + SHA 归档进 third_party/（义务未完成，仅核实完成） |
-| M1：现有全门禁重跑（四 preset CTest、pty、CLI、tidy、ASan、strict-project） | 既有测试资产 | 未执行 | 未执行 | M1 验收项 |
+| M0：许可证核实（ADR 010 前提 3） | `.references/cxxmcp/LICENSE`、vendored tl/json LICENSE、cpp-httplib LICENSE 实读 | 逐文件人工（AI）实读比对 | **通过**：cxxmcp MIT、cpp-httplib MIT、nlohmann/json MIT、tl::expected CC0，均兼容 | 当时义务"LICENSE 全文 + SHA 归档进 third_party/"已由 M1 阶段 A 完成（见下 M1 vendoring 行） |
+| M1：vendoring 与许可证归档（阶段 A，`9f344c3`） | `third_party/cxxmcp/`（README 含裁剪清单/SHA/LICENSE 记录） | 闭包计算（6 编译源传递 #include 走查）→ 56 文件逐字节比对上游快照；cxxmcp MIT / cpp-httplib MIT / nlohmann MIT / tl::expected CC0 全文归档 | **通过**：56/56 逐字节一致，零本地改动；ADR 010 前提 3 的归档义务完成 | server/auth/tests/examples 不入库；json 双拷贝共存说明见 vendored README 与 §9 |
+| M1：四 preset 编译 + -Werror 门禁（阶段 B/D） | 既有 `scripts/cpp_check.py` | `python3 scripts/cpp_check.py --preset linux-{gcc,clang}-{debug,release} --warnings-as-errors`（8 次运行：翻转前 4 + 翻转后 4） | **通过**：全部 configure/build/CTest 绿 | 需 SYSTEM include 豁免 vendored 头（`cdd4b8a`，§9） |
+| M1：双后端 CTest（4 preset × 2 后端） | `tests/cpp/mcp_test.cpp`（含 `test_backend_switch_selection`） | `ctest --preset <p> --no-tests=error` 与 `MINI_AGENT_MCP_BACKEND=legacy ctest --preset <p> --no-tests=error` | **通过**：8 组各 3/3（翻转后复跑同绿；翻转后默认 env 未设即 cxxmcp） | E2E 经空 factory 走生产路由；fake transport 测试固定 legacy |
+| M1：双后端逐字回放（阶段 C，`90e3233`） | `tools/mcp_parity.cpp` + `tools/mcp_parity_check.py`（10 场景） | `python3 tools/mcp_parity_check.py --build-dir build/linux-gcc-debug` | **通过（exit 0）**：7 场景逐字节一致（stdio basic/die/spawnfail/timeout，http basic/401/500）；3 场景为已接受偏差（http-404mid/nonstd/noresult，§9） | 开发工具非质量门禁；runner 显式设 env，不受默认翻转影响 |
+| M1：pty TUI/CLI 冒烟 | `tests/pty_tui_smoke.py` / `tests/pty_cli_smoke.py` | `python3 tests/pty_{tui,cli}_smoke.py ./build/linux-gcc-debug/mini-agent` | **通过**：TUI 195 PASS 行、CLI ALL PASS（翻转前 legacy 默认与翻转后 cxxmcp 默认各跑一遍） | 时序敏感，未入 quality_commands（CI smoke job 承担） |
+| M1：冷启动预算（§7） | `tools/cold_start_check.py` | `python3 tools/cold_start_check.py ./build/linux-gcc-debug/mini-agent --runs 20 --budget-ms 100`（两后端各一遍，翻转后复测） | **通过**：cxxmcp 默认 median 3.9ms（--version）/ 5.3ms（ask 全就绪）；legacy 3.8ms / 5.1ms——OpenSSL 引入无可测退化 | n=20，本机时点数据 |
+| M1：clang-tidy | 既有 `--tidy` 档 | `python3 scripts/cpp_check.py --preset linux-clang-debug --tidy` | **通过**：69 条 advisory 警告（非 -Werror 档），其中 mcp_cxxmcp.cpp 3 条（implicit-widening / swappable-params，与存量代码同类）；**third_party 0 条**（SYSTEM include 生效） | tidy 警告为咨询性，门禁不失败 |
+| M1：ASan+UBSan | 既有 `--sanitizers` 档 | `python3 scripts/cpp_check.py --preset linux-gcc-debug --sanitizers` + `MINI_AGENT_MCP_BACKEND=legacy ctest --preset linux-gcc-debug --no-tests=error` | **通过**：两后端 CTest 各 3/3，无 sanitizer 报告 | TSan 验证在 M0 已做（§8 M0 行）；M1 桥为同步单调用，见 §5.3 |
+| M1：deepwiki 实测（两后端对照） | 真实 `McpClient` 门面临时探针（/tmp，用后即弃） | 探针经 `{}` factory + env 切换分别连 `https://mcp.deepwiki.com/mcp`：list + `read_wiki_structure(modelcontextprotocol/servers)` | **通过**：两后端各发现 3 工具（`deepwiki__*` 命名一致）；成功调用 is_error=0、1157 字节、内容逐字节一致；错误路径（参数校验失败）文案亦一致 | 外部端点受网络时点影响；本仓库未被 deepwiki 索引，改用 modelcontextprotocol/servers |
+| M1：strict-project 总门禁 | `project.json` quality_commands | `python3 scripts/check.py --strict-project` | **通过**（翻转后执行）：configure/build/CTest 全绿 | — |
 | M2：各能力验收 | 届时设计 | 未执行 | 未执行 | — |
 
-**M0 判定：通过**。§5.1 四项否决门（四 preset 编译、mock/deepwiki 重放、conformance 独立复跑对照、并发桥接 ASan/TSan）全部达标；conformance 与自报基线在同口径（2025-11-25）下精确复现 247/0，最新 wire 超集 0 FAILURE。唯一未竟事项（6 个 draft-auth 场景挂起）已根因定位为上游 `Client::~Client()` 异常安全缺陷（见 §9），其触发条件（draft stateless wire + auth ON）在 M1 授权范围之外（Q2 auth OFF、Q3 钉 2025-06-18），不构成否决；作为已知限制记录并建议向上游报告。是否放行 M1 vendoring 由维护者确认。
+**M0 判定：通过**。§5.1 四项否决门（四 preset 编译、mock/deepwiki 重放、conformance 独立复跑对照、并发桥接 ASan/TSan）全部达标；conformance 与自报基线在同口径（2025-11-25）下精确复现 247/0，最新 wire 超集 0 FAILURE。唯一未竟事项（6 个 draft-auth 场景挂起）已根因定位为上游 `Client::~Client()` 异常安全缺陷（见 §9），其触发条件（draft stateless wire + auth ON）在 M1 授权范围之外（Q2 auth OFF、Q3 钉 2025-06-18），不构成否决；作为已知限制记录并建议向上游报告。维护者 2026-11-22 批复"继续"放行 M1。
+
+**M1 判定：通过（待人工评审）**。阶段 A–D 全部落地（vendoring → McpSession 接缝与双轨开关 → 逐字回放 → 全门禁），上表 M1 各行全绿；按 §5.1 约定默认后端已翻转为 cxxmcp（`90a30b7`），`MINI_AGENT_MCP_BACKEND=legacy` 保留为回滚开关至 M3。3 项 wire 级已接受偏差与 as-built 差异见 §9，模型可见 tools 行为在回放与实测中逐项保持。
 
 ## 9. 实现偏差与已知限制
 
-未实现，无偏差。开放问题批复记录（维护者 2026-11-21）：
+### M1 as-built 记录（2026-11-22）
 
-- **Q1（依赖批准）——已批**："批准"。ADR 010 已接受、ADR 002 修订已批（MCP 子系统豁免登记 cxxmcp/cpp-httplib/OpenSSL）。引入仍受两道门约束：M0 spike 通过 + 引入前逐仓库许可证核实（ADR 010 前提 3）。
+**接线形态**：规划为"`McpClient` 门面内部改用 SDK 会话"；as-built 在门面与两条实现之间加了 `McpSession` 接缝（[mcp.hpp](../../include/mini_agent/mcp.hpp)），legacy 三层与 cxxmcp 适配层（[mcp_cxxmcp.cpp](../../src/mcp/mcp_cxxmcp.cpp)，唯一 include SDK 的 TU）各实现该接缝，由 `ensure_started` 按"空 factory=生产路由（默认 cxxmcp，env=legacy 回滚）；非空 factory 强制 legacy"选择。这是双轨开关与 M3 删除 legacy 的结构前提，非行为偏差。
+
+**wire 级已接受偏差（3 项，回放实证，`tools/mcp_parity_check.py` KNOWN_DEVIATION）**：
+
+| 场景 | legacy 行为 | cxxmcp 行为 | 机制与取舍 |
+| --- | --- | --- | --- |
+| http-404mid（会话中途失效） | 首次调用报 `mcp session expired; re-initialize required`，下次调用才恢复 | 同一次调用内透明重新 initialize 并成功 | SDK 内建 404→重握手恢复（http_transport.cpp）；对用户是**更好**的行为，接受不回退 |
+| http-nonstd（非标准错误码 -32100） | `rpc error -32100: custom failure` | `custom failure`（丢失非标准码前缀） | SDK 对标准集之外的 code 只保留 message；模型可见错误文案变化极小，接受 |
+| http-noresult（回包无 result/error） | 折叠为 `{}` 成功 | `rpc error -32600: Unsupported JSON-RPC entity` | SDK 严格解析在 serialization.cpp:604 即拒绝，早于会话层；适配层已把 client.cpp:53 的 "response did not contain a result" 映射回 `{}`（覆盖另一条路径），但严格解析路径无法在不改 vendored 代码的前提下对齐。畸形回包本属协议违规，fail-closed 更可取，接受 |
+
+**其余 as-built 差异（模型可见行为保持，实现取舍）**：
+
+- **阶段 B 勘误（`32bb3a6`）**：初版开关放在 factory 调用之后，默认 factory 恒产出 transport ⇒ cxxmcp 分支不可达；已改为先判 env 再走 factory，并有 `test_backend_switch_selection` 回归覆盖。
+- **超时形态**：HTTP 沿用 legacy 的单一 120s 预算（`options.timeout`；legacy curl 为 120s 总预算 + 10s 连接预算，SDK 单值覆盖 connect/read/write）。per-call timeout 参数在 HTTP 路径两代实现同样不生效（legacy `(void)timeout`）；stdio 路径经 `set_deadline(timeout)` 生效。`CxxmcpSession` 不存 call_timeout 成员（`cdd4b8a` 移除未用字段过 clang -Werror）。
+- **stdio 子进程管理重复**：`StdioBridgeTransport` 的 spawn/EOF-drain/kill 逻辑从 mcp_stdio.cpp 复制而非抽公共层——M1 不动 legacy 文件的代价，M3 删 legacy 时随之收敛。
+- **DELETE 会话终止**：cxxmcp `close()` 走 SDK `stop()`（HTTP 发 DELETE 显式终止会话）；legacy 从不做 DELETE。更合规范，接受。
+- **SSE 重连**：SDK GET 流重连间隔 250ms、无限次（http_transport.cpp:848）；legacy POST→GET 补偿路径重连一次。回放场景内无可见差异。
+- **服务端发起请求**：M1 client capabilities 置空（tools-only），SDK 对 inbound server-request 回 MethodNotFound；sampling/elicitation 的 handler 桥接属 M2（§5.3）。
+- **json 双拷贝**：vendored SDK 自带上游 patched nlohmann v3.12.0，项目根为 unpatched v3.12.0；include 顺序保证各 TU 只见一份（vendored README 记录）。布局兼容、无 ODR 交叉，M3 后仍随 SDK 存续。
+- **vendoring 裁剪比 §5.2 规划更小**：handler/peer/service 属 server 依赖链，未入库（56 文件清单见 third_party/cxxmcp/README）；上游 httplib 用户文档 README 因链接未入库文件被 Markdown 门禁拒绝，未入库（LICENSE/来源记录保留）。
+- **-Werror/tidy 豁免方式**：vendored 目标经 `INTERFACE_SYSTEM_INCLUDE_DIRECTORIES` 标记 SYSTEM（`cdd4b8a`），沿用 nlohmann/md4c 先例；vendored 文件零改动。
+
+开放问题批复记录（维护者 2026-11-21）：
+
+- **Q1（依赖批准）——已批**："批准"。ADR 010 已接受、ADR 002 修订已批（MCP 子系统豁免登记 cxxmcp/cpp-httplib/OpenSSL）。引入的两道门（M0 spike 通过 + 逐仓库许可证核实/归档，ADR 010 前提 3）均已关闭（2026-11-22，阶段 A）。
 - **Q2（OAuth 裁剪存续）——延续，保留拓展空间**："延续，但是未来可能会拓展"。auth 目标保持 OFF；未来启用 OAuth/DPoP 须另行人审设计（新 ADR 或本设计增补），不在本次授权内。
 - **Q3（协议基线）——按建议**："ok"。M1 行为保持期钉 2025-06-18（回退 2025-03-26 语义按 cxxmcp 协商实测确认），M2 再上移基线。
 - **Q4（裁剪入库形态）——按建议**："ok"。client 子集裁剪 vendoring；具体裁剪清单在 M0 确认依赖闭包后于 third_party/cxxmcp/README 记录。
@@ -125,8 +160,8 @@ M0 spike 环境（2026-11-21，Debian Linux）：GCC 14.2.0 / Clang 19.1.7，CMa
 
 ## 最终核对
 
-- [x] 接口、配置、路径与当前代码一致（自写侧）；cxxmcp 侧标注为外部核对事实。
-- [x] 已实现与规划内容清楚区分（正文仍为规划；M0 spike 已在 `.references/` 内执行并落证据，仓库代码零改动）。
-- [x] 外部来源、版本和实际采用内容可追溯（SHA + 核对层级如实标注）。
-- [x] 验证结果有证据，未执行事项如实标明。
-- [ ] 索引与架构总览按需更新（索引已登记；architecture.md 待接受后随实现更新）。
+- [x] 接口、配置、路径与当前代码一致（M1 as-built 已核对；cxxmcp 侧标注为外部核对事实）。
+- [x] 已实现与规划内容清楚区分（M0/M1 已实现并落证据；M2/M3 仍为规划，§5 标注）。
+- [x] 外部来源、版本和实际采用内容可追溯（SHA + LICENSE 归档于 third_party/cxxmcp/；核对层级如实标注）。
+- [x] 验证结果有证据，未执行事项如实标明（§8 M1 各行含命令与结果；M2 未执行）。
+- [x] 索引与架构总览按需更新（architecture.md 依赖/分层/演进记录已随 M1 更新；agent-handbook §6 同步）。
