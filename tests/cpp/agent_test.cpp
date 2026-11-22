@@ -2172,6 +2172,18 @@ void test_v3_config_and_prompt() {
           "override replaces");
     check(build_system_prompt("/x", "m", std::string()).empty(), "disabled is empty");
 
+    // M2a surface hint (design 022 §5.1): one capability-neutral line
+    // when servers are configured; absent otherwise; override ignores it.
+    check(prompt.find("MCP servers configured") == std::string::npos,
+          "no hint line without configured servers");
+    const auto hinted = build_system_prompt("/x", "m", std::nullopt, "docs, tools");
+    check(hinted.find("MCP servers configured: docs, tools") != std::string::npos &&
+              hinted.find("__mcp_resources") != std::string::npos &&
+              hinted.find("action=list") != std::string::npos,
+          "hint line names servers and teaches the synthetic tools");
+    check(build_system_prompt("/x", "m", std::string("custom only"), "docs") == "custom only",
+          "override ignores the hint");
+
     // inject_system_prompt: fresh chat only.
     Chat chat;
     check(inject_system_prompt(chat, "/w", "m", std::nullopt), "injected into empty chat");

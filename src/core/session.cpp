@@ -425,7 +425,8 @@ void SessionStore::unlock(const std::string& id) noexcept {
 }
 
 std::string build_system_prompt(const std::string& workspace, const std::string& model,
-                                const std::optional<std::string>& override_prompt) {
+                                const std::optional<std::string>& override_prompt,
+                                const std::string& mcp_surface_hint) {
     if (override_prompt.has_value())
         return *override_prompt; // "" = disabled, text = full replacement
     std::string prompt = "You are mini-agent, a terminal coding assistant running on Linux.\n";
@@ -453,14 +454,23 @@ std::string build_system_prompt(const std::string& workspace, const std::string&
               "\"user denied this tool invocation\", do NOT retry the same call; explain "
               "what you wanted and ask the user.\n"
               "- Keep final answers concise; reference files by path.\n";
+    // M2a (design 022 §5.1): one pointer line when MCP servers are
+    // configured. Capability-neutral (handshake is lazy); the synthetic
+    // tools appear in the tool list only after a capable handshake.
+    if (!mcp_surface_hint.empty())
+        prompt += "- MCP servers configured: " + mcp_surface_hint +
+                  ". If a server offers resources or prompts, tools named <server>__mcp_resources "
+                  "/ <server>__mcp_prompts appear in your tool list; call them with action=list "
+                  "to discover entries.\n";
     return prompt;
 }
 
 bool inject_system_prompt(Chat& chat, const std::string& workspace, const std::string& model,
-                          const std::optional<std::string>& override_prompt) {
+                          const std::optional<std::string>& override_prompt,
+                          const std::string& mcp_surface_hint) {
     if (!chat.messages().empty())
         return false; // only fresh sessions get the prompt
-    const auto text = build_system_prompt(workspace, model, override_prompt);
+    const auto text = build_system_prompt(workspace, model, override_prompt, mcp_surface_hint);
     if (text.empty())
         return false;
     Message message;

@@ -422,6 +422,25 @@ def main():
           "lifecycle: prune removes only the old unlocked session")
     subprocess.run(["rm", "-rf", lc_dir], check=False)
 
+    # ---- 5.5 mcp list: merged config + --mcp upsert, secret redaction -----
+    mc_dir = "/tmp/mini_agent_cli_smoke_mcp"
+    subprocess.run(["rm", "-rf", mc_dir], check=False)
+    os.makedirs(mc_dir)
+    em = dict(e, MINI_AGENT_CONFIG=mc_dir + "/config.json")
+    r = subprocess.run([binary, "mcp", "list"], env=em,
+                       capture_output=True, text=True, timeout=10)
+    check(r.returncode == 0 and "mcp servers: (none)" in r.stdout,
+          "mcp list: empty config lists none (no provider gate)")
+    r = subprocess.run([binary, "mcp", "list",
+                        "--mcp", "docs=https://user:secret@127.0.0.1:9/mcp",
+                        "--mcp", "loc=python3 tests/mock_mcp_server.py --rich"],
+                       env=em, capture_output=True, text=True, timeout=10)
+    check(r.returncode == 0 and "docs  http" in r.stdout and
+          "loc  stdio  python3 tests/mock_mcp_server.py --rich" in r.stdout and
+          "secret" not in r.stdout,
+          "mcp list: --mcp flags upsert both transports, URL secrets redacted")
+    subprocess.run(["rm", "-rf", mc_dir], check=False)
+
     # ---- 6. version identity: banners + version subcommand ----------------
     r = subprocess.run([binary, "version"], env=e, capture_output=True,
                        text=True, timeout=10)

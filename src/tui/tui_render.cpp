@@ -30,8 +30,9 @@ namespace mini_agent::tui {
 
 constexpr std::string_view kCommands[] = {
     "/approve",   "/compact", "/config",   "/context", "/cwd",     "/debug",   "/exit",
-    "/help",      "/login",   "/mcp",      "/model",   "/models",  "/preview", "/provider",
-    "/reasoning", "/session", "/sessions", "/sidebar", "/sysinfo", "/tools",   "/version"};
+    "/help",      "/login",   "/mcp",      "/model",   "/models",  "/preview", "/prompt",
+    "/provider",  "/reasoning", "/session", "/sessions", "/sidebar", "/sysinfo", "/tools",
+    "/version"};
 
 // ---------------------------------------------------------------- pure helpers
 

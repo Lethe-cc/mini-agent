@@ -816,6 +816,61 @@ def main():
     subprocess.run(["rm", "-rf", ws_dir], check=False)
     subprocess.run(["rm", "-rf", approval_dir], check=False)
 
+    # M2a (design 022 §5.1): /mcp passive status + explicit listings +
+    # /prompt injection, against the rich stdio mock. The server is lazy:
+    # bare /mcp must NOT start it; the first explicit listing does.
+    if os.path.exists("tests/mock_mcp_server.py"):
+        mcp_dir = "/tmp/mini_agent_pty_smoke_mcp"
+        subprocess.run(["rm", "-rf", mcp_dir], check=False)
+        os.makedirs(mcp_dir)
+        with open(mcp_dir + "/config.json", "w") as fh:
+            json.dump({"mcp_servers": {"rich": {
+                "transport": "stdio", "command": "python3",
+                "args": [os.path.abspath("tests/mock_mcp_server.py"), "--rich"],
+            }}}, fh)
+        mcp_env = dict(env, MINI_AGENT_SESSION_DIR=mcp_dir + "/sess",
+                       MINI_AGENT_LOG=mcp_dir + "/agent.log",
+                       MINI_AGENT_CONFIG=mcp_dir + "/config.json")
+        mcp_pid, mcp_fd = pty.fork()
+        if mcp_pid == 0:
+            os.execve(binary, [binary, "run", "--new"], mcp_env)
+        set_pty_size(mcp_fd, 24, 100)
+        read_all(mcp_fd, 0.8)  # banner
+        os.write(mcp_fd, b"/mcp\r")
+        passive = strip_csi(read_all(mcp_fd, 2.0))
+        expect("rich" in passive and "stdio" in passive and "not started (lazy)" in passive,
+               "m2a /mcp passive status: server not spawned")
+        os.write(mcp_fd, b"/mcp resources rich\r")
+        res_out = strip_csi(read_all(mcp_fd, 5.0))
+        expect("mock://doc/a" in res_out and "mock://doc/c" in res_out,
+               "m2a /mcp resources lists every page (cursor walked)")
+        os.write(mcp_fd, b"/mcp\r")
+        counted = strip_csi(read_all(mcp_fd, 3.0))
+        expect("resources=3" in counted and "prompts=1" in counted,
+               "m2a /mcp shows surface counts once started")
+        os.write(mcp_fd, b"/mcp prompts rich\r")
+        pr_out = strip_csi(read_all(mcp_fd, 3.0))
+        expect("review-code" in pr_out and "run one: /prompt rich/<name>" in pr_out,
+               "m2a /mcp prompts lists names and teaches /prompt")
+        os.write(mcp_fd, b"/prompt rich/review-code code=x=1 lang=python\r")
+        inj = strip_csi(read_all(mcp_fd, 3.0))
+        expect("injected 3 user message(s)" in inj and
+               "1 non-text block(s) downgraded" in inj,
+               "m2a /prompt injects text blocks and downgrades the image block")
+        os.write(mcp_fd, b"\x03\x03")
+        read_all(mcp_fd, 2.0)
+        try:
+            os.waitpid(mcp_pid, 0)
+        except ChildProcessError:
+            pass
+        mfiles = glob.glob(mcp_dir + "/sess/*.json")
+        roles = []
+        if mfiles:
+            roles = [m["role"] for m in json.load(open(mfiles[0]))["messages"]]
+        expect(roles == ["system"] + ["user"] * 3,
+               "m2a prompt messages persist as user-role only (no forged assistant)")
+        subprocess.run(["rm", "-rf", mcp_dir], check=False)
+
     # line-mode (non-TTY) /exit: same save/unlock path, no turn after it
     line_dir = "/tmp/mini_agent_pty_smoke_line"
     subprocess.run(["rm", "-rf", line_dir], check=False)

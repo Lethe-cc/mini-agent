@@ -134,14 +134,21 @@ std::string session_to_markdown(const Session& session);
 // v3 default system prompt (design 009 section 5.5). Static identity +
 // tool etiquette + the live workspace line. `config.system_prompt`:
 // nullopt = this default, "" = disabled (returns empty). Called only when
-// creating a fresh session (empty chat).
+// creating a fresh session (empty chat). M2a: `mcp_surface_hint` names the
+// servers advertising resources/prompts (config-derived, no handshake);
+// non-empty adds one discoverability line to the default prompt. The
+// override path ignores it (verbatim replacement). Callers derive it from
+// config.mcp_servers names (capabilities need a handshake; clients are
+// lazy), so the line is capability-neutral discoverability.
 std::string build_system_prompt(const std::string& workspace, const std::string& model,
-                                const std::optional<std::string>& override_prompt);
+                                const std::optional<std::string>& override_prompt,
+                                const std::string& mcp_surface_hint = {});
 
 // Injects the default system prompt as the first message of an empty
 // chat (no-op when the chat already has messages or the prompt disabled).
 // Returns true when a message was added.
 bool inject_system_prompt(Chat& chat, const std::string& workspace, const std::string& model,
-                          const std::optional<std::string>& override_prompt);
+                          const std::optional<std::string>& override_prompt,
+                          const std::string& mcp_surface_hint = {});
 
 } // namespace mini_agent

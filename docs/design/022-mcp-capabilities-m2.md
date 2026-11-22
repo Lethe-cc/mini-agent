@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 状态：**方向已获批 / M2a 进入实现**（2026-11-22 维护者批复 Q1–Q5，见 §5.6）。本文是 [021](021-mcp-full-client.md) §5.1 M2 的细化设计。M2b（sampling/elicitation）含审批与 UI 行为变化，对应 [ADR 011](../decisions/011-mcp-server-request-approval.md)（**提议，待人工评审**）——其获批前 M2b 不进入实现；M2a（纯出站，零新审批面）随 Q1 批复放行。整体文档逐节人工评审仍未做。
+- 状态：**方向已获批 / M2a 已实现待人工评审**（2026-11-22 维护者批复 Q1–Q5，见 §5.6；M2a 于 2026-11-23 落地并全门禁验收，证据见 §8、as-built 偏差见 §9）。本文是 [021](021-mcp-full-client.md) §5.1 M2 的细化设计。M2b（sampling/elicitation）含审批与 UI 行为变化，对应 [ADR 011](../decisions/011-mcp-server-request-approval.md)（**提议，待人工评审**）——其获批前 M2b 不进入实现；M2a（纯出站，零新审批面）随 Q1 批复放行。整体文档逐节人工评审仍未做。
 - 关联任务：[ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（已接受）；[ADR 011](../decisions/011-mcp-server-request-approval.md)（提议）；021 §5.1"M2 能力扩展"；维护者 Q3 批复"M1 期钉 2025-06-18，M2 再上移"。
 - 核对日期、适用版本或代码修订：2026-11-22，基线 main `de4be80`（022 草案落档）。SDK 事实按 vendored cxxmcp `3c25a8afef0ae77031bcb7a3142bcca67d4cd3d6`（VERSION 1.3.0）头文件/源码实读核对，行号见 §3；全库仍未精读。
 - 人工评审记录：维护者 2026-11-22 对话批复——Q1"认可"（T1/T3 合成工具 + /prompt 注入形态）；Q2"ok"（T4–T6 审批语义，sampling 不设"本会话允许"档位；据此立项 ADR 011 送审，**其文本仍待人审**）；Q3"可以"（T9 加字段不 bump schema_version）；Q4"认可"（T8 版本目标 2025-11-25 + 上游析构缺陷复核前置）；Q5 反问"部分并行更好吗？"——答复并采用**受控部分并行**（§5.6 Q5、§7），M2a 在两种排期下均先行。逐节人工评审未做。
@@ -175,20 +175,35 @@ transport 接收线程                    UI poll 线程（TUI main / CLI 无）
 
 | 项 | 命令/方法 | 结果 |
 | --- | --- | --- |
-| M2a：mock 升级（resources/prompts 面 + list_changed） | tests/mock_mcp_server.py / mock_mcp_http_server.py 扩展；双 mock E2E 新场景 | 未执行（计划） |
-| M2a：合成工具审批/截断/错误折叠回归 | 现有 mcp 单测 + 新增 resources/prompts 场景；四 preset 双环境 CTest | 未执行（计划） |
+| M2a：mock 升级（resources/prompts 面 + list_changed） | tests/mock_mcp_server.py / mock_mcp_http_server.py 各加 `--rich` 模式（resources 两页分页 + list_changed、prompts 含 image 块、未知 uri/name 回 -32602）；双 mock 驱动 pty 新场景 | **通过**（2026-11-23，TUI/CLI 冒烟双后端全绿） |
+| M2a：合成工具审批/截断/错误折叠回归 | mcp_test 新增 8 场景（capability gating / synthetic dispatch / cache+list_changed / error folding / page cap / registry passive lookup / stdio rich E2E / HTTP rich E2E）+ agent_test 提示行断言；四 preset × 双后端 CTest | **通过**（2026-11-23，8/8 组合全绿；既有回归含 default-mock mcp_test 双后端全绿） |
+| M2a：pty 冒烟（TUI /mcp 详情、/prompt 注入、CLI mcp list） | tests/pty_tui_smoke.py 新增 m2a 场景 6 断言；pty_cli_smoke.py 新增 §5.5 mcp list 2 断言；`MINI_AGENT_MCP_BACKEND` 双环境 | **通过**（TUI 201 PASS / CLI 45 PASS × cxxmcp+legacy，0 FAIL） |
+| M2a：冷启动预算 | `python3 tools/cold_start_check.py ./build/linux-gcc-debug/mini-agent --runs 20 --budget-ms 100` | **通过**（--version 中位 4.0ms / ask 5.4ms，n=20，预算 100ms） |
+| M2a：ASan/UBSan | `python3 scripts/cpp_check.py --preset linux-gcc-debug --sanitizers` + legacy 环境 CTest 复跑；clang-tidy 常规构建复核 | **通过**（sanitizer 双后端 CTest 3/3 干净；tidy 0 告警） |
 | M2b：桥死锁/超时/溢出/非交互拒绝 | 新增单测（fake transport 注入入站请求）+ ASan/UBSan + pty TUI 审批流 | 未执行（计划） |
 | M2b：sampling 真实 LLM 冒烟 | 本地 provider 对拍（mock LLM 优先，真实端点人工） | 未执行（计划） |
 | M2c：tasks 状态机全迁移路径 | mock tasks 面 + 020 迁移表逐行对照测试 | 未执行（计划） |
 | 版本上移：协商矩阵（新/旧/拒绝重试） | mock 版本矩阵 + deepwiki 实测重放 + conformance client suite 复跑 | 未执行（计划） |
-| 全量门禁 | `python scripts/check.py --strict-project` + pty/CLI + 冷启动预算 | 未执行（计划） |
+| 全量门禁 | `python scripts/check.py --strict-project` + pty/CLI + 冷启动预算 | **通过**（2026-11-23，M2a 收口；M2b/M2c 部分仍未执行，见上行各项） |
 | 上游析构缺陷可达性复核 | 代码审读 + 压力/超时注入测试（§5.5） | 未执行（计划；M1 期 gdb 证据已归档 .references/conf-diag2/） |
 
 ## 9. 实现偏差与已知限制
 
-（草案期无实现。以下为设计期已识别限制，实施后按 as-built 更新。）
+（M2a 已实现，以下按 as-built 更新，2026-11-23；M2b/M2c 部分仍为设计期识别限制。）
 
-- SDK elicitation 无 handler 时回 Decline 而非 MethodNotFound（client.cpp:1737），与 021 §9 M1 as-built 的概括描述有出入；M1 发空 capabilities 故实际不可达，无行为影响，021 勘误随 M2a 首 PR 顺带登记。
+**M2a as-built 偏差**（相对 §5.1 计划）：
+
+- **合成工具线名用 `server__mcp_resources` / `server__mcp_prompts`**（双下划线），非草案正文的 `server/mcp_resources`：`/` 不在 OpenAI 函数名语法 `^[A-Za-z0-9_-]+$` 内（008 §5.2），沿用既有 MCP 工具净化规则。
+- **合成工具在 `McpClient::list()` 内追加**，不在 build_tool_registry：旗标属 client 实例，注册表组装点拿不到握手结果；list() 是注册表唯一取数口，效果等价（仅 capabilities 旗标真时出现）。执行分发在 `McpClient::call()`（mcp_rpc.cpp:454），审批/预览/截断复用 ToolRuntime 管线不变。
+- **系统提示行 capability-neutral**：`build_system_prompt` 的提示行按"配置了 MCP server"给出（列举 server 名），不按"存在带 resources/prompts 的 server"——握手是惰性的，组 prompt 时能力未知；措辞改为条件式（"If a server offers..."）。`/prompt` 注入恒为 user 角色；非 text 块降级 `[unsupported content: type]` 占位并在 info 行报计数，与 T3 一致。
+- **cxxmcp 适配层走逐页 typed API**（`list_resources_page`/`list_prompts_page`），非草案的 `list_all_*` 内建分页：16 页上限统一由门面 `list_paged` 持有，双后端行为一致（与 tools/list 同款有界遍历）。
+- **read/get 的 down 判定 = transport 死亡或超时**（镜像 tools/call 规则）：JSON-RPC error 回包（如未知 uri -32602）只折叠为错误、不标 down——流仍同步，server 可继续用。list 路径的失败仍标 down（请求失败即不可信），双后端同规则。
+- **缝错误语义**：facade 方法仅在失败时写 `*error`，成功不清空——调用方断言成功前须自行 clear（测试已按此约定）。
+- **MRTR input_required**（PromptsGetResult，SEP-2322）：M2a 钉 2025-06-18 不会出现；防御性折叠为错误（"prompt requires additional input"），不做多轮交互，与草案边界一致。
+- **注册表重名保持先到先得**：合成工具名与显式工具撞名时不覆盖（沿用既有 name-shadowing 规则）。
+- 021 §9 勘误已随本 PR 登记：SDK elicitation 无 handler 回 Decline 而非 MethodNotFound（client.cpp:1737）；M1 发空 capabilities 故不可达，无行为影响。
+
+**M2b/M2c 设计期限制（未变）**：
 - sampling 的 temperature/stop_sequences/include_context 在 M2b 忽略（provider 缝现不支持逐请求覆盖）；审批预览注明。
 - elicitation Url 模式、roots、resource subscribe 实时推送、MRTR 多轮、tasks 跨会话持久化均为明确的非目标/后续项（§2、§5.1、§5.4）。
 - legacy 后端不支持 M2 能力（§7），双轨期开启新能力的 server 在 legacy 下降级。
@@ -197,6 +212,6 @@ transport 接收线程                    UI poll 线程（TUI main / CLI 无）
 
 - [x] 模板结构完整；Q1–Q5 已批复（§5.6），ADR 011 仍为提议未自称获批；逐节人审未做。
 - [x] SDK/项目事实按 vendored SHA 与 main `de4be80` 实读核对（§3 行号）。
-- [x] 验证计划全部标注未执行；无计划冒充结果。
+- [x] M2a 验证已按实测登记（§8，2026-11-23）；M2b/M2c/版本上移各行仍标注未执行，无计划冒充结果。
 - [x] 维护者批复 §5.6 Q1–Q5（2026-11-22）；ADR 011 已立项送审（提议，文本待人审）。
-- [x] docs/design/README.md 状态列已更新（2026-11-22）；M2a 进入 implement-feature 工作流，M2b 待 ADR 011 人审。
+- [x] docs/design/README.md 状态列已更新（2026-11-23）；M2a 已实现待人工评审，M2b 待 ADR 011 人审，版本上移待析构缺陷复核。

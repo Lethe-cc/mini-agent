@@ -10,6 +10,7 @@
 #include "mini_agent/session.hpp"
 #include "mini_agent/provider.hpp"
 #include "mini_agent/tools.hpp"
+#include "mini_agent/mcp.hpp"
 #include "mini_agent/highlight.hpp"
 #include "mini_agent/md.hpp"
 #include "mini_agent/models_dev.hpp"
@@ -29,7 +30,7 @@ bool handle_slash_impl(Ctx& S, std::string_view line) {
             S.screen.commit("commands: /provider <url> · /login [key] · /model <name>");
             S.screen.commit("          /provider list|add <name> [url]|rm <name> (profiles)");
             S.screen.commit("          /login <name> [key] · /model <provider>/<name>");
-            S.screen.commit("          /tools (tool registry) · /mcp (servers) · /cwd [path]");
+            S.screen.commit("          /tools (tool registry) · /mcp [resources|prompts <srv>] · /cwd [path]");
             S.screen.commit("          /approve ask|allowlist|off (tool gate)");
             S.screen.commit("          /compact (summarize history; context relief)");
             S.screen.commit("          /models (list & pick) · /log <path>|off|default");
@@ -40,6 +41,7 @@ bool handle_slash_impl(Ctx& S, std::string_view line) {
             S.screen.commit("          /version (build identity: version · commit · built)");
             S.screen.commit("          /sidebar on|off (tree + changed files)");
             S.screen.commit("          /preview <path> (show a file; .md renders)");
+            S.screen.commit("          /prompt <server>/<name> [k=v...] (mcp prompt)");
             S.screen.commit("          /exit");
             S.screen.commit("Each of /provider /login /model saves on its own;");
             S.screen.commit("configure them in any order, any number of sittings.");
@@ -545,8 +547,14 @@ bool handle_slash_impl(Ctx& S, std::string_view line) {
                     S.config.current.name.empty()
                         ? std::optional<std::string>()
                         : std::optional<std::string>(S.config.current.name);
+                std::string mcp_hint;
+                for (const auto& server : S.config.mcp_servers) {
+                    if (!mcp_hint.empty())
+                        mcp_hint += ", ";
+                    mcp_hint += server.name;
+                }
                 mini_agent::inject_system_prompt(next.chat, S.config.workspace, S.config.current.model,
-                                                 S.config.system_prompt);
+                                                 S.config.system_prompt, mcp_hint);
             } else {
                 auto loaded = S.store.load(target_id, &err);
                 if (!loaded) {
@@ -876,17 +884,241 @@ bool handle_slash_impl(Ctx& S, std::string_view line) {
             S.screen.commit("approval=" + S.approval_policy);
             return true;
         }
-        if (line == "/mcp") {
-            if (S.config.mcp_servers.empty()) {
-                S.screen.commit("mcp servers: (none) · add mcp_servers to config.json");
+        if (line.rfind("/prompt", 0) == 0 &&
+            (line.size() == 7 || line[7] == ' ' || line[7] == '\t')) {
+            // M2a T3 (design 022 §5.1): render a server prompt template
+            // and inject its messages as user-role content. Explicit user
+            // action -- no model round involved, so no approval gate.
+            if (S.worker.joinable())
+                S.worker.join(); // registry access needs the worker idle (008 thread rule)
+            const auto arg = arg_of(line);
+            const auto space = arg.find_first_of(" \t");
+            const std::string target(arg.substr(0, space));
+            const std::string_view rest =
+                space == std::string_view::npos ? std::string_view() : arg.substr(space + 1);
+            const auto slash = target.find('/');
+            if (slash == std::string::npos || slash == 0 || slash + 1 == target.size()) {
+                S.screen.commit("[error] usage: /prompt <server>/<name> [key=value ...]");
                 return true;
             }
+            const std::string server = target.substr(0, slash);
+            const std::string name = target.substr(slash + 1);
+            McpClient* client = S.tool_registry
+                                    ? dynamic_cast<McpClient*>(S.tool_registry->find_by_source(server))
+                                    : nullptr;
+            if (!client) {
+                S.screen.commit("[error] no mcp server '" + sanitize_display(server) +
+                                "' (check config.json mcp_servers, then /tools)");
+                return true;
+            }
+            // k=v pairs become string-valued prompt arguments; quotes are
+            // literal (shell-style stripping is not the TUI contract).
+            nlohmann::json arguments = nlohmann::json::object();
+            std::size_t pos = 0;
+            bool args_ok = true;
+            while (pos < rest.size()) {
+                while (pos < rest.size() && (rest[pos] == ' ' || rest[pos] == '\t'))
+                    ++pos;
+                if (pos >= rest.size())
+                    break;
+                auto end = rest.find_first_of(" \t", pos);
+                if (end == std::string_view::npos)
+                    end = rest.size();
+                const auto token = rest.substr(pos, end - pos);
+                const auto eq = token.find('=');
+                if (eq == std::string_view::npos || eq == 0) {
+                    S.screen.commit("[error] prompt arguments must be key=value pairs");
+                    args_ok = false;
+                    break;
+                }
+                arguments[std::string(token.substr(0, eq))] = std::string(token.substr(eq + 1));
+                pos = end;
+            }
+            if (!args_ok)
+                return true;
+            std::string error;
+            const std::string result = client->get_prompt(name, arguments.dump(), &error);
+            if (!error.empty()) {
+                S.screen.commit("[error] prompt get failed: " + sanitize_display(error));
+                return true;
+            }
+            const auto parsed = nlohmann::json::parse(result, nullptr, false);
+            if (!parsed.is_object()) {
+                S.screen.commit("[error] prompt returned no messages");
+                return true;
+            }
+            const auto messages = parsed.find("messages");
+            if (messages == parsed.end() || !messages->is_array() || messages->empty()) {
+                S.screen.commit("[error] prompt returned no messages");
+                return true;
+            }
+            int injected = 0;
+            int downgraded = 0;
+            for (const auto& message : *messages) {
+                if (!message.is_object())
+                    continue;
+                const auto content = message.find("content");
+                if (content == message.end() || !content->is_object())
+                    continue;
+                const auto type = content->find("type");
+                std::string text;
+                if (type != content->end() && type->is_string() &&
+                    type->get_ref<const std::string&>() == "text") {
+                    if (auto t = content->find("text"); t != content->end() && t->is_string())
+                        text = t->get<std::string>();
+                } else {
+                    // T3 downgrade: the chat seam is text-only; non-text
+                    // blocks become explicit placeholders, never dropped
+                    // silently (design 022 §5.1).
+                    text = "[unsupported content: " +
+                           (type != content->end() && type->is_string()
+                                ? type->get<std::string>()
+                                : std::string("unknown")) +
+                           "]";
+                    ++downgraded;
+                }
+                if (text.empty())
+                    continue;
+                // Prompt role is template metadata; injection is always
+                // user-role (an MCP server must not forge assistant turns).
+                Message injected_message;
+                injected_message.role = Role::User;
+                injected_message.content = std::move(text);
+                S.session.chat.add(std::move(injected_message));
+                ++injected;
+            }
+            if (injected == 0) {
+                S.screen.commit("[error] prompt returned no usable messages");
+                return true;
+            }
+            S.screen.commit("[info] prompt " + sanitize_display(target) + ": injected " +
+                            std::to_string(injected) + " user message(s)" +
+                            (downgraded > 0 ? " (" + std::to_string(downgraded) +
+                                                  " non-text block(s) downgraded to placeholders)"
+                                            : ""));
+            std::string save_error;
+            if (!S.temp_mode && !S.store.save(S.session, &save_error))
+                S.screen.commit("[warn] session save failed: " + save_error);
+            return true;
+        }
+        if (line.rfind("/mcp", 0) == 0 &&
+            (line.size() == 4 || line[4] == ' ' || line[4] == '\t')) {
+            // M2a T3 (design 022 §5.1): `/mcp` = passive status (never
+            // starts a server, lazy contract 008 §5.5);
+            // `/mcp resources|prompts <server>` = explicit listing (starts
+            // the named server on demand, like /tools does for tools).
+            const auto arg = arg_of(line);
+            const auto space = arg.find_first_of(" \t");
+            const std::string sub(arg.substr(0, space));
+            const std::string server_name(space == std::string_view::npos
+                                              ? std::string()
+                                              : std::string(arg.substr(space + 1)));
+            if (!sub.empty() && sub != "resources" && sub != "prompts") {
+                S.screen.commit("[error] usage: /mcp [resources|prompts <server>]");
+                return true;
+            }
+            if (!sub.empty()) {
+                if (server_name.empty()) {
+                    S.screen.commit("[error] usage: /mcp " + sub + " <server>");
+                    return true;
+                }
+                if (S.worker.joinable())
+                    S.worker.join(); // registry access needs the worker idle
+                auto* client = S.tool_registry
+                                   ? dynamic_cast<McpClient*>(
+                                         S.tool_registry->find_by_source(server_name))
+                                   : nullptr;
+                if (!client) {
+                    S.screen.commit("[error] no mcp server '" + sanitize_display(server_name) +
+                                    "' (check config.json mcp_servers, then /tools)");
+                    return true;
+                }
+                std::string error;
+                const bool resources = sub == "resources";
+                const std::string listed = resources ? client->list_resources(&error)
+                                                     : client->list_prompts(&error);
+                if (!error.empty()) {
+                    S.screen.commit("[error] " + sub + " list failed: " + sanitize_display(error));
+                    return true;
+                }
+                const auto parsed = nlohmann::json::parse(listed, nullptr, false);
+                if (!parsed.is_array() || parsed.empty()) {
+                    S.screen.commit(sub + " \u00b7 " + sanitize_display(server_name) + ": (none)");
+                    return true;
+                }
+                for (const auto& entry : parsed) {
+                    if (!entry.is_object())
+                        continue;
+                    std::string row;
+                    if (resources) {
+                        const auto uri = entry.find("uri");
+                        const auto name = entry.find("name");
+                        row = (uri != entry.end() && uri->is_string() ? uri->get<std::string>()
+                                                                      : std::string("?"));
+                        if (name != entry.end() && name->is_string())
+                            row += " \u00b7 " + name->get<std::string>();
+                    } else {
+                        const auto name = entry.find("name");
+                        row = name != entry.end() && name->is_string()
+                                  ? name->get<std::string>()
+                                  : std::string("?");
+                        const auto desc = entry.find("description");
+                        if (desc != entry.end() && desc->is_string()) {
+                            const auto& text = desc->get_ref<const std::string&>();
+                            row += " \u00b7 " + text.substr(0, text.find('\n'));
+                        }
+                    }
+                    S.screen.commit("  " + sanitize_display(row));
+                }
+                if (!resources)
+                    S.screen.commit("run one: /prompt " + sanitize_display(server_name) +
+                                    "/<name> [k=v...]");
+                return true;
+            }
+            if (S.config.mcp_servers.empty()) {
+                S.screen.commit("mcp servers: (none) \u00b7 add mcp_servers to config.json");
+                return true;
+            }
+            if (S.worker.joinable())
+                S.worker.join(); // client state reads need the worker idle
             for (const auto& server : S.config.mcp_servers) {
+                std::string surface;
+                // PASSIVE lookup: find_by_source never calls list(), so
+                // status lines cannot spawn/handshake a server (lazy
+                // contract, design 008 §5.5). Counts are listed only for
+                // ALREADY-initialized clients (metadata cache; a running
+                // server may be queried, an unstarted one never is).
+                auto* client = S.tool_registry
+                                   ? dynamic_cast<McpClient*>(
+                                         S.tool_registry->find_by_source(server.name))
+                                   : nullptr;
+                if (client && client->initialized()) {
+                    std::string error;
+                    if (client->has_resources()) {
+                        const auto listed =
+                            nlohmann::json::parse(client->list_resources(&error), nullptr, false);
+                        surface += " \u00b7 resources=" +
+                                   (listed.is_array() ? std::to_string(listed.size())
+                                                      : std::string("?"));
+                    }
+                    if (client->has_prompts()) {
+                        const auto listed =
+                            nlohmann::json::parse(client->list_prompts(&error), nullptr, false);
+                        surface += " \u00b7 prompts=" +
+                                   (listed.is_array() ? std::to_string(listed.size())
+                                                      : std::string("?"));
+                    }
+                } else if (client && !client->alive()) {
+                    surface = " \u00b7 down";
+                }
+                if (surface.empty())
+                    surface = " \u00b7 not started (lazy)";
                 S.screen.commit("  " + server.name + " \u00b7 " + server.transport + "\u2192" +
                               (server.transport == "http" ? Logger::redact_url(server.url)
-                                                          : sanitize_display(server.command)));
+                                                          : sanitize_display(server.command)) +
+                              surface);
             }
-            S.screen.commit("restart servers after config edits: /tools · down marks clear per call");
+            S.screen.commit("list details: /mcp resources|prompts <server> \u00b7 config edits: /tools");
             return true;
         }
         if (line == "/exit")

@@ -489,8 +489,19 @@ int cmd_run(int argc, char** argv) {
         session.meta.provider = config.current.name.empty()
                                     ? std::optional<std::string>{}
                                     : std::optional<std::string>(config.current.name);
+        // M2a hint (design 022 §5.1): one pointer line naming configured
+        // MCP servers. Capabilities need a handshake and clients are lazy,
+        // so the hint is config-derived and capability-neutral; the model
+        // discovers the actual surface via the synthetic tools after
+        // /tools or a first call.
+        std::string mcp_hint;
+        for (const auto& server : config.mcp_servers) {
+            if (!mcp_hint.empty())
+                mcp_hint += ", ";
+            mcp_hint += server.name;
+        }
         mini_agent::inject_system_prompt(session.chat, config.workspace, config.current.model,
-                                         config.system_prompt);
+                                         config.system_prompt, mcp_hint);
     } else if (!reused) {
         if (!mini_agent::session_id_is_safe(session_id)) {
             std::cerr << "error: unsafe session id\n";

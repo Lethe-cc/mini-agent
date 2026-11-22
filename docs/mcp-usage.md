@@ -76,7 +76,10 @@ mini-agent run [--session ID] [--new] [--temp] [--mcp NAME=SPEC]
   `y` 放行本次 · `n` 拒绝（以 error Tool 消息告知模型）· `a` 本会话该工具名免问 · `?` 展开完整参数 · Esc/Ctrl-C 拒绝并中断本轮。
   120 秒无人按键自动按拒绝处理，worker 不会永久阻塞。
 - 执行完成打历史行：`[tool] dev__read_wiki_contents [ok 62300ms · 45 KB]`（或 `[error …]`、`[denied]`）。
-- `/tools`：列出注册表（内置 + 每个在线 server 的工具、来源），并强制握手/重列——改完配置免重启的生效手段；`/mcp`：列出配置的 server。
+- `/tools`：列出注册表（内置 + 每个在线 server 的工具、来源），并强制握手/重列——改完配置免重启的生效手段；`/mcp`：列出配置的 server（已握手的 server 附 `resources=N · prompts=M` 计数，未启动的显示 `not started (lazy)`）。
+- **resources/prompts（M2a，022）**：server 声明对应能力后，工具列表自动出现 `server__mcp_resources`（action=list|read）与 `server__mcp_prompts`（action=list|get）合成工具——模型可自主发现/读取资源、渲染 prompt 模板，审批与截断和普通工具完全一致。人也可以直接操作：
+  - `/mcp resources <server>` / `/mcp prompts <server>`：列出资源/模板清单（惰性启动 server）。
+  - `/prompt <server>/<name> [k=v ...]`：渲染 prompt 模板并把 messages 以 user 角色注入会话（随后正常发送）；非文本块（image/audio 等）降级为 `[unsupported content: type]` 占位并在 info 行说明；参数值一律按字符串传给 server。
 - **`/approve [ask|allowlist|off]`**：运行时查看/切换审批档位并持久化到 config.json（v3.1；worker 空闲时生效）。`off` 切换时回显警示行且状态行常显红色 `auto-tools`；`allowlist` 且名单为空时所有工具仍会询问（名单在 config.json `tool_allowlist` 维护）。临时覆盖也可用环境变量 `MINI_AGENT_TOOL_APPROVAL`。想"只免问这个工具"就按 `a`（会话级，不落盘）。注意 `a` 是**按工具名免问、不看参数**：对 `run_bash` 意味着本会话任意 shell 命令都不再询问（按下时 TUI 回显警示行）；不可信场景请逐次 `y` 或用 allowlist 档。
 - `tool_approval=off` 时状态行常显红色 `auto-tools`。
 - 深链提醒：deepwiki 类 server 的 `read_wiki_contents` 在服务端就是重操作（30–120s 常见），看状态行秒数在涨即正常；先用 `read_wiki_structure`/`ask_wiki_question` 通常更快。工具执行中的 HTTP 调用暂不可 Ctrl-C 中断（进度/取消属 v2 非目标，008 §2）。
@@ -107,4 +110,4 @@ mini-agent run [--session ID] [--new] [--temp] [--mcp NAME=SPEC]
 
 ## 8. 未覆盖（当前明确排除）
 
-resources/prompts/sampling/elicitation/roots、HTTP 侧 OAuth 与服务器发起请求（GET 常开流）、progress/取消通知、并行 tool_calls、自定义 IPC 传输（抽象已就位，实现可后补）。列表见 008 §2/§9。
+sampling/elicitation/tasks（022 M2b/M2c，前者待 ADR 011 人审）、roots、resource 订阅实时推送、prompt 多轮追加输入（MRTR）、HTTP 侧 OAuth 与服务器发起请求（GET 常开流）、progress/取消通知、并行 tool_calls、自定义 IPC 传输（抽象已就位，实现可后补）。resources/prompts 已由 M2a 覆盖（§4）。列表见 008 §2/§9 与 022 §2。

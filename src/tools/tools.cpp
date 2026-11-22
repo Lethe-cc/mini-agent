@@ -67,6 +67,16 @@ ToolRuntime* ToolRegistry::find(const std::string& name) {
     return nullptr;
 }
 
+ToolRuntime* ToolRegistry::find_by_source(const std::string& source) {
+    // Deliberately skips alive()/list(): both can mutate or start an MCP
+    // client. The caller (read-only UI) interprets the runtime state.
+    for (auto& runtime : runtimes_) {
+        if (runtime->source_name() == source)
+            return runtime.get();
+    }
+    return nullptr;
+}
+
 std::string ToolRegistry::preview(const ToolCall& call) {
     auto* runtime = find(call.name);
     return runtime ? runtime->preview(call) : std::string();

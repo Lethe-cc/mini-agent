@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <map>
@@ -76,12 +77,20 @@ class McpSession {
     virtual void set_protocol_version(const std::string& version) {
         (void)version;
     }
+    // M2a (design 022 §5.1): notifications/*/list_changed observer. The
+    // callback runs on a TRANSPORT thread and must only touch atomics;
+    // kind is "tools", "resources" or "prompts". No-op by default.
+    virtual void set_list_changed_callback(std::function<void(std::string_view)> cb) {
+        (void)cb;
+    }
 };
 
 // JSON-RPC 2.0 client over one transport: monotonic ids, strictly serial
-// in-flight requests (v2.0 design), foreign-id messages ignored (server
-// notifications/requests are outside our capability set and folded away,
-// design 008 section 5.2). Not a general pool -- one connection per server.
+// in-flight requests (v2.0 design), foreign-id messages ignored except
+// the three list_changed notifications, which reach the observer installed
+// via set_list_changed_callback (design 022 §5.1); server requests are
+// outside our capability set and folded away (design 008 section 5.2).
+// Not a general pool -- one connection per server.
 class McpRpcClient final : public McpSession {
   public:
     explicit McpRpcClient(std::unique_ptr<McpTransport> transport)
@@ -101,10 +110,12 @@ class McpRpcClient final : public McpSession {
     bool notify(std::string_view method, const std::string& params_json,
                 std::string* error) override;
     void set_protocol_version(const std::string& version) override;
+    void set_list_changed_callback(std::function<void(std::string_view)> cb) override;
 
   private:
     std::unique_ptr<McpTransport> transport_;
     long long next_id_ = 1;
+    std::function<void(std::string_view)> list_changed_cb_;
 };
 
 // One discovered tool from tools/list.
@@ -128,6 +139,8 @@ struct McpToolInfo {
 // by exactly one caller at a time (CLI: the turn; TUI: the worker between
 // joins, main thread rebuilding only after join). list()/call()/restart()
 // mutate the cache and transport; concurrent use is a contract violation.
+// Sole exception: list_changed notifications set atomic invalidation flags
+// from a transport thread (M2a, design 022 §5.1) -- never anything else.
 class McpClient final : public ToolRuntime {
   public:
     McpClient(McpServerConfig config, TransportFactory factory,
@@ -141,6 +154,9 @@ class McpClient final : public ToolRuntime {
     ToolResult call(const ToolCall& call, const ShouldAbort& should_abort) override;
     bool alive() const override {
         return !down_;
+    }
+    std::string source_name() const override {
+        return config_.name;
     }
 
     // Start + handshake; idempotent. False keeps the client usable but
@@ -157,6 +173,33 @@ class McpClient final : public ToolRuntime {
     bool supports_tools() const noexcept {
         return tools_capability_;
     }
+    // M2a capability probes (design 022 §5.1): true only after a handshake
+    // that advertised the capability. The synthetic tools/list surface
+    // and the system-prompt hint gate on these.
+    bool has_resources() const noexcept {
+        return resources_capability_;
+    }
+    bool has_prompts() const noexcept {
+        return prompts_capability_;
+    }
+    bool initialized() const noexcept {
+        return initialized_;
+    }
+
+    // M2a resource/prompt seam (design 022 §5.1). JSON strings in/out --
+    // the header stays nlohmann-free. All lazy (ensure_started on first
+    // use), all failures folded into *error, never thrown. list_* return
+    // the aggregated metadata array (bounded 16-page walk, same cap as
+    // tools/list); cached until a list_changed notification or restart.
+    // read_resource returns the raw "contents" array; get_prompt returns
+    // the raw prompts/get result. args_json must be a JSON object ("{}"
+    // or empty = no arguments).
+    std::string list_resources(std::string* error);
+    std::string read_resource(const std::string& uri, std::string* error);
+    std::string list_prompts(std::string* error);
+    std::string get_prompt(const std::string& name, const std::string& args_json,
+                           std::string* error);
+
     // Last startup/handshake error text for UI display (never contains
     // bearer tokens: the transport layer composes these messages).
     const std::string& last_error() const noexcept {
@@ -168,6 +211,14 @@ class McpClient final : public ToolRuntime {
     // Registry-visible wire name for a cached server tool: namespaced with
     // the safe separator and sanitized; original kept in wire_to_remote_.
     std::string cache_wire_name(const McpToolInfo& info);
+    // One cached list walk (16 pages max) over resources/list or
+    // prompts/list; item_key is the array member ("resources"/"prompts").
+    std::string list_paged(std::string_view method, std::string_view item_key,
+                           std::string* cache, std::atomic<bool>& stale,
+                           std::string* error);
+    // Synthetic <server>/mcp_resources|mcp_prompts dispatch (action
+    // list|read / list|get); never sent to the remote tools/call path.
+    ToolResult call_synthetic(const ToolCall& call, bool resources);
 
     McpServerConfig config_;
     TransportFactory factory_;
@@ -183,6 +234,17 @@ class McpClient final : public ToolRuntime {
     bool cache_valid_ = false;
     // Wire name (registry-visible, [A-Za-z0-9_-]) -> original server name.
     std::map<std::string, std::string> wire_to_remote_;
+    // M2a state. Capability flags follow tools_capability_ (owner thread
+    // only). List caches hold aggregated JSON arrays; the stale flags are
+    // written by the transport-thread notification observer and read by
+    // the owner, hence atomic. Content is NEVER cached (design 022 T2).
+    bool resources_capability_ = false;
+    bool prompts_capability_ = false;
+    std::string resources_cache_;
+    std::string prompts_cache_;
+    std::atomic<bool> tools_stale_{false};
+    std::atomic<bool> resources_stale_{false};
+    std::atomic<bool> prompts_stale_{false};
 };
 
 // Feed the negotiated protocol version into an HTTP transport so

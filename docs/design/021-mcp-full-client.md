@@ -139,7 +139,7 @@ M0 spike 环境（2026-11-21，Debian Linux）：GCC 14.2.0 / Clang 19.1.7，CMa
 - **stdio 子进程管理重复**：`StdioBridgeTransport` 的 spawn/EOF-drain/kill 逻辑从 mcp_stdio.cpp 复制而非抽公共层——M1 不动 legacy 文件的代价，M3 删 legacy 时随之收敛。
 - **DELETE 会话终止**：cxxmcp `close()` 走 SDK `stop()`（HTTP 发 DELETE 显式终止会话）；legacy 从不做 DELETE。更合规范，接受。
 - **SSE 重连**：SDK GET 流重连间隔 250ms、无限次（http_transport.cpp:848）；legacy POST→GET 补偿路径重连一次。回放场景内无可见差异。
-- **服务端发起请求**：M1 client capabilities 置空（tools-only），SDK 对 inbound server-request 回 MethodNotFound；sampling/elicitation 的 handler 桥接属 M2（§5.3）。
+- **服务端发起请求**：M1 client capabilities 置空（tools-only），SDK 对 inbound server-request 回 MethodNotFound；sampling/elicitation 的 handler 桥接属 M2（§5.3）。**勘误（M2a，2026-11-23）**：概括有误——SDK 对无 handler 的 `elicitation/create` 实际回 **Decline**（`action="decline"`，client.cpp:1737）而非 MethodNotFound；M1 发空 capabilities，规范服务端不应发起该请求，路径不可达，无行为影响。详见 022 §9。
 - **json 双拷贝**：vendored SDK 自带上游 patched nlohmann v3.12.0，项目根为 unpatched v3.12.0；include 顺序保证各 TU 只见一份（vendored README 记录）。布局兼容、无 ODR 交叉，M3 后仍随 SDK 存续。
 - **vendoring 裁剪比 §5.2 规划更小**：handler/peer/service 属 server 依赖链，未入库（56 文件清单见 third_party/cxxmcp/README）；上游 httplib 用户文档 README 因链接未入库文件被 Markdown 门禁拒绝，未入库（LICENSE/来源记录保留）。
 - **-Werror/tidy 豁免方式**：vendored 目标经 `INTERFACE_SYSTEM_INCLUDE_DIRECTORIES` 标记 SYSTEM（`cdd4b8a`），沿用 nlohmann/md4c 先例；vendored 文件零改动。

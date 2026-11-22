@@ -2,6 +2,8 @@
 
 #include <cxxmcp/client/client.hpp>
 #include <cxxmcp/client/http_transport.hpp>
+#include <cxxmcp/protocol/prompt.hpp>
+#include <cxxmcp/protocol/resource.hpp>
 #include <cxxmcp/protocol/serialization.hpp>
 #include <cxxmcp/request.hpp>
 
@@ -13,6 +15,7 @@
 #include <csignal>
 #include <cstring>
 #include <fcntl.h>
+#include <mutex>
 #include <poll.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
@@ -149,8 +152,11 @@ class StdioBridgeTransport final : public client::Transport {
     mcp::core::Result<Unit> start(client::TransportRequestHandler request_handler,
                                   client::TransportNotificationHandler notification_handler)
         override {
-        (void)request_handler;
-        (void)notification_handler; // inbound server requests: capability none
+        (void)request_handler; // inbound server requests: capability none
+        // M2a: keep the SDK notification dispatcher so folded id-less lines
+        // reach the list_changed observers (design 022 §5.1). The bridge is
+        // synchronous: it fires on the owner thread inside await_response.
+        notification_handler_ = std::move(notification_handler);
         std::string error;
         if (!spawn(&error))
             return failure<Unit>(protocol::ErrorCode::InternalError, error);
@@ -251,8 +257,16 @@ class StdioBridgeTransport final : public client::Transport {
                                                           "mcp server sent a non-JSON-RPC line");
             auto id_it = reply.find("id");
             if (id_it == reply.end() || !id_it->is_number_integer() ||
-                !id_matches(*id_it, id))
+                !id_matches(*id_it, id)) {
+                if (id_it == reply.end() && notification_handler_) {
+                    // Id-less line = notification: hand it to the SDK
+                    // dispatcher (list_changed etc); unknown methods are
+                    // ignored there. Server requests WITH an id stay folded.
+                    if (auto notification = protocol::parse_notification(*next))
+                        (void)notification_handler_(*notification);
+                }
                 continue;
+            }
             auto parsed = protocol::parse_response(*next);
             if (!parsed)
                 return mcp::core::unexpected(parsed.error());
@@ -361,6 +375,7 @@ class StdioBridgeTransport final : public client::Transport {
     }
 
     McpServerConfig config_;
+    client::TransportNotificationHandler notification_handler_;
     std::chrono::milliseconds deadline_ms_{10000};
     pid_t child_ = -1;
     int to_child_ = -1;
@@ -429,9 +444,21 @@ class CxxmcpSession final : public McpSession {
             stdio_ = bridge.get();
             client_ = std::make_unique<client::Client>(std::move(bridge));
         }
-        // Tools-only client, exactly like the legacy handshake: without
-        // this the SDK advertises roots/sampling/elicitation by default.
+        // Read-only capabilities client, exactly like the legacy handshake:
+        // without this the SDK advertises roots/sampling/elicitation by
+        // default (M2b adds the server-request bridge, design 022 §5.2).
         client_->set_capabilities(protocol::ClientCapabilities{});
+        // M2a observers: HTTP notifications arrive on the SSE receive
+        // thread, stdio on the owner thread. The callback only stores an
+        // atomic stale flag in the facade (design 022 §5.1).
+        const auto forward = [this](const char* kind) {
+            std::lock_guard<std::mutex> lock(list_changed_mutex_);
+            if (list_changed_cb_)
+                list_changed_cb_(kind);
+        };
+        client_->on_tool_list_changed([forward] { forward("tools"); });
+        client_->on_resource_list_changed([forward] { forward("resources"); });
+        client_->on_prompt_list_changed([forward] { forward("prompts"); });
         started_ = true;
         return true;
     }
@@ -448,7 +475,14 @@ class CxxmcpSession final : public McpSession {
         started_ = false;
         dead_ = true;
         if (client_)
-            client_->stop(); // stdio: EOF-drain + kill; HTTP: DELETE + reset
+            client_->stop(); // stdio: EOF-drain + kill; HTTP: DELETE + SSE join
+        // Detach AFTER stop(): the HTTP receive thread is joined by then,
+        // so no observer can be mid-call. The mutex closes the remaining
+        // window for stateless/edge paths (design 022 §5.1 shutdown order).
+        {
+            std::lock_guard<std::mutex> lock(list_changed_mutex_);
+            list_changed_cb_ = {};
+        }
         client_.reset();
         stdio_ = nullptr;
         http_ = nullptr;
@@ -488,6 +522,77 @@ class CxxmcpSession final : public McpSession {
             }
             if (result_json)
                 *result_json = payload->dump();
+            return true;
+        }
+
+        // M2a typed surface (design 022 §5.1): one page per request; the
+        // facade owns the 16-page cap on both backends. Typed calls stamp
+        // the negotiated HTTP version themselves (auto-remembered).
+        if (method == "resources/list" || method == "prompts/list") {
+            auto page_params = protocol::paginated_request_params_from_json(params);
+            if (!page_params) {
+                if (error)
+                    *error = "rpc error " +
+                             std::to_string(static_cast<int>(protocol::ErrorCode::InvalidParams)) +
+                             ": pagination params must be an object with a string cursor";
+                return false;
+            }
+            if (method == "resources/list") {
+                auto payload = client_->list_resources_page(*page_params);
+                if (!payload) {
+                    map_error(payload.error(), method, error);
+                    return false;
+                }
+                if (result_json)
+                    *result_json = protocol::resources_list_result_to_json(*payload).dump();
+            } else {
+                auto payload = client_->list_prompts_page(*page_params);
+                if (!payload) {
+                    map_error(payload.error(), method, error);
+                    return false;
+                }
+                if (result_json)
+                    *result_json = protocol::prompts_list_result_to_json(*payload).dump();
+            }
+            return true;
+        }
+        if (method == "resources/read") {
+            auto uri = params.find("uri");
+            if (uri == params.end() || !uri->is_string()) {
+                if (error)
+                    *error = "rpc error " +
+                             std::to_string(static_cast<int>(protocol::ErrorCode::InvalidParams)) +
+                             ": resources/read requires a uri string";
+                return false;
+            }
+            auto payload = client_->read_resource(uri->get_ref<const std::string&>());
+            if (!payload) {
+                map_error(payload.error(), method, error);
+                return false;
+            }
+            if (result_json)
+                *result_json = protocol::resources_read_result_to_json(*payload).dump();
+            return true;
+        }
+        if (method == "prompts/get") {
+            auto name = params.find("name");
+            if (name == params.end() || !name->is_string()) {
+                if (error)
+                    *error = "rpc error " +
+                             std::to_string(static_cast<int>(protocol::ErrorCode::InvalidParams)) +
+                             ": prompts/get requires a name string";
+                return false;
+            }
+            protocol::Json arguments = protocol::Json::object();
+            if (auto a = params.find("arguments"); a != params.end() && a->is_object())
+                arguments = *a;
+            auto payload = client_->get_prompt(name->get_ref<const std::string&>(), arguments);
+            if (!payload) {
+                map_error(payload.error(), method, error);
+                return false;
+            }
+            if (result_json)
+                *result_json = protocol::prompts_get_result_to_json(*payload).dump();
             return true;
         }
 
@@ -539,6 +644,11 @@ class CxxmcpSession final : public McpSession {
         negotiated_version_ = version;
         if (http_)
             http_->set_negotiated_protocol_version(version);
+    }
+
+    void set_list_changed_callback(std::function<void(std::string_view)> cb) override {
+        std::lock_guard<std::mutex> lock(list_changed_mutex_);
+        list_changed_cb_ = std::move(cb);
     }
 
   private:
@@ -627,6 +737,10 @@ class CxxmcpSession final : public McpSession {
     std::int64_t next_id_ = 1;
     bool started_ = false;
     bool dead_ = false;
+    // Guards cb lifetime against the HTTP SSE receive thread; the callback
+    // itself only stores atomics (design 022 §5.1).
+    std::mutex list_changed_mutex_;
+    std::function<void(std::string_view)> list_changed_cb_;
 };
 
 } // namespace

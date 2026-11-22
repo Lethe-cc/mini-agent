@@ -46,6 +46,12 @@ class ToolRuntime {
     virtual bool alive() const {
         return true;
     }
+    // M2a (design 022 §5.1): source tag matching ToolDefinition::source
+    // ("builtin" or the MCP server name). Passive -- no I/O, no state
+    // change; enables ToolRegistry::find_by_source without list().
+    virtual std::string source_name() const {
+        return "builtin";
+    }
     // v3 (design 009 section 5.3): optional human-readable preview shown
     // in the approval block instead of the bare argument summary (file
     // writes and commits show a unified diff / staged summary). Read-only
@@ -88,6 +94,13 @@ class ToolRegistry {
     std::vector<ToolDefinition> list();
     // Runtime owning `name`, or nullptr.
     ToolRuntime* find(const std::string& name);
+
+    // M2a (design 022 §5.1): first runtime claiming `source`, or nullptr.
+    // PASSIVE: never calls runtime->list(), so it cannot trigger an MCP
+    // lazy start -- read-only UI surfaces (/mcp, /prompt) use this while
+    // find()/list() would spawn/handshake every server. Dynamic type via
+    // dynamic_cast; same owner-thread contract as find().
+    ToolRuntime* find_by_source(const std::string& source);
 
     // v3: delegates to the owning runtime's preview() (empty when the
     // tool has none or the name is unknown). Callers must honor the same

@@ -17,6 +17,18 @@ bool negotiable_version(std::string_view version) {
     return version == "2025-06-18" || version == "2025-03-26" || version == "2024-11-05";
 }
 
+// M2a (design 022 §5.1): kind carried by a notifications/<kind>/list_changed
+// line, empty for anything else. Shared by both backends' observers.
+std::string_view list_changed_kind(std::string_view method) {
+    if (method == "notifications/tools/list_changed")
+        return "tools";
+    if (method == "notifications/resources/list_changed")
+        return "resources";
+    if (method == "notifications/prompts/list_changed")
+        return "prompts";
+    return {};
+}
+
 std::string rpc_error_text(const nlohmann::json& reply) {
     const auto error = reply.find("error");
     if (error == reply.end() || !error->is_object())
@@ -105,10 +117,19 @@ bool McpRpcClient::request(std::string_view method, const std::string& params_js
         }
         // Match by id; anything else is a server notification or a
         // server-initiated request (unsupported capability: ignore per
-        // design 008 section 5.2).
+        // design 008 section 5.2). Exception: the three list_changed
+        // notifications feed the M2a observer (design 022 §5.1).
         auto id_it = reply.find("id");
-        if (id_it == reply.end() || !id_it->is_number_integer() || id_it->get<long long>() != id)
+        if (id_it == reply.end() || !id_it->is_number_integer() || id_it->get<long long>() != id) {
+            if (list_changed_cb_ && id_it == reply.end()) {
+                if (auto m = reply.find("method"); m != reply.end() && m->is_string()) {
+                    const auto kind = list_changed_kind(m->get_ref<const std::string&>());
+                    if (!kind.empty())
+                        list_changed_cb_(kind);
+                }
+            }
             continue;
+        }
         if (reply.contains("error")) {
             if (error)
                 *error = rpc_error_text(reply);
@@ -137,6 +158,10 @@ bool McpRpcClient::notify(std::string_view method, const std::string& params_jso
 
 void McpRpcClient::set_protocol_version(const std::string& version) {
     set_http_transport_version(*transport_, version);
+}
+
+void McpRpcClient::set_list_changed_callback(std::function<void(std::string_view)> cb) {
+    list_changed_cb_ = std::move(cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +212,18 @@ bool McpClient::ensure_started(std::string* error) {
             }
             rpc_ = std::make_unique<McpRpcClient>(std::move(transport));
         }
+        // M2a observer (design 022 §5.1): list_changed notifications only
+        // set atomic flags; caches re-fetch on the next owner-thread list.
+        // May fire from a transport thread (cxxmcp) or inline while the
+        // owner blocks in recv (legacy) -- atomic-only is safe for both.
+        rpc_->set_list_changed_callback([this](std::string_view kind) {
+            if (kind == "tools")
+                tools_stale_.store(true, std::memory_order_relaxed);
+            else if (kind == "resources")
+                resources_stale_.store(true, std::memory_order_relaxed);
+            else if (kind == "prompts")
+                prompts_stale_.store(true, std::memory_order_relaxed);
+        });
     }
     std::string start_error;
     if (!rpc_->start(&start_error)) {
@@ -211,7 +248,9 @@ bool McpClient::ensure_started(std::string* error) {
 bool McpClient::handshake(std::string* error) {
     nlohmann::json params;
     params["protocolVersion"] = kPreferredVersion;
-    params["capabilities"] = nlohmann::json::object(); // tools-only client
+    // Read-only capabilities client: no roots/sampling/elicitation offered
+    // (M2b adds the server-request bridge, design 022 §5.2).
+    params["capabilities"] = nlohmann::json::object();
     params["clientInfo"]["name"] = "mini-agent";
     params["clientInfo"]["version"] = "0.2";
 
@@ -240,6 +279,8 @@ bool McpClient::handshake(std::string* error) {
     rpc_->set_protocol_version(negotiated_version_);
     if (auto caps = parsed.find("capabilities"); caps != parsed.end() && caps->is_object()) {
         tools_capability_ = caps->find("tools") != caps->end();
+        resources_capability_ = caps->find("resources") != caps->end();
+        prompts_capability_ = caps->find("prompts") != caps->end();
     }
     // notifications/initialized: mandatory client follow-up.
     std::string notify_error;
@@ -252,92 +293,98 @@ bool McpClient::handshake(std::string* error) {
 }
 
 void McpClient::restart() noexcept {
-    if (rpc_)
+    // Detach the observer BEFORE closing: a transport thread may still be
+    // draining notifications while stop() runs, and the callback captures
+    // `this` (design 022 §5.1 shutdown order).
+    if (rpc_) {
+        rpc_->set_list_changed_callback({});
         rpc_->close();
+    }
     rpc_.reset();
     down_ = false;
     initialized_ = false;
     tools_capability_ = false;
+    resources_capability_ = false;
+    prompts_capability_ = false;
     negotiated_version_.clear();
     last_error_.clear();
     cache_valid_ = false;
     tool_cache_.clear();
+    resources_cache_.clear();
+    prompts_cache_.clear();
+    tools_stale_.store(false, std::memory_order_relaxed);
+    resources_stale_.store(false, std::memory_order_relaxed);
+    prompts_stale_.store(false, std::memory_order_relaxed);
 }
 
 std::vector<ToolDefinition> McpClient::list() {
     std::vector<ToolDefinition> out;
     if (down_)
         return out;
+    // M2a: a list_changed notification invalidated the tool cache; the
+    // next listing re-walks pages (design 022 §5.1). Owner thread only.
+    if (tools_stale_.exchange(false, std::memory_order_relaxed))
+        cache_valid_ = false;
     // Hot path: with a valid cache we NEVER touch the transport. run_turn
     // asks the registry for tools every provider round; without this short
     // circuit a multi-round turn would pay one extra tools/list round-trip
     // per round (found in the 2026-11-05 implementation review).
-    if (cache_valid_) {
-        for (const auto& info : tool_cache_) {
-            ToolDefinition definition;
-            definition.name = cache_wire_name(info);
-            definition.description = info.description;
-            definition.input_schema_json = info.input_schema_json;
-            definition.source = config_.name;
-            out.push_back(std::move(definition));
+    if (!cache_valid_) {
+        std::string error;
+        if (!ensure_started(&error))
+            return out;
+        if (tools_capability_) {
+            tool_cache_.clear();
+            // Pagination: follow nextCursor until empty (spec Tools listing).
+            std::string cursor;
+            for (int page = 0; page < 16; ++page) {
+                nlohmann::json params = nlohmann::json::object();
+                if (!cursor.empty())
+                    params["cursor"] = cursor;
+                std::string result;
+                if (!rpc_->request("tools/list", params.dump(), handshake_timeout_, &result,
+                                   &error)) {
+                    down_ = true;
+                    last_error_ = error;
+                    cache_valid_ = false;
+                    return out;
+                }
+                auto parsed = nlohmann::json::parse(result, nullptr, false);
+                if (parsed.is_discarded() || !parsed.is_object()) {
+                    down_ = true;
+                    last_error_ = "tools/list result is not an object";
+                    return out;
+                }
+                auto tools_it = parsed.find("tools");
+                if (tools_it == parsed.end() || !tools_it->is_array()) {
+                    down_ = true;
+                    last_error_ = "tools/list missing tools array";
+                    return out;
+                }
+                for (const auto& entry : *tools_it) {
+                    if (!entry.is_object())
+                        continue;
+                    McpToolInfo info;
+                    if (auto n = entry.find("name"); n != entry.end() && n->is_string())
+                        info.name = n->get<std::string>();
+                    if (info.name.empty())
+                        continue; // unnamed tool: skip (annotations untrusted anyway)
+                    if (auto d = entry.find("description"); d != entry.end() && d->is_string())
+                        info.description = d->get<std::string>();
+                    if (auto s = entry.find("inputSchema"); s != entry.end() && s->is_object())
+                        info.input_schema_json = s->dump();
+                    else
+                        info.input_schema_json = R"({"type":"object"})";
+                    tool_cache_.push_back(std::move(info));
+                }
+                cursor.clear();
+                if (auto nc = parsed.find("nextCursor"); nc != parsed.end() && nc->is_string())
+                    cursor = nc->get<std::string>();
+                if (cursor.empty())
+                    break;
+            }
+            cache_valid_ = true;
         }
-        return out;
-    }
-    std::string error;
-    if (!ensure_started(&error))
-        return out;
-    if (!tools_capability_)
-        return out;
-    {
-        tool_cache_.clear();
-        // Pagination: follow nextCursor until empty (spec Tools listing).
-        std::string cursor;
-        for (int page = 0; page < 16; ++page) {
-            nlohmann::json params = nlohmann::json::object();
-            if (!cursor.empty())
-                params["cursor"] = cursor;
-            std::string result;
-            if (!rpc_->request("tools/list", params.dump(), handshake_timeout_, &result, &error)) {
-                down_ = true;
-                last_error_ = error;
-                cache_valid_ = false;
-                return out;
-            }
-            auto parsed = nlohmann::json::parse(result, nullptr, false);
-            if (parsed.is_discarded() || !parsed.is_object()) {
-                down_ = true;
-                last_error_ = "tools/list result is not an object";
-                return out;
-            }
-            auto tools_it = parsed.find("tools");
-            if (tools_it == parsed.end() || !tools_it->is_array()) {
-                down_ = true;
-                last_error_ = "tools/list missing tools array";
-                return out;
-            }
-            for (const auto& entry : *tools_it) {
-                if (!entry.is_object())
-                    continue;
-                McpToolInfo info;
-                if (auto n = entry.find("name"); n != entry.end() && n->is_string())
-                    info.name = n->get<std::string>();
-                if (info.name.empty())
-                    continue; // unnamed tool: skip (annotations untrusted anyway)
-                if (auto d = entry.find("description"); d != entry.end() && d->is_string())
-                    info.description = d->get<std::string>();
-                if (auto s = entry.find("inputSchema"); s != entry.end() && s->is_object())
-                    info.input_schema_json = s->dump();
-                else
-                    info.input_schema_json = R"({"type":"object"})";
-                tool_cache_.push_back(std::move(info));
-            }
-            cursor.clear();
-            if (auto nc = parsed.find("nextCursor"); nc != parsed.end() && nc->is_string())
-                cursor = nc->get<std::string>();
-            if (cursor.empty())
-                break;
-        }
-        cache_valid_ = true;
     }
     for (const auto& info : tool_cache_) {
         ToolDefinition definition;
@@ -347,6 +394,34 @@ std::vector<ToolDefinition> McpClient::list() {
         definition.source = config_.name;
         out.push_back(std::move(definition));
     }
+    // M2a synthetic tools (design 022 §5.1): the resource/prompt surface
+    // rides the ordinary ToolRuntime path, so ADR 006 approval, previews
+    // and loop truncation apply unchanged. Gated on the capability probes.
+    const auto append_synthetic = [&](const char* suffix, std::string description,
+                                      const char* schema) {
+        ToolDefinition definition;
+        definition.name = config_.name + "__" + suffix;
+        definition.description = std::move(description);
+        definition.input_schema_json = schema;
+        definition.source = config_.name;
+        out.push_back(std::move(definition));
+    };
+    if (resources_capability_)
+        append_synthetic(
+            "mcp_resources",
+            "List or read the resources advertised by MCP server '" + config_.name +
+                "'. action=list returns resource metadata; action=read requires a "
+                "uri from that listing and returns its contents.",
+            R"json({"type":"object","properties":{"action":{"type":"string","enum":["list","read"]},"uri":{"type":"string","description":"resource URI (action=read)"}},"required":["action"]})json"
+        );
+    if (prompts_capability_)
+        append_synthetic(
+            "mcp_prompts",
+            "List or render the prompt templates advertised by MCP server '" + config_.name +
+                "'. action=list returns prompt metadata; action=get requires a "
+                "name from that listing plus optional string arguments.",
+            R"json({"type":"object","properties":{"action":{"type":"string","enum":["list","get"]},"name":{"type":"string","description":"prompt name (action=get)"},"arguments":{"type":"object","description":"prompt arguments as string values","additionalProperties":{"type":"string"}}},"required":["action"]})json"
+        );
     return out;
 }
 
@@ -373,6 +448,13 @@ ToolResult McpClient::call(const ToolCall& call, const ShouldAbort& should_abort
         return ToolResult{"tool does not belong to server " + config_.name, true};
     if (should_abort())
         return ToolResult{"aborted before mcp call", true};
+
+    // M2a synthetic tools never reach the remote tools/call path: they
+    // dispatch to the resource/prompt seam locally (design 022 §5.1).
+    if (call.name == config_.name + "__mcp_resources")
+        return call_synthetic(call, /*resources=*/true);
+    if (call.name == config_.name + "__mcp_prompts")
+        return call_synthetic(call, /*resources=*/false);
 
     std::string remote_name = call.name.substr(prefix.size());
     auto mapped = wire_to_remote_.find(call.name);
@@ -465,6 +547,215 @@ ToolResult McpClient::call(const ToolCall& call, const ShouldAbort& should_abort
     if (out.text.empty())
         out.text = out.is_error ? "tool reported an error (no content)" : "(empty result)";
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// M2a resource/prompt seam (design 022 §5.1)
+// ---------------------------------------------------------------------------
+
+std::string McpClient::list_paged(std::string_view method, std::string_view item_key,
+                                  std::string* cache, std::atomic<bool>& stale,
+                                  std::string* error) {
+    if (!ensure_started(error))
+        return {};
+    const bool capable = method == "resources/list" ? resources_capability_ : prompts_capability_;
+    if (!capable) {
+        if (error)
+            *error = "server does not support " + std::string(item_key);
+        return {};
+    }
+    if (!stale.exchange(false, std::memory_order_relaxed) && !cache->empty())
+        return *cache; // metadata cache hit (contents are never cached, T2)
+    nlohmann::json all = nlohmann::json::array();
+    std::string cursor;
+    for (int page = 0; page < 16; ++page) { // same bounded walk as tools/list
+        nlohmann::json params = nlohmann::json::object();
+        if (!cursor.empty())
+            params["cursor"] = cursor;
+        std::string result;
+        if (!rpc_->request(method, params.dump(), handshake_timeout_, &result, error)) {
+            down_ = true;
+            if (error)
+                last_error_ = *error;
+            cache->clear();
+            return {};
+        }
+        auto parsed = nlohmann::json::parse(result, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            down_ = true;
+            last_error_ = std::string(method) + " result is not an object";
+            if (error)
+                *error = last_error_;
+            cache->clear();
+            return {};
+        }
+        auto items = parsed.find(std::string(item_key));
+        if (items == parsed.end() || !items->is_array()) {
+            down_ = true;
+            last_error_ = std::string(method) + " missing " + std::string(item_key) + " array";
+            if (error)
+                *error = last_error_;
+            cache->clear();
+            return {};
+        }
+        for (const auto& entry : *items)
+            all.push_back(entry);
+        cursor.clear();
+        if (auto nc = parsed.find("nextCursor"); nc != parsed.end() && nc->is_string())
+            cursor = nc->get<std::string>();
+        if (cursor.empty())
+            break;
+    }
+    *cache = all.dump();
+    return *cache;
+}
+
+std::string McpClient::list_resources(std::string* error) {
+    return list_paged("resources/list", "resources", &resources_cache_, resources_stale_, error);
+}
+
+std::string McpClient::list_prompts(std::string* error) {
+    return list_paged("prompts/list", "prompts", &prompts_cache_, prompts_stale_, error);
+}
+
+std::string McpClient::read_resource(const std::string& uri, std::string* error) {
+    if (!ensure_started(error))
+        return {};
+    if (!resources_capability_) {
+        if (error)
+            *error = "server does not support resources";
+        return {};
+    }
+    if (uri.empty()) {
+        if (error)
+            *error = "read_resource requires a uri";
+        return {};
+    }
+    nlohmann::json params;
+    params["uri"] = uri;
+    std::string result;
+    if (!rpc_->request("resources/read", params.dump(), call_timeout_, &result, error)) {
+        // Same rule as tools/call: only transport death or timeout marks
+        // down; a JSON-RPC error reply (unknown uri) keeps the server
+        // usable -- the stream is still in sync.
+        if (!rpc_->alive() || (error && error->find("timed out") != std::string::npos)) {
+            down_ = true;
+            if (error)
+                last_error_ = *error;
+        }
+        return {};
+    }
+    auto parsed = nlohmann::json::parse(result, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        if (error)
+            *error = "resources/read result is not an object";
+        return {};
+    }
+    auto contents = parsed.find("contents");
+    if (contents == parsed.end() || !contents->is_array()) {
+        if (error)
+            *error = "resources/read missing contents array";
+        return {};
+    }
+    return contents->dump(); // raw contents; never cached (design 022 T2)
+}
+
+std::string McpClient::get_prompt(const std::string& name, const std::string& args_json,
+                                  std::string* error) {
+    if (!ensure_started(error))
+        return {};
+    if (!prompts_capability_) {
+        if (error)
+            *error = "server does not support prompts";
+        return {};
+    }
+    if (name.empty()) {
+        if (error)
+            *error = "get_prompt requires a name";
+        return {};
+    }
+    nlohmann::json arguments = nlohmann::json::object();
+    if (!args_json.empty() && args_json != "{}") {
+        arguments = nlohmann::json::parse(args_json, nullptr, false);
+        if (arguments.is_discarded() || !arguments.is_object()) {
+            if (error)
+                *error = "prompt arguments must be a JSON object";
+            return {};
+        }
+    }
+    nlohmann::json params;
+    params["name"] = name;
+    params["arguments"] = std::move(arguments);
+    std::string result;
+    if (!rpc_->request("prompts/get", params.dump(), call_timeout_, &result, error)) {
+        if (!rpc_->alive() || (error && error->find("timed out") != std::string::npos)) {
+            down_ = true;
+            if (error)
+                last_error_ = *error;
+        }
+        return {};
+    }
+    auto parsed = nlohmann::json::parse(result, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        if (error)
+            *error = "prompts/get result is not an object";
+        return {};
+    }
+    // MRTR (SEP-2322) is only reachable at >= 2025-11-25, above the current
+    // ceiling; fold it as an error rather than looping (design 022 §5.1).
+    if (auto rt = parsed.find("resultType"); rt != parsed.end() && rt->is_string() &&
+        rt->get_ref<const std::string&>() == "input_required") {
+        if (error)
+            *error = "prompt requires additional input (multi-round prompts are not supported)";
+        return {};
+    }
+    return result; // raw prompts/get result; never cached
+}
+
+ToolResult McpClient::call_synthetic(const ToolCall& call, bool resources) {
+    auto args = nlohmann::json::parse(call.arguments_json, nullptr, false);
+    if (args.is_discarded() || !args.is_object())
+        return ToolResult{"arguments must be a JSON object", true};
+    const auto action_it = args.find("action");
+    if (action_it == args.end() || !action_it->is_string())
+        return ToolResult{resources ? "mcp_resources requires action=list|read"
+                                    : "mcp_prompts requires action=list|get",
+                          true};
+    const std::string action = action_it->get<std::string>();
+    std::string error;
+    std::string text;
+    if (action == "list") {
+        text = resources ? list_resources(&error) : list_prompts(&error);
+        if (!error.empty())
+            return ToolResult{"mcp " + std::string(resources ? "resources" : "prompts") +
+                                  " list failed: " + error,
+                              true};
+        return ToolResult{text.empty() ? "[]" : std::move(text), false};
+    }
+    if (resources && action == "read") {
+        const auto uri_it = args.find("uri");
+        if (uri_it == args.end() || !uri_it->is_string())
+            return ToolResult{"action=read requires a uri string", true};
+        text = read_resource(uri_it->get<std::string>(), &error);
+        if (!error.empty())
+            return ToolResult{"mcp resource read failed: " + error, true};
+        return ToolResult{std::move(text), false};
+    }
+    if (!resources && action == "get") {
+        const auto name_it = args.find("name");
+        if (name_it == args.end() || !name_it->is_string())
+            return ToolResult{"action=get requires a name string", true};
+        std::string args_json = "{}";
+        if (auto a = args.find("arguments"); a != args.end() && a->is_object())
+            args_json = a->dump();
+        text = get_prompt(name_it->get<std::string>(), args_json, &error);
+        if (!error.empty())
+            return ToolResult{"mcp prompt get failed: " + error, true};
+        return ToolResult{std::move(text), false};
+    }
+    return ToolResult{resources ? "unknown action (expected list|read)"
+                                : "unknown action (expected list|get)",
+                      true};
 }
 
 // ---------------------------------------------------------------------------
