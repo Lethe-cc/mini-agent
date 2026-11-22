@@ -500,7 +500,8 @@ std::unique_ptr<ToolRegistry> build_tool_registry(const AppConfig& config, std::
     if (!config.mcp_servers.empty()) {
         for (const auto& server : config.mcp_servers) {
             // Empty factory = production routing: MINI_AGENT_MCP_BACKEND
-            // selects the backend (design 021 §5.1), default legacy.
+            // selects the backend (design 021 §5.1), default cxxmcp;
+            // "legacy" is the explicit rollback value until M3.
             registry->add(std::make_unique<McpClient>(server, TransportFactory{}));
         }
         if (note)

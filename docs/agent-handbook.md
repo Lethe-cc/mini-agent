@@ -69,7 +69,7 @@ pty 支持 `--grep <标签>` 只门禁匹配断言；等待已自适应（勿改
 
 - 019 拆分：**P1–P4 全部完成**（键位分发 `c1a57f3` → `tui_keys.hpp`，LoopCtl 方案，见 019 §8）；
   **tui.cpp 3626→1268**。run_loop 仅剩 poll/抽干/join/完成回调调度 + done 清理。
-- MCP 迁移：[021](design/021-mcp-full-client.md) **M1 已实现并全门禁验收，默认后端已翻转 cxxmcp**（2026-11-22，待人工评审）。vendored client-only 固定 SHA `3c25a8af`（`third_party/cxxmcp/`，56 文件逐字节上游一致，LICENSE 归档）；`McpSession` 接缝双轨，`MINI_AGENT_MCP_BACKEND=legacy` 回滚开关保留至 M3；测试注入非空 factory 仍强制 legacy。双后端回放 `tools/mcp_parity_check.py`：7 项一致 + 3 项已接受偏差（404 恢复/非标错误码/无 result fail-closed，021 §9）。M0 spike 证据（四 preset、deepwiki、conformance 247/0）在 gitignored `.references/`；6 draft-auth 场景挂起为上游析构缺陷，**M2 引入 handler 前须确认修复**（021 §9 已知限制）。M2（resources/prompts/sampling/elicitation/tasks）与 M3（删 legacy）未启动。
+- MCP 迁移：[021](design/021-mcp-full-client.md) **M1 已实现并全门禁验收，默认后端已翻转 cxxmcp**（2026-11-22，待人工评审）。vendored client-only 固定 SHA `3c25a8af`（`third_party/cxxmcp/`，56 文件逐字节上游一致，LICENSE 归档）；`McpSession` 接缝双轨，`MINI_AGENT_MCP_BACKEND=legacy` 回滚开关保留至 M3；测试注入非空 factory 仍强制 legacy。双后端回放 `tools/mcp_parity_check.py`：7 项一致 + 3 项已接受偏差（404 恢复/非标错误码/无 result fail-closed，021 §9）。M0 spike 证据（四 preset、deepwiki、conformance 247/0）在 gitignored `.references/`；6 draft-auth 场景挂起为上游析构缺陷，**M2 引入 handler 前须确认修复**（021 §9 已知限制）。M2 细化设计已产出：[022](design/022-mcp-capabilities-m2.md)（草案/待评审，2026-11-22；M2a 合成工具 → M2b 审批桥 → M2c tasks，版本上移 2025-11-25 以上游析构缺陷复核为前置；Q1–Q5 待批复，未实现）；M3（删 legacy）未启动。
 - 状态机集中描述：[020-state-machines.md](design/020-state-machines.md)（连接/回合/审批/worker/pane/session）。
 - 学习资源单一来源：[ai-agent-learning.md](ai-agent-learning.md)。
 
