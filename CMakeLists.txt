@@ -42,6 +42,34 @@ endfunction()
 
 find_package(CURL REQUIRED)
 
+# Vendored cxxmcp MCP client SDK (ADR 010 / design 021, M1 Phase A).
+# Client-only closure under third_party/cxxmcp/ with an unmodified upstream
+# root CMakeLists.txt; force the option set here (FORCE so a stale cache from
+# an earlier configure cannot re-enable server/tests). AUTH stays OFF per the
+# Q2 ruling; AUTH_CRYPTO must then be NONE (upstream hard-errors otherwise).
+find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
+set(CXXMCP_BUILD_SDK OFF CACHE BOOL "" FORCE)
+set(CXXMCP_BUILD_PROTOCOL ON CACHE BOOL "" FORCE)
+set(CXXMCP_BUILD_CLIENT ON CACHE BOOL "" FORCE)
+set(CXXMCP_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(CXXMCP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CXXMCP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CXXMCP_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(CXXMCP_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(CXXMCP_ENABLE_HTTP ON CACHE BOOL "" FORCE)
+set(CXXMCP_ENABLE_WEBSOCKET OFF CACHE BOOL "" FORCE)
+set(CXXMCP_ENABLE_OPENSSL ON CACHE BOOL "" FORCE)
+set(CXXMCP_ENABLE_AUTH OFF CACHE BOOL "" FORCE)
+set(CXXMCP_AUTH_CRYPTO "NONE" CACHE STRING "" FORCE)
+set(CXXMCP_USE_SYSTEM_DEPS OFF CACHE BOOL "" FORCE)
+set(CXXMCP_SDK_CXX_STANDARD "17" CACHE STRING "" FORCE)
+# Vendored code is exempt from the first-party clang-tidy gate (same policy
+# as third_party/nlohmann, spdlog, md4c); clear the launcher for the subtree.
+set(MINI_AGENT_SAVED_CLANG_TIDY "${CMAKE_CXX_CLANG_TIDY}")
+set(CMAKE_CXX_CLANG_TIDY "")
+add_subdirectory(third_party/cxxmcp EXCLUDE_FROM_ALL)
+set(CMAKE_CXX_CLANG_TIDY "${MINI_AGENT_SAVED_CLANG_TIDY}")
+
 # Build metadata for `mini-agent version` and the startup banners:
 # short commit (+ "-dirty" when the tree has uncommitted changes) and a
 # UTC configure-time stamp. Graceful fallbacks outside a git checkout
@@ -108,6 +136,9 @@ target_include_directories(agent_core PUBLIC
 )
 target_compile_features(agent_core PUBLIC cxx_std_17)
 target_link_libraries(agent_core PUBLIC CURL::libcurl)
+# PRIVATE: SDK headers must not leak through include/mini_agent/mcp.hpp; only
+# the facade backend .cpp includes them (keeps the public facade SDK-free).
+target_link_libraries(agent_core PRIVATE cxxmcp::client)
 
 # Configure-time models.dev catalog refresh (design 010 §21, §21.4): the
 # fetch runs when cmake (re-)configures, NEVER during make/ninja -- the old
