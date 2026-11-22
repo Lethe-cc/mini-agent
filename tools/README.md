@@ -16,6 +16,8 @@ CI/质量门禁调用的脚本仍在 `scripts/`，被自动化测试引用的 mo
 | [refresh_models_dev.py](refresh_models_dev.py) | 重新生成内嵌 models.dev 窗口目录头（v4.7，设计 010 §18；v4.18 §21/§21.3/§21.4 起 CMake **configure 阶段**自动调用，直接写回源树 vendored 头，make/ninja 不联网）：抓 https://models.dev/api.json（MIT，显式 UA，IPv4-only 解析避开坏 IPv6 挂等）裁剪为 TSV；`--input file.json` 离线重解析；`--output PATH` 指定生成路径（CMake 传源树绝对路径）；`--best-effort` 失败只警告 exit 0、不写文件（configure/构建永不因此破坏）；内容不变跳过写入；行数 <1000 拒写（上游 schema 漂移护栏）。非质量门禁。 |
 | [p4_migrate.py](p4_migrate.py) | 019 P4 键位分发拆分的**一次性迁移工具**（已执行完毕，留档复现）：把 `src/tui/tui.cpp` 主循环 POLLIN 字节循环整段搬入 `src/tui/tui_keys.hpp` 的 `dispatch_input_impl` 模板，作用域感知地为状态名加 `S.` 前缀（跳过字符串/注释/成员访问/内层遮蔽局部量），控制流（`goto done`→`LoopCtl::Exit`、去缩进）由人工完成。非质量门禁，勿对新代码重跑。 |
 | [cold_start_check.py](cold_start_check.py) | 冷启动计时门禁（project-context 成功标准 #1 的脚本化测量）：`--version` 纯启动代理 + 管道 `ask` 打即时 loopback mock 的全就绪路径，各 N 次取中位数断言 ≤100ms（默认 15 次，`--runs`/`--budget-ms` 可调）。非 quality_commands；CI `smoke` job 门禁。 |
+| [mcp_parity.cpp](mcp_parity.cpp) | cxxmcp 迁移 M1 阶段 C 的**双后端逐字回放探针**（设计 021）：10 个场景（stdio 基本/子进程退出/spawn 失败/调用超时；HTTP 基本/401/500/会话中途 404/非标错误码/无 result 回包）经 `McpClient` 门面走真实传输，输出规范化 transcript；`PARITY_TRACE=1` 打印底层收发。非 CTest 目标，手动编译命令见文件头；配合 mcp_parity_check.py 使用。 |
+| [mcp_parity_check.py](mcp_parity_check.py) | 双后端一致性 runner（设计 021 M1 阶段 C）：编译 mcp_parity.cpp，对 10 场景各以 `MINI_AGENT_MCP_BACKEND=legacy/cxxmcp` 跑一遍并逐字节 diff；已接受偏差（http-404mid / http-nonstd / http-noresult，见设计 021 §9）单独报告不算失败，其余差异 exit 1。需先 `cmake --build --preset linux-gcc-debug`。非质量门禁。 |
 
 ## mcp_probe.py 快速上手
 
