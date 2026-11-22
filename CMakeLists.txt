@@ -140,6 +140,17 @@ target_link_libraries(agent_core PUBLIC CURL::libcurl)
 # PRIVATE: SDK headers must not leak through include/mini_agent/mcp.hpp; only
 # the facade backend .cpp includes them (keeps the public facade SDK-free).
 target_link_libraries(agent_core PRIVATE cxxmcp::client)
+# Treat vendored SDK headers as SYSTEM so -Werror never fires on upstream
+# code (third_party exemption, design 021 §5.2; same spirit as nlohmann/
+# md4c). Re-declaring the interface includes as SYSTEM from here keeps the
+# vendored subtree byte-identical -- no edits under third_party/.
+foreach(cxxmcp_target mcp_core mcp_protocol mcp_client)
+    get_target_property(_inc ${cxxmcp_target} INTERFACE_INCLUDE_DIRECTORIES)
+    if(_inc)
+        set_property(TARGET ${cxxmcp_target} APPEND PROPERTY
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_inc}")
+    endif()
+endforeach()
 
 # Configure-time models.dev catalog refresh (design 010 §21, §21.4): the
 # fetch runs when cmake (re-)configures, NEVER during make/ninja -- the old

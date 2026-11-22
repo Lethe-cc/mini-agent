@@ -384,8 +384,11 @@ class CxxmcpSession final : public McpSession {
   public:
     CxxmcpSession(McpServerConfig config, std::chrono::milliseconds handshake_timeout,
                   std::chrono::milliseconds call_timeout)
-        : config_(std::move(config)), handshake_timeout_(handshake_timeout),
-          call_timeout_(call_timeout) {
+        : config_(std::move(config)), handshake_timeout_(handshake_timeout) {
+        // call_timeout arrives per request() instead (stdio deadline); HTTP
+        // keeps the legacy fixed 120 s curl budget, matching mcp_http.cpp
+        // which also ignores per-call timeouts.
+        (void)call_timeout;
     }
 
     ~CxxmcpSession() override {
@@ -617,7 +620,6 @@ class CxxmcpSession final : public McpSession {
 
     McpServerConfig config_;
     std::chrono::milliseconds handshake_timeout_;
-    std::chrono::milliseconds call_timeout_;
     std::unique_ptr<client::Client> client_;
     StdioBridgeTransport* stdio_ = nullptr; // owned by client_
     client::HttpTransport* http_ = nullptr; // owned by client_
