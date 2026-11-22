@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 
 namespace mini_agent {
@@ -134,6 +135,10 @@ bool McpRpcClient::notify(std::string_view method, const std::string& params_jso
     return transport_->send(message.dump(), error);
 }
 
+void McpRpcClient::set_protocol_version(const std::string& version) {
+    set_http_transport_version(*transport_, version);
+}
+
 // ---------------------------------------------------------------------------
 // McpClient
 // ---------------------------------------------------------------------------
@@ -156,15 +161,25 @@ bool McpClient::ensure_started(std::string* error) {
     if (!rpc_) {
         auto transport = factory_(config_);
         if (!transport) {
-            // Failed / exhausted factory (one-shot test fakes included):
-            // stay down instead of wrapping a null transport.
-            down_ = true;
-            last_error_ = "mcp transport factory returned nothing";
-            if (error)
-                *error = last_error_;
-            return false;
+            // No injected transport (production uses the default factory):
+            // the backend switch (design 021 §5.1) applies here. cxxmcp
+            // sessions own their transport internally; injected factories
+            // (test fakes) always take the legacy path.
+            const char* backend = std::getenv("MINI_AGENT_MCP_BACKEND");
+            if (backend != nullptr && std::string_view(backend) == "cxxmcp") {
+                rpc_ = make_cxxmcp_session(config_, handshake_timeout_, call_timeout_);
+            } else {
+                // Failed / exhausted factory (one-shot test fakes included):
+                // stay down instead of wrapping a null transport.
+                down_ = true;
+                last_error_ = "mcp transport factory returned nothing";
+                if (error)
+                    *error = last_error_;
+                return false;
+            }
+        } else {
+            rpc_ = std::make_unique<McpRpcClient>(std::move(transport));
         }
-        rpc_ = std::make_unique<McpRpcClient>(std::move(transport));
     }
     std::string start_error;
     if (!rpc_->start(&start_error)) {
@@ -215,7 +230,7 @@ bool McpClient::handshake(std::string* error) {
     }
     if (negotiated_version_.empty())
         negotiated_version_ = kPreferredVersion; // pre-negotiation servers
-    set_http_transport_version(rpc_->transport(), negotiated_version_);
+    rpc_->set_protocol_version(negotiated_version_);
     if (auto caps = parsed.find("capabilities"); caps != parsed.end() && caps->is_object()) {
         tools_capability_ = caps->find("tools") != caps->end();
     }

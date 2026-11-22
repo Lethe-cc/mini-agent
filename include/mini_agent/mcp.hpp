@@ -47,31 +47,60 @@ class McpTransport {
 
 using TransportFactory = std::function<std::unique_ptr<McpTransport>(const McpServerConfig&)>;
 
+// Session seam between the MCP dialogue (McpClient below) and a JSON-RPC
+// backend (design 021 §5.1). Two implementations: the legacy McpRpcClient
+// (id correlation over one McpTransport) and the cxxmcp session backed by
+// the vendored SDK (src/mcp/mcp_cxxmcp.cpp). The contract mirrors the
+// legacy error-text surface so facade behavior is backend-independent.
+// The header stays SDK-free and nlohmann-free.
+class McpSession {
+  public:
+    virtual ~McpSession() = default;
+    // Open the channel (spawn subprocess / prepare endpoint). Idempotent;
+    // false + *error on failure.
+    virtual bool start(std::string* error) = 0;
+    virtual bool alive() const noexcept = 0;
+    virtual void close() noexcept = 0;
+    // Sends a request and waits for the matching response. On success
+    // *result_json carries the raw "result" node ("{}" when absent);
+    // JSON-RPC "error" replies set *error (with code) and return false.
+    virtual bool request(std::string_view method, const std::string& params_json,
+                         std::chrono::milliseconds timeout, std::string* result_json,
+                         std::string* error) = 0;
+    // Fire-and-forget notification; transport failure is reported, a
+    // server 202/absent reply is success by definition.
+    virtual bool notify(std::string_view method, const std::string& params_json,
+                        std::string* error) = 0;
+    // Feed the negotiated protocol version to backends that stamp it on
+    // the wire (HTTP MCP-Protocol-Version). No-op by default.
+    virtual void set_protocol_version(const std::string& version) {
+        (void)version;
+    }
+};
+
 // JSON-RPC 2.0 client over one transport: monotonic ids, strictly serial
 // in-flight requests (v2.0 design), foreign-id messages ignored (server
 // notifications/requests are outside our capability set and folded away,
 // design 008 section 5.2). Not a general pool -- one connection per server.
-class McpRpcClient {
+class McpRpcClient final : public McpSession {
   public:
     explicit McpRpcClient(std::unique_ptr<McpTransport> transport)
         : transport_(std::move(transport)) {
     }
 
-    bool start(std::string* error);
-    bool alive() const noexcept;
-    void close() noexcept;
+    bool start(std::string* error) override;
+    bool alive() const noexcept override;
+    void close() noexcept override;
     McpTransport& transport() noexcept {
         return *transport_;
     }
 
-    // Sends `{jsonrpc,id,method,params}` and waits for the matching
-    // response. On success *result_json carries the raw "result" node;
-    // JSON-RPC "error" replies set *error (with code) and return false.
     bool request(std::string_view method, const std::string& params_json,
-                 std::chrono::milliseconds timeout, std::string* result_json, std::string* error);
-    // Fire-and-forget notification; transport failure is reported, a
-    // server 202/absent reply is success by definition.
-    bool notify(std::string_view method, const std::string& params_json, std::string* error);
+                 std::chrono::milliseconds timeout, std::string* result_json,
+                 std::string* error) override;
+    bool notify(std::string_view method, const std::string& params_json,
+                std::string* error) override;
+    void set_protocol_version(const std::string& version) override;
 
   private:
     std::unique_ptr<McpTransport> transport_;
@@ -144,7 +173,7 @@ class McpClient final : public ToolRuntime {
     TransportFactory factory_;
     std::chrono::milliseconds handshake_timeout_;
     std::chrono::milliseconds call_timeout_;
-    std::unique_ptr<McpRpcClient> rpc_;
+    std::unique_ptr<McpSession> rpc_;
     bool down_ = false;
     bool initialized_ = false;
     bool tools_capability_ = false;
@@ -167,5 +196,12 @@ std::unique_ptr<McpTransport> make_stdio_transport(const McpServerConfig& config
 std::unique_ptr<McpTransport> make_http_transport(const McpServerConfig& config);
 // Routes by config.transport ("stdio" default).
 TransportFactory default_transport_factory();
+
+// cxxmcp backend session (design 021 §5.1, ADR 010): defined in
+// src/mcp/mcp_cxxmcp.cpp, the only TU that includes the vendored SDK.
+// Selected per server via MINI_AGENT_MCP_BACKEND=cxxmcp (default legacy).
+std::unique_ptr<McpSession> make_cxxmcp_session(const McpServerConfig& config,
+                                                std::chrono::milliseconds handshake_timeout,
+                                                std::chrono::milliseconds call_timeout);
 
 } // namespace mini_agent

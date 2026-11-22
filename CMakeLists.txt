@@ -117,6 +117,7 @@ add_library(agent_core STATIC
     src/mcp/mcp_rpc.cpp
     src/mcp/mcp_stdio.cpp
     src/mcp/mcp_http.cpp
+    src/mcp/mcp_cxxmcp.cpp
     src/render/highlight.cpp
     src/render/md.cpp
     src/render/md_geometry.cpp
