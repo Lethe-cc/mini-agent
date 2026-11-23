@@ -356,8 +356,17 @@ LoopCtl dispatch_input_impl(Ctx& S, const char* buf, ssize_t n) {
                     if (line.empty()) {
                         // menu selection consumed the input
                     } else {
-                        if (line.front() != '/') // slash lines: Tab menu recalls those
-                            S.history.push_back(line);
+                        // Unified history (design 022): slash lines are
+                        // recorded too, sanitized (/login keys stripped,
+                        // /exit dropped); slash lines also persist across
+                        // restarts. Queued lines record now, same as before;
+                        // the pending drain never re-records.
+                        if (const auto rec =
+                                sanitize_history_line(line, S.provider_name_list())) {
+                            if (line.front() == '/')
+                                append_slash_history(input_history_path(S.store.root()), *rec);
+                            S.history.push_back(*rec);
+                        }
                         S.hist_pos = S.history.size();
                         S.history_draft.clear();
                         if (line == "/exit")

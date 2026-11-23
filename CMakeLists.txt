@@ -98,6 +98,7 @@ add_library(agent_core STATIC
     src/tui/tui_workers.cpp
     src/tui/tui_turn.cpp
     src/tui/tui_render.cpp
+    src/tui/tui_history.cpp
     third_party/md4c/md4c.c
 )
 target_include_directories(agent_core PUBLIC

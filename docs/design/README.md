@@ -32,6 +32,7 @@
 | [019：代码模块拆分](019-module-split.md) | 已实现（P1 `04b36f1`、P2 `a879bcd`、P4 `c1a57f3` 收官，P1–P4 全部完成，2026-11-21）；待人工评审 | 行为保持分阶段拆分：P1 纯函数 + P2 CLI/session_serde/tools + P3 screen 层 + P4 TUI（preview/sidebar/workers/turn/slash/input/frame/keys，tui.cpp →1268）；TuiState 完整状态对象未建（以 TurnState 首片 + Ctx 引用替代，见其 §8）；单文件≤~1000 行目标基本达成，不新增依赖 |
 | [020：状态流转集中描述](020-state-machines.md) | **草案 / 待人工评审**（2026-11-20；纯文档） | 连接/认证、回合生命周期、审批流、后台 worker、预览 pane、session 六组状态机（PlantUML），集中 007/008/010/013/017/018/ADR001/006 的散落描述 |
 | [021：MCP 全能力客户端（cxxmcp 迁移）](021-mcp-full-client.md) | **草案 / 待人工评审**（2026-11-21；未实现、未引入依赖、spike 未执行） | 维护者方向"resources/prompts/sampling/elicitation/tasks/追新版本"推翻 008/ADR005 的 tools-only 裁剪；提议引入 cxxmcp 取代自写 MCP 三层（M0 spike 否决门 → M1 双轨底座替换 → M2 能力分期 → M3 收尾）；依赖批准前提与开放问题 Q1–Q4；关联 [ADR 010](../decisions/010-mcp-full-client-cxxmcp.md)（提议，取代 005、修订 002） |
+| [022：TUI 输入历史统一与斜杠命令持久化（P1+P2）](022-input-history.md) | 已实现（2026-11-23，dev 分支）；待人工评审 | ↑/↓ 统一收录脱敏斜杠行（`/login` key 剥离、`/exit` 不记录），会话切换保留；斜杠行持久化 `input_history`（session 根父目录，0600、cap 200、原子写）跨重启召回；修订 007 §5.6 规则 3；P3 前缀过滤召回明确不做；验证见其 §8（四 preset + tidy/ASan/UBSan + pty 全过；`check.py` 入口被 dev 既有 021/ADR010 缺失链接阻塞，已记录） |
 
 0.4 将目标平台收敛为 Linux 与 macOS，删除了全部 Windows/MSVC 配置、命令示例与 CI 矩阵；取舍、迁移步骤与完整验证表见 [006](006-drop-windows-support.md)。上表 001–005 中保留的 Windows 相关文字属于当时的真实验证记录，**不代表当前仍支持该平台**；其中描述*当前配置*的段落已就地标注 0.4 变更并回链 006。[005](005-macos-verification.md) 中标为未执行的 Rust 完整门禁与 clang-tidy 正路径，已在 0.4 轮真实跑通并附反证，详见 006 第 8 节。
 

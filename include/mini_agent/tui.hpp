@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -35,6 +36,27 @@ std::vector<std::string> slash_completion_hint(std::string_view composer,
                                                const std::vector<std::string>& session_ids = {},
                                                const std::vector<std::string>& provider_names = {},
                                                const std::vector<std::string>& model_choices = {});
+
+// Input history (design 022): ↑/↓ recalls slash lines too, sanitized.
+// Returns the line to record, or nullopt for lines that must not be
+// recorded (/exit, empty). /login inline keys are stripped before the
+// line ever reaches memory history or disk (007 §5.6 rule 7).
+std::optional<std::string> sanitize_history_line(std::string_view line,
+                                                 const std::vector<std::string>& provider_names);
+// Slash-history file: session root's parent / "input_history"; empty root
+// yields an empty path (persistence disabled).
+std::filesystem::path input_history_path(const std::filesystem::path& session_root);
+// Tolerant load: missing file / junk lines skipped; only '/'-prefixed lines
+// kept, re-sanitized against provider_names (hand-edited keys never recall);
+// oldest lines dropped beyond cap.
+std::vector<std::string> load_slash_history(const std::filesystem::path& file,
+                                            const std::vector<std::string>& provider_names,
+                                            std::size_t cap = 200);
+// Append one sanitized slash line: adjacent dedup against the last line,
+// drop oldest beyond cap, atomic replace (tmp 0600 + rename, config-save
+// pattern). Failure is silent false -- persistence is an enhancement.
+bool append_slash_history(const std::filesystem::path& file, std::string_view line,
+                          std::size_t cap = 200);
 
 // UTF-8 aware composer editing: append validates/rejects lone surrogates
 // only trivially (we accept opaque bytes); returns bytes appended.

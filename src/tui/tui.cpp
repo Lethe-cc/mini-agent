@@ -95,6 +95,17 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     for (const auto& m : session.chat.messages())
         if (m.role == Role::User && !m.content.empty() && m.content.front() != '/')
             history.push_back(m.content);
+    // Design 022 (P2): persisted sanitized slash lines join recall after
+    // the chat seed (exact interleaving with old chat lines is not
+    // recoverable; time-order approximation documented in 022 §4).
+    {
+        std::vector<std::string> names;
+        names.reserve(config.providers.size());
+        for (const auto& p : config.providers)
+            names.push_back(p.name);
+        for (auto& l : load_slash_history(input_history_path(store.root()), names))
+            history.push_back(std::move(l));
+    }
     std::size_t hist_pos = history.size();
     std::string history_draft;
     auto make_logger = [&config] {

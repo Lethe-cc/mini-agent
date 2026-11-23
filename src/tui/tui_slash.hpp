@@ -577,10 +577,19 @@ bool handle_slash_impl(Ctx& S, std::string_view line) {
             S.config_snapshot = S.config; // worker turn snapshot refresh (same as /cwd)
             S.reset_usage_readings();   // usage belongs to the new session
             // Re-seed ↑/↓ history from the new chat (same rule as launch).
+            // Design 022: slash recall is UI-level, not session-scoped --
+            // keep the sanitized slash lines across the switch (matches
+            // the persisted file; no rewrite needed).
+            std::vector<std::string> slash_recall;
+            for (const auto& h : S.history)
+                if (!h.empty() && h.front() == '/')
+                    slash_recall.push_back(h);
             S.history.clear();
             for (const auto& m : S.session.chat.messages())
                 if (m.role == Role::User && !m.content.empty() && m.content.front() != '/')
                     S.history.push_back(m.content);
+            for (auto& h : slash_recall)
+                S.history.push_back(std::move(h));
             S.hist_pos = S.history.size();
             S.history_draft.clear();
             S.logger->event("session_switch", {{"id", S.session.meta.id},

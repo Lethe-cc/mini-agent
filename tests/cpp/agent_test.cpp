@@ -3427,6 +3427,89 @@ void test_context_017() {
 }
 
 // 018 (design 018 §4.1): preview pane geometry pure helpers.
+void test_input_history() {
+    // Design 022: sanitized unified ↑/↓ history + slash-line persistence.
+    using mini_agent::tui::append_slash_history;
+    using mini_agent::tui::input_history_path;
+    using mini_agent::tui::load_slash_history;
+    using mini_agent::tui::sanitize_history_line;
+    const std::vector<std::string> names{"work", "home"};
+
+    // Sanitizer matrix.
+    check(sanitize_history_line("hello world", names).value_or("") == "hello world",
+          "plain line passes through");
+    check(sanitize_history_line("/context", names).value_or("") == "/context",
+          "settings command recorded");
+    check(sanitize_history_line("/sidebar on", names).value_or("") == "/sidebar on",
+          "command args kept");
+    check(!sanitize_history_line("/exit", names).has_value(), "/exit not recorded");
+    check(!sanitize_history_line("/exit now", names).has_value(), "/exit with args dropped");
+    check(!sanitize_history_line("", names).has_value(), "empty line dropped");
+    check(sanitize_history_line("/login", names).value_or("") == "/login",
+          "bare /login (masked entry) kept");
+    check(sanitize_history_line("/login sk-secret", names).value_or("") == "/login",
+          "inline key collapsed");
+    check(sanitize_history_line("/login work sk-secret", names).value_or("") == "/login work",
+          "profile name kept, key dropped");
+    check(sanitize_history_line("/login work", names).value_or("") == "/login work",
+          "profile-only form kept");
+    check(sanitize_history_line("/login unknown sk-secret", names).value_or("") == "/login",
+          "unknown first token is a key, not a profile");
+    check(sanitize_history_line("/login sk-secret", {}).value_or("") == "/login",
+          "no profiles: whole arg is the key");
+    check(sanitize_history_line("/loginx sk-secret", names).value_or("") == "/login",
+          "loose /login prefix matches handle_slash and strips too");
+    check(sanitize_history_line("/logins", names).value_or("") == "/login",
+          "loose prefix without args still collapses to /login");
+    check(sanitize_history_line("/logout", names).value_or("") == "/logout",
+          "non-login slash command untouched");
+
+    // Path derivation: parent of the session root; empty root disables.
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("mini_agent_hist_" + mini_agent::generate_session_id());
+    const auto file = input_history_path(root);
+    check(file == root.parent_path() / "input_history", "history file beside session root");
+    check(input_history_path({}).empty(), "empty root disables persistence");
+    check(load_slash_history(file, names).empty(), "missing file loads empty");
+    check(!append_slash_history({}, "/context"), "empty path append fails quietly");
+    check(!append_slash_history(file, "plain"), "non-slash append rejected");
+    check(!append_slash_history(file, "/a\n/b"), "newline injection rejected");
+
+    // Append / adjacent dedup / cap (parent dirs created on demand).
+    const auto nested = root / "sessions";
+    const auto nfile = input_history_path(nested);
+    check(append_slash_history(nfile, "/context"), "append creates parent dirs");
+    check(append_slash_history(nfile, "/context"), "adjacent duplicate is a no-op");
+    check(append_slash_history(nfile, "/sidebar on"), "second append");
+    check(append_slash_history(nfile, "/context"), "non-adjacent repeat kept");
+    auto lines = load_slash_history(nfile, names);
+    check(lines == std::vector<std::string>({"/context", "/sidebar on", "/context"}),
+          "dedup only against the last line");
+    struct stat st {};
+    check(::stat(nfile.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600,
+          "history file mode 0600");
+    for (int i = 0; i < 5; ++i)
+        check(append_slash_history(nfile, "/cmd" + std::to_string(i), 4), "capped append");
+    lines = load_slash_history(nfile, names, 4);
+    check(lines == std::vector<std::string>({"/cmd1", "/cmd2", "/cmd3", "/cmd4"}),
+          "cap drops oldest");
+
+    // Tolerant load + on-disk re-sanitize (hand-edited key never recalls).
+    {
+        std::ofstream out(nfile);
+        out << "junk line\n\n/context\n/login work sk-leak\n/login sk-leak\n"
+               "/exit\nnot-a-command\r\n/sidebar off\r\n";
+    }
+    lines = load_slash_history(nfile, names);
+    check(lines == std::vector<std::string>({"/context", "/login work", "/login", "/sidebar off"}),
+          "load skips junk, drops /exit, re-sanitizes keys, trims CR");
+    check(load_slash_history(nfile, {}).size() == 4, "load with no profiles still tolerant");
+    check(load_slash_history(nfile, {}, 2) == std::vector<std::string>({"/login", "/sidebar off"}),
+          "load truncates to cap keeping newest");
+
+    std::filesystem::remove_all(root);
+}
+
 void test_pane_helpers() {
     using mini_agent::tui::pane_header;
     using mini_agent::tui::pane_scroll_clamp;
@@ -3503,6 +3586,7 @@ int main() {
     test_session_markdown_export();
     test_context_017();
     test_pane_helpers();
+    test_input_history();
     test_git_tools();
     if (failures) {
         std::cerr << failures << " check(s) failed\n";

@@ -96,7 +96,7 @@ note bottom of TUI : 渲染核心与网络分离：\nworker 线程只 append del
 @enduml
 ```
 
-依赖方向约束：`mini-agent → agent_core → {curl, nlohmann, md4c, spdlog}`；core 内不含 CLI 参数解析，TUI 不含 HTTP 细节；`loop::run_turn(Chat&, Provider&)` 为纯函数式入口，配置参数注入、无全局单例（多 Agent 扩展点）。源码自 019 起按模块分层于 `src/{cli,tui,core,provider,tools,mcp,render}/`（内部头随模块，公共契约在 `include/mini_agent/`）。TUI 内部：`tui_render.cpp` 纯函数渲染/补全（经 tui.hpp 单测），`tui_screen.hpp` 终端/LiveScreen，`tui_preview`/`tui_sidebar` 参数化预览/侧栏扫描，`tui.cpp` 保留 run_loop 编排与状态（TuiState 待建，019 P4）；均为行为保持重构。
+依赖方向约束：`mini-agent → agent_core → {curl, nlohmann, md4c, spdlog}`；core 内不含 CLI 参数解析，TUI 不含 HTTP 细节；`loop::run_turn(Chat&, Provider&)` 为纯函数式入口，配置参数注入、无全局单例（多 Agent 扩展点）。源码自 019 起按模块分层于 `src/{cli,tui,core,provider,tools,mcp,render}/`（内部头随模块，公共契约在 `include/mini_agent/`）。TUI 内部：`tui_render.cpp` 纯函数渲染/补全（经 tui.hpp 单测），`tui_history.cpp` 输入历史脱敏 + 斜杠行持久化（022，含磁盘 I/O 故独立于纯函数 TU），`tui_screen.hpp` 终端/LiveScreen，`tui_preview`/`tui_sidebar` 参数化预览/侧栏扫描，`tui.cpp` 保留 run_loop 编排与状态（TuiState 待建，019 P4）；除 022 新增行为外均为行为保持重构。
 
 ## TUI 帧模型（渲染与刷新）
 
