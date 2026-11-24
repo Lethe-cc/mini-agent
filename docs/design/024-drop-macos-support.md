@@ -2,11 +2,11 @@
 
 ## 文档状态
 
-- 状态：草案。
+- 状态：已实现（待人工评审）。
 - 适用版本：模板 0.5.0（由 0.4.0 升级，破坏性变更），`schema_version` 保持 1。
 - 核对日期：2026-11-24（CST）。
 - 关联任务：维护者 2026-11-24 指示「将 macos 的支持从项目中移除，只支持 linux」；dev 已合并回 main，本变更在 dev 分支（与 main 同点）继续。
-- 代码修订：`6ccb357`（main/dev HEAD）。
+- 代码修订：基线 `6ccb357`（main/dev HEAD）；设计草案提交 `e6b21f9`；实现提交见 dev 分支本轮落地提交。
 - 人工评审：无评审通过记录。
 - 本文沿用 [006：移除 Windows 支持](006-drop-windows-support.md) 的处理方式：删除平台配置路径与当前平台声明；[005](005-macos-verification.md) 等历史验证记录**不改写**，只就地标注「已移出支持范围」并回链本文。
 
@@ -132,22 +132,24 @@ endif()
 
 | 验收项 | 测试位置或证据 | 实际执行命令 | 结果 | 限制 |
 | --- | --- | --- | --- | --- |
-| 模板回归（含新锁定） | tests/test_profiles.py 等 | 未执行 | 未执行 | 实现后填写 |
-| 统一入口 | scripts/check.py | 未执行 | 未执行 | 实现后填写 |
-| 四 preset 门禁 | cpp_check.py | 未执行 | 未执行 | 实现后填写 |
-| tidy + ASan/UBSan | cpp_check.py --tidy --sanitizers | 未执行 | 未执行 | 实现后填写 |
-| pty 冒烟 | tests/pty_tui_smoke.py / pty_cli_smoke.py | 未执行 | 未执行 | 实现后填写 |
-| 非 Linux 拒绝反证 | test_non_linux_platform_is_rejected（mock platform） | 未执行 | 未执行 | 无 macOS 真机，拒绝路径靠 mock 锁定；CMake FATAL_ERROR 正路径本机无法触发（Linux 恒过），以代码审查 + 既有 Sanitizers 同款守卫先例为据 |
+| 模板回归（含新锁定） | tests/test_profiles.py 等（53 项，含 5 项 Linux-only 锁定） | `python3 -m unittest discover -s tests -q` | 通过（53/53，OK） | 本机 Debian Linux（GCC 14.2 / Clang 19.1，Python 3.13.5） |
+| 统一入口 | scripts/check.py | `python3 scripts/check.py --strict-project`；`python3 scripts/check.py --tooling-only` | 均通过（strict 含默认 preset configure+build+ctest 3/3；tooling-only 链接检查通过） | tooling-only 明确跳过项目命令，不替代业务验收 |
+| 四 preset 门禁 | cpp_check.py | `python3 scripts/cpp_check.py --preset linux-gcc-debug`；`--preset linux-gcc-release`；`--preset linux-clang-release` | 全部通过（各 ctest 3/3）；`cmake --list-presets` 恰列出 4 个 linux preset；根 CMakePresets.json 与 profile .in 生成结果逐字节一致（脚本比对） | 同上 |
+| tidy + ASan/UBSan | cpp_check.py --tidy --sanitizers | `python3 scripts/cpp_check.py --preset linux-clang-debug --tidy --sanitizers` | 通过（ctest 3/3，tidy 0 告警，ASan/UBSan 干净） | 同上 |
+| pty 冒烟 | tests/pty_tui_smoke.py / pty_cli_smoke.py | `python3 tests/pty_tui_smoke.py ./build/linux-gcc-debug/mini-agent`；`python3 tests/pty_cli_smoke.py ./build/linux-gcc-debug/mini-agent` | TUI 209 条断言全 PASS；CLI ALL PASS | 同上 |
+| 冷启动预算 | tools/cold_start_check.py | `python3 tools/cold_start_check.py ./build/linux-gcc-debug/mini-agent` | PASS（--version median 4.4ms；ask median 5.7ms；预算 100ms） | 共享机器测量，波动属正常 |
+| 非 Linux 拒绝反证 | test_non_linux_platform_is_rejected（mock platform） | 随 53 项模板回归执行 | 通过（mock Darwin/Windows 下 cpp_check 生成脚本在 argparse 前 exit 1） | 无 macOS 真机，拒绝路径靠 mock 锁定；CMake FATAL_ERROR 正路径本机无法触发（Linux 恒过），以代码审查 + 既有 Sanitizers 同款守卫先例为据 |
 
 ## 9. 实现偏差与已知限制
 
 - 无 macOS 真机：非 Linux 的 CMake FATAL_ERROR 与真实 AppleClang 行为未实测，靠 mock 平台测试与 configure 逻辑审查覆盖（如实标注，不声称已验证）。
+- §5.5 原列的「008 §非目标」标注实际不需要：`docs/decisions/008-git-tool-policy.md`（ADR）不含任何平台范围声明，其「006」引用指向 ADR 006（工具审批），与设计 006 同号不同文；故本轮未改动该文件。
 - 远端 CI 结果以推送后实际运行为准（push 留人工）。
 
 ## 最终核对
 
-- [ ] 接口、配置、路径与当前代码一致。
-- [ ] 已实现与规划内容清楚区分。
-- [ ] 外部来源、版本和实际采用内容可追溯。
-- [ ] 验证结果有证据，未执行事项如实标明。
-- [ ] 索引与架构总览按需更新。
+- [x] 接口、配置、路径与当前代码一致。
+- [x] 已实现与规划内容清楚区分。
+- [x] 外部来源、版本和实际采用内容可追溯。
+- [x] 验证结果有证据，未执行事项如实标明。
+- [x] 索引与架构总览按需更新。

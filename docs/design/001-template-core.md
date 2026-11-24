@@ -97,7 +97,7 @@ stop
 
 0.1 交付时提供 Windows/Linux、Python 3.11/3.13 的 CI 矩阵，本地实际运行环境是 Windows、Python 3.14.4，macOS 当时未实测。
 
-当前状态：CI 矩阵仅保留 Ubuntu × Python 3.11/3.13，Windows 支持已在 0.4 整体移除，见 [006：移除 Windows 支持](006-drop-windows-support.md)；macOS 已实测，见 [005：macOS 补做验证](005-macos-verification.md)。
+当前状态：CI 矩阵仅保留 Ubuntu × Python 3.11/3.13，Windows 支持已在 0.4 整体移除，见 [006：移除 Windows 支持](006-drop-windows-support.md)；macOS 已实测，见 [005：macOS 补做验证](005-macos-verification.md)。〔**0.5 更新**：macOS 支持已在 0.5 整体移除，目标平台仅 Linux，005 仅作历史记录，见 [024：移除 macOS 支持](024-drop-macos-support.md)。〕
 
 从模板创建项目后不自动同步更新，按模板版本显式迁移。对外发布前确认许可证及公司政策。回滚依靠用户备份或版本控制，模板不自动创建提交。
 

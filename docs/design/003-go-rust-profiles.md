@@ -59,4 +59,4 @@ PATH 检查没有找到 go、gofmt、cargo、rustc 或 rustup。本次没有安�
 
 ## 后续补做（2026-09-14）
 
-[005：macOS 补做验证记录](005-macos-verification.md) 已将 Go 从「未执行」改为真实验证通过：darwin/arm64 + go1.27.1 下 gofmt/vet/test/build 与 `--race` 均通过，检查前后源文件 md5 一致，未格式化输入的失败路径也已在真实工具链上复现。Rust 仍只完成 manifest/lock 结构与失败路径（缺 `Cargo.lock` 时在调用 cargo 前退出 1；无工具链时明确报错退出 1），其 fmt/Clippy/test/build 仍未执行。两者均不覆盖远端 CI。
+[005：macOS 补做验证记录](005-macos-verification.md) 已将 Go 从「未执行」改为真实验证通过：darwin/arm64 + go1.27.1 下 gofmt/vet/test/build 与 `--race` 均通过，检查前后源文件 md5 一致，未格式化输入的失败路径也已在真实工具链上复现。Rust 仍只完成 manifest/lock 结构与失败路径（缺 `Cargo.lock` 时在调用 cargo 前退出 1；无工具链时明确报错退出 1），其 fmt/Clippy/test/build 仍未执行。两者均不覆盖远端 CI。〔**0.5 历史标注**：macOS 已移出支持范围，本段仅作历史记录，见 [024：移除 macOS 支持](024-drop-macos-support.md)。〕

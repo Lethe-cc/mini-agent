@@ -41,4 +41,4 @@ GCC 明确使用 g++，Clang 明确使用 clang++。每种编译器和构建类�
 
 没有安装 Linux、WSL、编译器或依赖。真正的 Linux 四组合编译及 CTest 需在目标 Linux 或远端 CI 执行。
 
-2026-09-14 在 macOS arm64 上补做的验证已记入 [005：macOS 补做验证记录](005-macos-verification.md)：`dev`/`release` preset（AppleClang 21）完成真实编译与 CTest，`STARTER_WARNINGS_AS_ERRORS=ON` 干净构建，Sanitizers 与 clang-tidy 在缺少环境时按设计明确失败，并补充了 presets 平台可见性的具体观察。这些结果不改变上表：Linux GCC/Clang 四组合与远端 CI 仍未执行。
+2026-09-14 在 macOS arm64 上补做的验证已记入 [005：macOS 补做验证记录](005-macos-verification.md)：`dev`/`release` preset（AppleClang 21）完成真实编译与 CTest，`STARTER_WARNINGS_AS_ERRORS=ON` 干净构建，Sanitizers 与 clang-tidy 在缺少环境时按设计明确失败，并补充了 presets 平台可见性的具体观察。这些结果不改变上表：Linux GCC/Clang 四组合与远端 CI 仍未执行。〔**0.5 历史标注**：macOS 已移出支持范围，`dev`/`release` preset 已删除；Linux 四组合此后已在 mini-agent 仓库实测，见 [024：移除 macOS 支持](024-drop-macos-support.md)。〕

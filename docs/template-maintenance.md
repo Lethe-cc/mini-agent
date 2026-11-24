@@ -2,7 +2,7 @@
 
 ## 版本
 
-当前模板版本为 0.4.0，记录在 `project.json` 的 `template_version`。0.2 提供 C++/Python/TypeScript 配置，0.3 新增 Go/Rust；0.3.1 按使用者主要环境将 C++ 默认验证目标调整为 Linux GCC/Clang；0.4 移除全部 Windows 支持，目标平台收敛为 Linux 与 macOS（**破坏性变更**，见下文 0.4 节）。缺少 language 字段的 0.1 配置仍可读取为 generic。已有项目应在分支中比较并迁移，不重跑初始化。项目从模板创建后不会自动继承模板更新，不提供自动覆盖式同步。
+当前模板版本为 0.5.0，记录在 `project.json` 的 `template_version`。0.2 提供 C++/Python/TypeScript 配置，0.3 新增 Go/Rust；0.3.1 按使用者主要环境将 C++ 默认验证目标调整为 Linux GCC/Clang；0.4 移除全部 Windows 支持，目标平台收敛为 Linux 与 macOS（**破坏性变更**，见下文 0.4 节）；0.5 移除全部 macOS 支持，目标平台收敛为**仅 Linux**（**破坏性变更**，见下文 0.5 节）。缺少 language 字段的 0.1 配置仍可读取为 generic。已有项目应在分支中比较并迁移，不重跑初始化。项目从模板创建后不会自动继承模板更新，不提供自动覆盖式同步。
 
 升级建议：在独立分支比较版本变化，人工迁移规则和脚本，保留项目自己的上下文、参考、质量命令和设计。验证通过后再更新模板版本。后续有多项目需求时，可提取版本化工具包或共享 CI。
 
@@ -12,7 +12,7 @@
 2. 确认 `.gitignore`、许可证、第三方授权和公司数据政策。
 3. 发布前运行 doctor、基础检查及实际初始化试用。初始化试用应在临时副本中进行，保留发布模板的未初始化状态。
 4. 在代码平台启用模板功能。GitLab 配置随实例版本、权限与套餐不同，不假设本仓库自动完成平台设置。
-5. GitHub CI 默认测试 Ubuntu、Python 3.11/3.13。这个矩阵是待运行配置，不是已经通过的认证；自 0.4 起只覆盖 Linux，macOS 不在 CI 矩阵中。
+5. GitHub CI 默认测试 Ubuntu、Python 3.11/3.13。这个矩阵是待运行配置，不是已经通过的认证；自 0.4 起只覆盖 Linux；自 0.5 起 macOS 已整体移出支持范围，不只是不在 CI 矩阵中。
 6. 保护分支并设置必要的状态检查与人工审批；这些是平台设置，不会因复制模板自动启用。
 
 ## 当前安全与功能边界
@@ -59,11 +59,15 @@ C++ 实际构建在 0.2 时期因环境缺少编译器而未完成；TypeScript 
 
 ## 0.3.1 补做验证（macOS arm64，2026-09-14）
 
+〔**0.5 历史标注**：本节为历史记录，macOS 已移出支持范围（见 [024](design/024-drop-macos-support.md)），原文保留不改写。〕
+
 逐条记录见 [macOS 补做验证记录](design/005-macos-verification.md)。本轮在临时副本中完成：C++ AppleClang 21 的 Debug/Release 真实编译 + CTest + `-Werror` 干净构建 + clang-format 检查；Go 1.27.1 的 gofmt/vet/test/build、`--race`、源文件 md5 不变与未格式化文件的失败对照；Python 严格检查；Rust manifest/lock 结构、缺锁与缺工具链的失败路径；TypeScript 缺依赖的失败路径；工作流 YAML 结构；pi 0.84.4 入口自动发现与 `--no-context-files` 对照组。
 
 未因本轮而改变状态的项：Linux GCC/Clang 四组合与 Sanitizers 正路径（本机非 Linux、无容器）、clang-tidy 正路径（未安装）、Rust 真实构建（无工具链）、TypeScript 完整门禁（未安装依赖）、Python 3.11/3.13 本地矩阵、远端 CI（本目录不是 Git 仓库）。macOS 上 `/usr/bin/g++` 是 Apple clang 别名，不得当作 GCC 证据。
 
 ## 0.4 移除 Windows 支持，聚焦 Linux 与 macOS
+
+〔**0.5 历史标注**：本节为历史记录。「聚焦 Linux 与 macOS」的平台范围已被 0.5 进一步收敛为仅 Linux（见下文 0.5 节与 [024](design/024-drop-macos-support.md)），原文保留不改写。〕
 
 设计取舍、逐文件变更、破坏性迁移步骤与完整验证表见 [006：移除 Windows 支持](design/006-drop-windows-support.md)。
 
@@ -72,3 +76,11 @@ C++ 实际构建在 0.2 时期因环境缺少编译器而未完成；TypeScript 
 52 个工具测试通过（新增 4 项锁定平台收敛）。本轮在 macOS arm64 临时副本中完成了真实工具链验证：C++ `dev`/`release` 编译 + CTest + `-Werror` 标志核对 + clang-tidy 正路径（含「故意引入 `NULL` 违规被真实检出」反证）；**Rust 完整四步门禁首次跑通**（fmt → clippy `-D warnings` → test → build，含两组反证）；Go gofmt/vet/test/build 与 `--race`；Python 起步应用测试。仍未验证：Linux GCC/Clang 四组合与 Sanitizers 正路径、Rust 多工具链与 MSRV（无 `rustup`）、TypeScript 完整门禁（不联网装依赖）、Python 3.11/3.13 本地矩阵、远端 CI（仓库已配有远端但尚无提交）。macOS/clang 结果不得当作 Linux GCC 证据。
 
 模板自身历史设计见 [模板核心设计](design/001-template-core.md)。业务接入后的最终设计按 [交付流程](../workflows/finalize-design.md) 核对。
+
+## 0.5 移除 macOS 支持，仅支持 Linux
+
+设计取舍、逐文件变更、破坏性迁移步骤与完整验证表见 [024：移除 macOS 支持](design/024-drop-macos-support.md)。
+
+要点：目标平台收敛为**仅 Linux**。删除 C++ 的通用 `dev` / `release` presets（0.3.1 起为 macOS/AppleClang 保留的「当前默认编译器」入口）与 `cpp_check.py` 的非 Linux 默认回退；四个 `linux-*` preset 自含配置，均带 Linux host condition。非 Linux 平台双重拒绝：`cpp_check.py` 在解析参数前报错退出 1，CMake configure `FATAL_ERROR`。源码无平台分支，无需改动；CI 自 0.4 起已是 ubuntu-only，本轮零改动。这是**破坏性变更**，既有项目的 `CPP_PRESET=dev` / `release` 会被 argparse 直接拒绝（退出 2），迁移步骤见 024 第 7 节。
+
+53 个工具测试通过（平台收敛回归测试增至 5 项：非 Linux 拒绝、profile 无非 Linux 路径、生成 CI Linux-only、模板 CI Linux-only、仓库自身 C++ 配置 Linux-only）。本轮验证证据见 024 第 8 节；历史 macOS 验证记录（005 及 0.3.1/0.4 各节）保留原文并就地标注。

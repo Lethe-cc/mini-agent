@@ -8,18 +8,20 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 PRESETS = (
-    "dev", "release", "linux-gcc-debug", "linux-gcc-release",
+    "linux-gcc-debug", "linux-gcc-release",
     "linux-clang-debug", "linux-clang-release",
 )
 
 
 def default_preset():
-    if sys.platform.startswith("linux"):
-        return "linux-gcc-debug"
-    return "dev"
+    return "linux-gcc-debug"
 
 
 def main():
+    if not sys.platform.startswith("linux"):
+        print("ERROR: only Linux is supported "
+              "(see docs/design/024-drop-macos-support.md)", file=sys.stderr)
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preset", choices=PRESETS, default=os.environ.get(
         "CPP_PRESET", default_preset()

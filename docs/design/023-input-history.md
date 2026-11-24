@@ -114,7 +114,7 @@ bool append_slash_history(const std::filesystem::path& file, std::string_view li
 | 重启后召回持久化斜杠行 | 同上（batch 流 "023 slash history persists across restarts (Up recalls /model)" + `input_history` 内容/0600 断言） | 同上 | 通过 | — |
 | 会话切换保留斜杠召回 | 同上（"023 session switch keeps slash recall (Up lands on /context)"） | 同上 | 通过 | — |
 | 既有行为保持（普通召回、草稿驻留、菜单、session 消息数） | 既有 pty 断言全量 + `python3 tests/pty_cli_smoke.py ./build/linux-gcc-debug/mini-agent` | 同命令列 | 通过 | — |
-| 全量门禁（CI 同命令） | 四 preset build+ctest；clang-debug 加 tidy+ASan/UBSan；冷启动预算 | `python3 scripts/cpp_check.py --preset linux-gcc-debug` / `--preset linux-gcc-release` / `--preset linux-clang-debug --tidy --sanitizers` / `--preset linux-clang-release`；`python3 tools/cold_start_check.py ./build/linux-gcc-debug/mini-agent` | 全部通过（各 ctest 3/3；tidy 0 告警；ASan/UBSan 干净；冷启动 median 4.3/5.6ms < 100ms） | macOS 未验证（本机 Linux） |
+| 全量门禁（CI 同命令） | 四 preset build+ctest；clang-debug 加 tidy+ASan/UBSan；冷启动预算 | `python3 scripts/cpp_check.py --preset linux-gcc-debug` / `--preset linux-gcc-release` / `--preset linux-clang-debug --tidy --sanitizers` / `--preset linux-clang-release`；`python3 tools/cold_start_check.py ./build/linux-gcc-debug/mini-agent` | 全部通过（各 ctest 3/3；tidy 0 告警；ASan/UBSan 干净；冷启动 median 4.3/5.6ms < 100ms） | macOS 未验证（本机 Linux）〔0.5 起 macOS 已移出支持范围，此限制不再是缺口，见 [024](024-drop-macos-support.md)〕 |
 | `check.py` 统一入口 | `python3 scripts/check.py --fast` / `--strict-project` | 同命令列 | **2026-11-24 起全部通过**（baseline + 52/52 模板 unittest + 默认 preset build/ctest 3/3）。此前入口失败系 dev 既有问题：`docs/design/README.md` 021 行引用的 `021-mcp-full-client.md`、`../decisions/010-mcp-full-client-cxxmcp.md` 只存在于 `feature/cxxmcp`（`0730e4d`），索引行却随 `6c1b47b` 进入 main/dev；已在 HEAD 干净导出复现，与本变更无关。2026-11-24 将 dev 侧该行去链接并注明"随 feature/cxxmcp 交付"后入口恢复；合并该分支时以其索引行为准 | 合并 `feature/cxxmcp` 后本行注记应随其索引行一并被覆盖 |
 
 ## 9. 实现偏差与已知限制
@@ -128,5 +128,5 @@ bool append_slash_history(const std::filesystem::path& file, std::string_view li
 - [x] 接口、配置、路径与当前代码一致。
 - [x] 已实现与规划内容清楚区分（P3 明确标注未实现）。
 - [x] 外部来源、版本和实际采用内容可追溯（无新增外部来源）。
-- [x] 验证结果有证据，未执行事项如实标明（macOS 未验证；`check.py` 入口曾被 dev 既有缺失链接阻塞，2026-11-24 经索引行注记后恢复并全过，历史阻塞已如实留痕）。
+- [x] 验证结果有证据，未执行事项如实标明（macOS 未验证〔0.5 起已移出支持范围，见 [024](024-drop-macos-support.md)〕；`check.py` 入口曾被 dev 既有缺失链接阻塞，2026-11-24 经索引行注记后恢复并全过，历史阻塞已如实留痕）。
 - [x] 索引与架构总览按需更新（README 索引 + 007 规则 3 修订 + `docs/architecture.md` TUI 内部模块句补 `tui_history.cpp`）。

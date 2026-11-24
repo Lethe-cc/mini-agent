@@ -71,7 +71,7 @@ python3 scripts/go_check.py --race
 
 Race 检测按需启用，需要 Go 支持的目标平台、CGO 和相应 C 编译器。不要因为普通测试通过就声称已排除数据竞争。
 
-实测状态（命令与输出见 [补做验证记录](../design/005-macos-verification.md)）：2026-09-14 在 darwin/arm64 + go/go1.27.1 上，`scripts/go_check.py` 与 `--race` 全部通过，`go run ./cmd/starter` 输出项目名；检查前后 `go.mod` 与 `internal/project/*.go` 的 md5 一致（证明只报告不改写），全程 `GOPROXY=off`/`GOTOOLCHAIN=local` 未下载任何内容；故意加入未格式化文件时检查退出 1 且不改写该文件。上述结果已在 0.4（修改 `go_check.py` 注释与 CI 矩阵后）于同版本工具链上重跑确认，详见 [006：移除 Windows 支持](../design/006-drop-windows-support.md)。Linux race 以及 Go 1.23 最低版本兼容性仍未验证。
+实测状态〔**0.5 历史标注**：以下 darwin/arm64 结果为历史记录，macOS 已移出支持范围（见 [024](../design/024-drop-macos-support.md)），原文保留不改写〕（命令与输出见 [补做验证记录](../design/005-macos-verification.md)）：2026-09-14 在 darwin/arm64 + go/go1.27.1 上，`scripts/go_check.py` 与 `--race` 全部通过，`go run ./cmd/starter` 输出项目名；检查前后 `go.mod` 与 `internal/project/*.go` 的 md5 一致（证明只报告不改写），全程 `GOPROXY=off`/`GOTOOLCHAIN=local` 未下载任何内容；故意加入未格式化文件时检查退出 1 且不改写该文件。上述结果已在 0.4（修改 `go_check.py` 注释与 CI 矩阵后）于同版本工具链上重跑确认，详见 [006：移除 Windows 支持](../design/006-drop-windows-support.md)。Linux race 以及 Go 1.23 最低版本兼容性仍未验证。
 
 生成的项目 CI 在 Linux 上运行严格检查，并额外启用 race 检测。setup-go 使用 stable，工具安装是显式 CI 步骤，不是初始化脚本行为。团队需要可复现工具链时，将 stable 固定为已验证的具体补丁版本，并设计升级流程。当前矩阵不单独证明最低 Go 版本兼容性。
 

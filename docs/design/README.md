@@ -12,7 +12,7 @@
 | [004：Linux C++](004-linux-cpp.md) | 0.3.1 已实现；48 个工具测试及 CMake 解析通过，Linux 构建待验证 | GCC/Clang 明确选择、独立构建目录和四组合 CI |
 | [005：macOS 补做验证](005-macos-verification.md) | 已执行；真实 C++/Go/Python 构建与 pi 入口实测通过，Linux/Rust/TypeScript/远端 CI 仍待验证 | 在 macOS arm64 上补做 002/003/004 中标为未执行的项，逐条记录命令、结果与阻塞原因 |
 | [006：移除 Windows 支持](006-drop-windows-support.md) | 0.4 已实现；52 个工具测试通过，C++/Rust/Go/Python 在 macOS arm64 完成真实构建与反证；Linux 四组合、TypeScript 完整门禁、远端 CI 仍待验证 | 目标平台收敛为 Linux 与 macOS（0.5 起仅 Linux，见 024）；删除 Windows/MSVC presets、`if(MSVC)` 分支、Windows CI 矩阵与 `py -3`/PowerShell 示例；含破坏性迁移步骤 |
-| [024：移除 macOS 支持，仅支持 Linux](024-drop-macos-support.md) | 0.5 草案（2026-11-24，dev 分支） | 目标平台收敛为仅 Linux；删除 `dev`/`release` presets 与非 Linux 回退，`cpp_check.py` 与 CMake configure 双层拒绝非 Linux；macOS 历史验证记录（005/006 等）仅就地标注、不改写；`template_version` 0.4.0 → 0.5.0（破坏性，含迁移步骤） |
+| [024：移除 macOS 支持，仅支持 Linux](024-drop-macos-support.md) | 0.5 已实现（待人工评审；2026-11-24，dev 分支）；53 项工具测试（含 5 项 Linux-only 锁定）、Linux 四组合 + tidy/ASan/UBSan + pty 冒烟 + 冷启动全过；无 macOS 真机，拒绝路径靠 mock 反证 | 目标平台收敛为仅 Linux；删除 `dev`/`release` presets 与非 Linux 回退，`cpp_check.py` 与 CMake configure 双层拒绝非 Linux；macOS 历史验证记录（005/006 等）仅就地标注、不改写；`template_version` 0.4.0 → 0.5.0（破坏性，含迁移步骤） |
 
 业务功能设计：
 

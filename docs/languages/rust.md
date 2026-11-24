@@ -64,7 +64,7 @@ python3 scripts/rust_check.py --release
 
 同时设置 `CARGO_NET_OFFLINE=true` 和 `RUSTUP_AUTO_INSTALL=0`。缺少工具链、rustfmt/Clippy、链接器或依赖缓存时应失败，由使用者明确准备环境，不能让质量检查静默安装工具或更新锁文件。
 
-上述失败语义已于 2026-09-14 在 macOS 上实测：缺 `Cargo.lock` 时在调用 cargo 前退出 1；不存在静默跳过。`Cargo.toml`/`rustfmt.toml` 经 `tomllib` 解析确认与文档一致（edition 2024、`rust-version` 1.85、`publish = false`、`unsafe_code = "forbid"`、无外部依赖）。
+上述失败语义已于 2026-09-14 在 macOS 上实测〔**0.5 历史标注**：本节 2026-09-14 的 macOS/darwin 结果均为历史记录，macOS 已移出支持范围（见 [024](../design/024-drop-macos-support.md)），原文保留不改写〕：缺 `Cargo.lock` 时在调用 cargo 前退出 1；不存在静默跳过。`Cargo.toml`/`rustfmt.toml` 经 `tomllib` 解析确认与文档一致（edition 2024、`rust-version` 1.85、`publish = false`、`unsafe_code = "forbid"`、无外部依赖）。
 
 **test/build 已真实执行并通过**（2026-09-14，darwin/arm64 + cargo/rustc 1.98.1）：`cargo build --offline --locked --all-features --all-targets` 与 `--release` 均退出 0 并真实编译；`cargo test --offline --locked --all-features` 退出 0，库单元测试 1/1、CLI 集成测试 1/1、文档测试 1/1 全部通过。
 

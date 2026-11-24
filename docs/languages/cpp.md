@@ -5,7 +5,7 @@
 这是本模板重点支持的语言配置：C++17、CMake 3.23+、CTest，使用 target 级配置。默认无第三方 C++ 库或测试框架，避免初始化时联网和包管理器绑定。
 
 - 主要目标是 Linux + GCC/Clang：默认 Ninja + GCC Debug，另有显式 Clang 和 Release presets。
-- macOS 可使用 Ninja 与 AppleClang，但需要自行实测；模板不声称已认证。
+- 仅支持 Linux（0.5 起 macOS 已移出支持范围，见 [024](../design/024-drop-macos-support.md)）：非 Linux 平台 `cpp_check.py` 与 CMake configure 都会直接报错退出。
 - C++20/23、Qt、CUDA、ROS、嵌入式、交叉编译、公司工具链和 vcpkg/Conan 不默认启用，先确认项目约束。
 
 如果已有成熟的 Makefile、Bazel、Meson 或公司构建系统，优先沿用，不为了模板强行迁移到 CMake。
@@ -51,17 +51,15 @@ scripts/cpp_format.py
 
 | 命令 | 行为 |
 | --- | --- |
-| `python scripts/cpp_check.py` | Linux 默认 linux-gcc-debug；其他平台使用 dev |
+| `python scripts/cpp_check.py` | 默认 linux-gcc-debug；非 Linux 平台直接报错退出 |
 | `python scripts/cpp_check.py --preset linux-gcc-debug` | Linux Ninja + 显式 g++，Debug |
 | `python scripts/cpp_check.py --preset linux-gcc-release` | Linux Ninja + 显式 g++，Release |
 | `python scripts/cpp_check.py --preset linux-clang-debug` | Linux Ninja + 显式 clang++，Debug |
 | `python scripts/cpp_check.py --preset linux-clang-release` | Linux Ninja + 显式 clang++，Release |
-| `python scripts/cpp_check.py --preset dev` | Ninja Debug，需 compiler/Ninja 可用 |
-| `python scripts/cpp_check.py --preset release` | Ninja Release |
 
 这些脚本在模板 profile 源中以 `.in` 保存，选择 cpp 初始化后才出现在 `scripts/` 中。
 
-实测状态（逐条命令与输出见 [补做验证记录](../design/005-macos-verification.md)）：2026-09-14 在 macOS arm64 + AppleClang 21 + CMake 4.4.3 + Ninja 1.13.2 上，`dev` 与 `release` preset 均完成真实编译、链接与 CTest（各 1/1 通过），`-DSTARTER_WARNINGS_AS_ERRORS=ON` 下 6/6 干净构建，`cpp_format.py` 通过；`-DSTARTER_SANITIZERS=ON` 与 `-DSTARTER_CLANG_TIDY=ON` 在没有对应环境时按设计明确失败。Linux GCC/Clang 四组合、Sanitizers 与 clang-tidy 正路径仍**未验证**：macOS 的 `g++`、`gcc` 只是 Apple clang 别名，不能当作 GCC 证据。
+实测状态〔**0.5 历史标注**：以下为 0.4 前 macOS 历史记录，macOS 已移出支持范围且 `dev`/`release` preset 已删除（见 [024](../design/024-drop-macos-support.md)），原文保留不改写〕（逐条命令与输出见 [补做验证记录](../design/005-macos-verification.md)）：2026-09-14 在 macOS arm64 + AppleClang 21 + CMake 4.4.3 + Ninja 1.13.2 上，`dev` 与 `release` preset 均完成真实编译、链接与 CTest（各 1/1 通过），`-DSTARTER_WARNINGS_AS_ERRORS=ON` 下 6/6 干净构建，`cpp_format.py` 通过；`-DSTARTER_SANITIZERS=ON` 与 `-DSTARTER_CLANG_TIDY=ON` 在没有对应环境时按设计明确失败。macOS 的 `g++`、`gcc` 只是 Apple clang 别名，不能当作 GCC 证据。Linux 侧证据以本仓库 [README「mini-agent 业务验证」](../../README.md#mini-agent-业务验证) 与 [024 验证表](../design/024-drop-macos-support.md) 为准：GCC/Clang × Debug/Release 四 preset 已在 Linux（GCC 14.2 / Clang 19.1）实测通过，`--tidy --sanitizers` 正路径亦已实测。
 
 脚本依次 configure、build、CTest；前一步失败就停止，避免编译失败后继续运行旧测试。CTest 使用 `--no-tests=error`，不能以“找到零个测试”宣布通过。最小 C++ 测试不用 `assert`，避免 Release 下 `NDEBUG` 使检查失效。
 
@@ -75,7 +73,7 @@ done
 
 也可仅运行 `CPP_PRESET=linux-clang-debug python3 scripts/check.py --strict-project`。`CPP_PRESET` 是本次进程的选择，不改变全仓库配置；CLI 的 `--preset` 优先于环境变量。
 
-四个 Linux preset 各用独立 build 目录，明确选择 g++ 或 clang++，避免编译器缓存互相污染。它们只在 Linux 主机启用；保留的 dev/release 是使用当前默认编译器的通用 Ninja 配置，不等于双编译器已验证。
+四个 Linux preset 各用独立 build 目录，明确选择 g++ 或 clang++，避免编译器缓存互相污染。它们都带 Linux host condition，只在 Linux 主机启用；0.5 起已无其他平台的通用 preset（原 `dev`/`release` 已删除，见 [024](../design/024-drop-macos-support.md)）。
 
 生成的 C++ 项目 CI 使用 ubuntu-24.04，分别运行 GCC/Clang × Debug/Release 四项严格检查，并打印两个编译器版本。编译器依赖 runner 提供，尚未固定精确补丁版本；需完全可复现时使用经审查的固定工具链或镜像。
 
@@ -109,7 +107,7 @@ python3 scripts/cpp_check.py --preset linux-clang-debug --tidy
 
 增量编译可能不会重新分析未修改文件。需要完整分析时使用单独、干净的分析构建目录或经确认重建；不能把无编译动作的运行说成全量静态分析通过。默认配置不把 clang-tidy 的所有诊断升级为失败，团队需按规则配置 `WarningsAsErrors` 后才能作为严格静态分析门禁。
 
-实测状态（2026-09-14，macOS arm64 + clang-tidy 23.1.1 + Ninja + `dev` preset）：正路径已真实验证。`-DSTARTER_CLANG_TIDY=ON` 后 `CLANG_TIDY_EXECUTABLE` 确实写入 CMakeCache，干净重建的 verbose 日志中 clang-tidy 被调用 3 次；向源码故意加入 `const char* p = NULL;` 后，分析确实报出 `warning: use nullptr [modernize-use-nullptr]`，证明不是静默跳过。**但构建仍退出 0**，因为 `WarningsAsErrors` 为空——这印证了上一段：不配置 `WarningsAsErrors` 时 tidy 诊断不会使门禁失败，不得把退出 0 当成静态分析无问题。Linux GCC/Clang 下的 tidy 正路径仍未验证。
+实测状态〔**0.5 历史标注**：以下为 macOS 历史记录，macOS 已移出支持范围（见 [024](../design/024-drop-macos-support.md)），原文保留不改写〕（2026-09-14，macOS arm64 + clang-tidy 23.1.1 + Ninja + `dev` preset）：正路径已真实验证。`-DSTARTER_CLANG_TIDY=ON` 后 `CLANG_TIDY_EXECUTABLE` 确实写入 CMakeCache，干净重建的 verbose 日志中 clang-tidy 被调用 3 次；向源码故意加入 `const char* p = NULL;` 后，分析确实报出 `warning: use nullptr [modernize-use-nullptr]`，证明不是静默跳过。**但构建仍退出 0**，因为 `WarningsAsErrors` 为空——这印证了上一段：不配置 `WarningsAsErrors` 时 tidy 诊断不会使门禁失败，不得把退出 0 当成静态分析无问题。Linux 下的 tidy 正路径此后已在 mini-agent 仓库实测（Clang 19 + `linux-clang-debug`，见 [024 验证表](../design/024-drop-macos-support.md)）。
 
 ### Sanitizers（按需启用）
 

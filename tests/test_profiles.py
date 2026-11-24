@@ -192,7 +192,9 @@ class ProfileTests(unittest.TestCase):
         module = self.load_generated(
             "generated_cpp_check", self.root / "scripts/cpp_check.py"
         )
-        with patch.object(sys, "argv", ["cpp_check.py", "--preset", "dev"]):
+        with patch.object(
+            sys, "argv", ["cpp_check.py", "--preset", "linux-gcc-debug"]
+        ):
             with patch.object(
                 module.subprocess,
                 "run",
@@ -300,25 +302,27 @@ class ProfileTests(unittest.TestCase):
                 )
                 self.assertIn("--no-tests=error", run.call_args_list[-1].args[0])
 
-    def test_non_linux_default_preset_is_dev(self):
+    def test_non_linux_platform_is_rejected(self):
         module = self.generated_driver("cpp")
-        for platform in ("darwin", "freebsd14"):
+        for platform in ("darwin", "freebsd14", "win32"):
             with patch.object(module.sys, "platform", platform):
-                self.assertEqual(module.default_preset(), "dev", platform)
-        self.assertNotIn("windows-msvc", module.PRESETS)
+                with patch.object(
+                    sys, "argv", ["cpp_check.py", "--preset", "linux-gcc-debug"]
+                ):
+                    with patch.object(module.subprocess, "run") as run:
+                        self.assertEqual(module.main(), 1, platform)
+                        run.assert_not_called()
         self.assertEqual(
             sorted(module.PRESETS),
             [
-                "dev",
                 "linux-clang-debug",
                 "linux-clang-release",
                 "linux-gcc-debug",
                 "linux-gcc-release",
-                "release",
             ],
         )
 
-    def test_cpp_profile_has_no_windows_or_msvc_paths(self):
+    def test_cpp_profile_has_no_non_linux_paths(self):
         self.initialize("cpp")
         data = json.loads((self.root / "CMakePresets.json").read_text())
         names = {
@@ -326,9 +330,15 @@ class ProfileTests(unittest.TestCase):
             for section in ("configurePresets", "buildPresets", "testPresets")
             for item in data[section]
         }
-        self.assertEqual(len(names), 6)
+        self.assertEqual(len(names), 4)
+        self.assertNotIn("dev", names)
+        self.assertNotIn("release", names)
         self.assertFalse(
-            [name for name in names if "windows" in name or "msvc" in name]
+            [
+                name
+                for name in names
+                if any(word in name for word in ("windows", "msvc", "macos", "darwin", "apple"))
+            ]
         )
         raw = json.dumps(data)
         self.assertNotIn("Visual Studio", raw)
@@ -338,6 +348,48 @@ class ProfileTests(unittest.TestCase):
             self.assertNotIn("msvc", lowered, filename)
             self.assertNotIn("windows", lowered, filename)
             self.assertNotIn("/W4", source, filename)
+        self.assertIn(
+            'if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")',
+            (self.root / "CMakeLists.txt").read_text(),
+        )
+        self.assertIn(
+            'sys.platform.startswith("linux")',
+            (self.root / "scripts/cpp_check.py").read_text(),
+        )
+
+    def test_repository_cpp_config_is_linux_only(self):
+        data = json.loads((ROOT / "CMakePresets.json").read_text())
+        names = {
+            item["name"]
+            for section in ("configurePresets", "buildPresets", "testPresets")
+            for item in data[section]
+        }
+        self.assertEqual(
+            names,
+            {
+                "linux-gcc-debug",
+                "linux-gcc-release",
+                "linux-clang-debug",
+                "linux-clang-release",
+            },
+        )
+        presets = {item["name"]: item for item in data["configurePresets"]}
+        for family in ("gcc", "clang"):
+            debug = presets[f"linux-{family}-debug"]
+            self.assertNotIn("inherits", debug)
+            self.assertEqual(debug["generator"], "Ninja")
+            self.assertEqual(debug["condition"]["rhs"], "Linux")
+            self.assertEqual(
+                presets[f"linux-{family}-release"]["inherits"], debug["name"]
+            )
+        source = (ROOT / "scripts/cpp_check.py").read_text()
+        self.assertNotIn('"dev"', source)
+        self.assertNotIn('"release"', source)
+        self.assertIn('sys.platform.startswith("linux")', source)
+        self.assertIn(
+            'if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")',
+            (ROOT / "CMakeLists.txt").read_text(),
+        )
 
     def test_generated_ci_targets_linux_only(self):
         for language in ("cpp", "python", "typescript", "go", "rust"):

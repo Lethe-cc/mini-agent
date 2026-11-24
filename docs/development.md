@@ -39,7 +39,7 @@
 
 | 依赖 | 最低版本 | Debian/Ubuntu | Fedora/RHEL | Arch | 用途 |
 | --- | --- | --- | --- | --- | --- |
-| GCC 或 Clang | C++17（GCC 7+/Clang 5+；实测 GCC 14、AppleClang 21） | `g++` | `gcc-c++` | `gcc` | 编译器 |
+| GCC 或 Clang | C++17（GCC 7+/Clang 5+；实测 GCC 14、Clang 19。AppleClang 21 为 0.4 前 macOS 历史记录，0.5 起仅支持 Linux，见 [024](design/024-drop-macos-support.md)） | `g++` | `gcc-c++` | `gcc` | 编译器 |
 | CMake | 3.23 | `cmake` | `cmake` | `cmake` | 构建配置（presets） |
 | Ninja | 任意 | `ninja-build` | `ninja-build` | `ninja` | 生成器（全部 preset 使用 Ninja） |
 | libcurl 开发包 | 任意 HTTPS 构建 | `libcurl4-openssl-dev` | `libcurl-devel` | `libcurl` | 唯一链接的外部库（`find_package(CURL REQUIRED)`） |

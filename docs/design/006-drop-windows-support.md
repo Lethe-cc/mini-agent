@@ -9,6 +9,7 @@
 - 代码修订：当前本地文件；仓库已初始化并配有远端，但尚无提交。
 - 人工评审：无评审通过记录。
 - 本文更新 [001](001-template-core.md)、[002](002-language-profiles.md)、[003](003-go-rust-profiles.md)、[004](004-linux-cpp.md) 中描述平台范围与 C++ preset 的段落，并在 [005](005-macos-verification.md) 中标注其阻塞项的最新状态；不改写这些文档中「当时实际执行了什么」的验证记录。
+- 〔**0.5 历史标注**：本文的平台范围「Linux 与 macOS」已被 0.5 进一步收敛为仅 Linux；`dev`/`release` preset 与其 macOS 验证记录仅作历史证据，见 [024：移除 macOS 支持](024-drop-macos-support.md)。〕
 
 ## 1. 背景与目标
 

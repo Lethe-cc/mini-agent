@@ -37,7 +37,7 @@ python3 scripts/check.py --strict-project
 
 任一步失败就停止，避免测试旧构建产物。脚本调用当前 Node 可执行文件，不依赖平台特定的 npm/cmd 包装器，因此统一质量命令在不同系统上更明确。
 
-失败路径已实测（2026-09-14，Node v24.21.0）：未安装 `typescript@5.7.3` 时 `node scripts/ts_check.mjs` 在第一步以 `MODULE_NOT_FOUND` 退出 1，不会回退到全局编译器或假定通过。类型检查、构建与应用测试仍未执行：需先审查依赖、完成安装并生成 lockfile，见 [补做验证记录](../design/005-macos-verification.md)。
+失败路径已实测（2026-09-14，Node v24.21.0；当时环境为 macOS，属历史记录，macOS 已移出支持范围，见 [024](../design/024-drop-macos-support.md)）：未安装 `typescript@5.7.3` 时 `node scripts/ts_check.mjs` 在第一步以 `MODULE_NOT_FOUND` 退出 1，不会回退到全局编译器或假定通过。类型检查、构建与应用测试仍未执行：需先审查依赖、完成安装并生成 lockfile，见 [补做验证记录](../design/005-macos-verification.md)。
 
 当前没有默认 ESLint、Prettier、浏览器测试或完整前端构建。添加框架后需要配置相应依赖、脚本和 CI，不把本配置当成已完成的前端工程。
 

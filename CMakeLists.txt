@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.23)
 project(mini-agent VERSION 0.8.0 LANGUAGES C CXX)
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "mini-agent supports Linux only; see docs/design/024-drop-macos-support.md")
+endif()
+
 # Default `cmake --install` prefix: ~/.local, so the binary lands in
 # ~/.local/bin (commonly already on PATH). An explicit -DCMAKE_INSTALL_PREFIX
 # (or a preset cache entry) always wins; CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT is

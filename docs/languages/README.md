@@ -22,7 +22,7 @@ python3 scripts/init_project.py --name my-cpp-project --description "项目目�
 python3 scripts/init_project.py --name my-cpp-project --description "项目目标" --language cpp
 ```
 
-这里优先展示主要目标 Linux 的操作；macOS 用户请使用 `python3`。
+这里优先展示主要目标 Linux 的操作；模板仅支持 Linux（0.5 起 macOS 已移出支持范围，见 [024](../design/024-drop-macos-support.md)），命令统一使用 `python3`。
 
 Go 或 Rust 将命令中的 `--language cpp` 改为 `--language go` 或 `--language rust`；请在不同的新项目副本中分别初始化。
 

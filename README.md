@@ -2,7 +2,7 @@
 
 一套技术栈中立的项目起点：**参考资料 → 需求与设计 → AI 开发 → 验证 → 最终设计文档**。
 
-不绑定业务框架，不提供自动联网抓取、向量数据库或自治执行器。Python 3.11+ 用于模板工具（支持 Linux 与 macOS），无第三方 Python 依赖。支持可选 C++、Python、TypeScript、Go 和 Rust 起步配置，未选择时仍保持技术栈中立。
+不绑定业务框架，不提供自动联网抓取、向量数据库或自治执行器。Python 3.11+ 用于模板工具（仅支持 Linux），无第三方 Python 依赖。支持可选 C++、Python、TypeScript、Go 和 Rust 起步配置，未选择时仍保持技术栈中立。
 
 ## mini-agent 项目
 
@@ -86,7 +86,7 @@ cmake --install build/linux-gcc-debug        # 默认前缀 ~/.local → ~/.loca
 
 ## 按语言创建项目
 
-本模板面向 **Linux 和 macOS**，不提供 Windows 支持。
+本模板仅面向 **Linux**，不提供 Windows 与 macOS 支持（macOS 支持已于 0.5 移除，见 [设计 024](docs/design/024-drop-macos-support.md)）。
 
 主要面向 Linux + GCC/Clang 的 C++ 项目可直接使用：
 
@@ -97,7 +97,7 @@ python3 scripts/check.py --strict-project
 CPP_PRESET=linux-clang-debug python3 scripts/check.py --strict-project
 ```
 
-第三步在 Linux 上默认使用 linux-gcc-debug，在 macOS 上回退到通用 `dev` preset（Ninja + 当前默认编译器，实测为 AppleClang）。最后一步的 `linux-clang-debug` 有 Linux host condition，**只能在 Linux 上运行**；两个 Linux preset 家族共覆盖 GCC/Clang × Debug/Release 四种组合，项目 CI 跑完这四组合。macOS 上验证 Clang 请使用 `--preset dev` 或 `release`，不要把 AppleClang 结果当成 GCC 证据。初始化不安装任何依赖。
+第三步使用 linux-gcc-debug；`CPP_PRESET` 可选 `linux-gcc-debug`、`linux-gcc-release`、`linux-clang-debug`、`linux-clang-release`，共覆盖 GCC/Clang × Debug/Release 四种组合，项目 CI 跑完这四组合。所有 preset 均带 Linux host condition，只能在 Linux 上运行；在非 Linux 平台 `scripts/cpp_check.py` 与 CMake configure 都会直接报错退出。初始化不安装任何依赖。
 
 - [C++](docs/languages/cpp.md)：Linux GCC/Clang 优先，C++17、CMake/CTest、四组合 CI、告警、可选 clang-format/clang-tidy/sanitizers。
 - [Python](docs/languages/python.md)：`--language python`，标准库应用、unittest、pyproject。
@@ -174,7 +174,7 @@ python scripts/check.py --require-initialized
 - `CLAUDE.md`：引导读取统一规则。
 - `.github/copilot-instructions.md`：仓库级薄适配，需要相应客户端启用指令支持。
 
-以上是入口文件，不是已验证的多工具兼容性保证。不支持这些入口的工具可通过会话提示显式加载。每个新工具须完成启动验收，不能仅凭文件存在判断生效。当前已在 pi 0.84.4 上实测通过（含禁用上下文文件的对照组），其他客户端仍需各自验收：[记录](docs/design/005-macos-verification.md#已执行结果)。
+以上是入口文件，不是已验证的多工具兼容性保证。不支持这些入口的工具可通过会话提示显式加载。每个新工具须完成启动验收，不能仅凭文件存在判断生效。当前已在 pi 0.84.4 上实测通过（含禁用上下文文件的对照组；当时环境为 macOS，属历史记录，macOS 已移出支持范围，见 [024](docs/design/024-drop-macos-support.md)），其他客户端仍需各自验收：[记录](docs/design/005-macos-verification.md#已执行结果)。
 
 ## 质量与安全边界
 
@@ -204,7 +204,9 @@ python scripts/check.py --require-initialized
 
 ### 模板工具层验证（历史记录）
 
-当前 0.4.0 已通过 **52 个工具测试**（含 4 项锁定平台收敛的回归测试）、Go/Rust 临时项目的初始化配置检查，以及 C++ 临时项目配置和 CMake presets 解析检查。0.4 删除了全部 Windows/MSVC 配置与 CI 矩阵，变更范围、破坏性影响与迁移步骤见 [006：移除 Windows 支持](docs/design/006-drop-windows-support.md)。
+当前 0.5.0 已通过 **53 个工具测试**（含 5 项锁定 Linux-only 平台收敛的回归测试）、Go/Rust 临时项目的初始化配置检查，以及 C++ 临时项目配置和 CMake presets 解析检查。0.5 删除了全部 macOS 回退路径（`dev`/`release` preset、非 Linux 默认回退），非 Linux 平台由 `cpp_check.py` 与 CMake configure 双重拒绝；变更范围、破坏性影响与迁移步骤见 [024：移除 macOS 支持](docs/design/024-drop-macos-support.md)。0.4 删除了全部 Windows/MSVC 配置与 CI 矩阵，见 [006：移除 Windows 支持](docs/design/006-drop-windows-support.md)。
+
+〔**0.5 历史标注**：以下 2026-09-14 的 macOS 验证叙述及其后的「仍未验证」清单为历史记录，macOS 已移出支持范围（见 [024](docs/design/024-drop-macos-support.md)），原文与既有 2026-11-10 标注保留不改写。〕
 
 2026-09-14 在一台 macOS arm64 上补做了真实工具链验证（命令与结果见 [005：macOS 补做验证记录](docs/design/005-macos-verification.md)）：C++ 在 AppleClang 21 下 Debug/Release 均完成编译并通过 CTest 与 `-Werror` 干净构建；Go 1.27.1 完成 gofmt/vet/test/build 与 `--race`；Python 与 Rust 配置结构、Rust/TypeScript 失败路径已实测；pi 0.84.4 完成 `AGENTS.md` 自动发现验收（含 `--no-context-files` 对照组）。
 

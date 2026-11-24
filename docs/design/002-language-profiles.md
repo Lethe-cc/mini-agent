@@ -73,7 +73,7 @@
 
 本地曾运行包含真实 C++ 构建尝试的验证，因缺少 VS 2022 和初版格式问题返回失败。格式修复后，复查显式跳过已确认环境阻塞的编译阶段；该次复查退出成功只适用于实际执行的检查，不改变 C++ 构建未验证的状态。
 
-2026-09-14 上表中的部分「未执行」已在 macOS arm64 上补做，逐条证据见 [005：macOS 补做验证记录](005-macos-verification.md)：C++ 在 AppleClang 21 下完成 Debug/Release 真实编译与 CTest（不等于 Windows/MSVC 或 Linux 通过）；Python 严格检查在 Python 3.12 下重跑通过；TypeScript 仍只验证了缺依赖时的失败路径；clang-tidy、Sanitizers 正路径与远端 CI 仍未执行。本节不把旧记录当作新证据。
+2026-09-14 上表中的部分「未执行」已在 macOS arm64 上补做，逐条证据见 [005：macOS 补做验证记录](005-macos-verification.md)：C++ 在 AppleClang 21 下完成 Debug/Release 真实编译与 CTest（不等于 Windows/MSVC 或 Linux 通过）；Python 严格检查在 Python 3.12 下重跑通过；TypeScript 仍只验证了缺依赖时的失败路径；clang-tidy、Sanitizers 正路径与远端 CI 仍未执行。本节不把旧记录当作新证据。〔**0.5 历史标注**：macOS 已移出支持范围，本段仅作历史记录，见 [024：移除 macOS 支持](024-drop-macos-support.md)。〕
 
 ## 已知限制与后续
 
