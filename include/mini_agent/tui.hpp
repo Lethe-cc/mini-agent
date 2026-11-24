@@ -37,7 +37,7 @@ std::vector<std::string> slash_completion_hint(std::string_view composer,
                                                const std::vector<std::string>& provider_names = {},
                                                const std::vector<std::string>& model_choices = {});
 
-// Input history (design 022): ↑/↓ recalls slash lines too, sanitized.
+// Input history (design 023): ↑/↓ recalls slash lines too, sanitized.
 // Returns the line to record, or nullopt for lines that must not be
 // recorded (/exit, empty). /login inline keys are stripped before the
 // line ever reaches memory history or disk (007 §5.6 rule 7).

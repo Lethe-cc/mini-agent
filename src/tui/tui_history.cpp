@@ -1,4 +1,4 @@
-// Input-history sanitizing + slash-line persistence (design 022). Split
+// Input-history sanitizing + slash-line persistence (design 023). Split
 // from tui_render.cpp's pure helpers because append/load touch the disk;
 // sanitize_history_line itself stays pure and mirrors the /login argument
 // parsing in tui_slash.hpp (012 §5.2): first token naming a configured

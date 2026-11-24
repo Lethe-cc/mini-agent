@@ -318,7 +318,7 @@ def main():
                MINI_AGENT_BASE_URL=f"http://127.0.0.1:{PORT}/v1",
                MINI_AGENT_API_KEY="pty-smoke-key",
                MINI_AGENT_MODEL="smoke",
-               # Nested so the design-022 input_history file (session root's
+               # Nested so the design-023 input_history file (session root's
                # parent) lands inside this test's own root, not shared /tmp.
                MINI_AGENT_SESSION_DIR=session_dir + "/sess",
                # Isolate the /provider config write: without this the slash
@@ -406,7 +406,7 @@ def main():
     expect("mini-agent v" in ver_out and "commit " in ver_out and "built " in ver_out,
            "/version reports version + commit + build time")
 
-    # Design 022: settings commands join the ↑/↓ history. /context runs once,
+    # Design 023: settings commands join the ↑/↓ history. /context runs once,
     # Up recalls it, Enter re-runs it -- no chat turn, so the message-count
     # assertion at the end stays exact.
     os.write(fd, b"/context\r")
@@ -416,8 +416,8 @@ def main():
     os.write(fd, b"\x1b[A\r")
     ctx_again = strip_csi(read_all(fd, 1.0))
     expect("context_window=" in ctx_again,
-           "022 Up recalls the settings command and resends it")
-    expect("You: /context" not in ctx_again, "022 recalled slash resend stays out of chat")
+           "023 Up recalls the settings command and resends it")
+    expect("You: /context" not in ctx_again, "023 recalled slash resend stays out of chat")
 
     # Typing "/" surfaces the Tab-completion hint as a vertical list: a
     # header row, then one row per match (2026-11-01 follow-up).
@@ -497,7 +497,7 @@ def main():
     expect("login verified" in bad and "login REJECTED" not in bad,
            "env keeps the effective key: a profile-only edit cannot reject it")
 
-    # Design 022: the inline-key form is recalled sanitized -- Up shows the
+    # Design 023: the inline-key form is recalled sanitized -- Up shows the
     # bare command, never the key. The caret sits at line end (cursor cell),
     # so match the whole composer row: marker glyph + " /login". Hint rows
     # are indented two spaces and never equal this. Clear afterwards so the
@@ -506,8 +506,8 @@ def main():
     login_recall = strip_csi(read_all(fd, 0.6))
     expect(any(ln.rstrip() in ("? /login", "> /login", "! /login", "x /login")
                for ln in login_recall.splitlines()),
-           "022 Up recalls /login without the key argument")
-    expect("wrong-key" not in login_recall, "022 recalled login never echoes the key")
+           "023 Up recalls /login without the key argument")
+    expect("wrong-key" not in login_recall, "023 recalled login never echoes the key")
     os.write(fd, b"\x7f" * 6)
     read_all(fd, 0.3)
 
@@ -688,20 +688,20 @@ def main():
            "log records the chat turn that verified the key")
     expect("wrong-key" not in log_written, "the rejected key value never reaches the log")
 
-    # Design 022 P2: slash lines persist beside the session root (parent of
+    # Design 023 P2: slash lines persist beside the session root (parent of
     # sess/), sanitized, 0600. Chat lines stay session-scoped, never here.
     hist_file = session_dir + "/input_history"
     hist_text = open(hist_file).read() if os.path.exists(hist_file) else ""
     hist_lines = hist_text.splitlines()
     expect("/help" in hist_lines and "/version" in hist_lines
            and "/context" in hist_lines and "/login" in hist_lines,
-           "022 settings commands persisted to input_history")
+           "023 settings commands persisted to input_history")
     expect("wrong-key" not in hist_text and "/exit" not in hist_lines
            and "hello" not in hist_lines,
-           "022 history file holds no key, no /exit, no chat lines")
+           "023 history file holds no key, no /exit, no chat lines")
     expect(os.path.exists(hist_file)
            and (os.stat(hist_file).st_mode & 0o777) == 0o600,
-           "022 input_history file mode is 0600")
+           "023 input_history file mode is 0600")
 
     files = glob.glob(f"{session_dir}/sess/*.json")
     expect(len(files) == 1, "one session persisted")
@@ -864,7 +864,7 @@ def main():
     line_dir = "/tmp/mini_agent_pty_smoke_line"
     subprocess.run(["rm", "-rf", line_dir], check=False)
     os.makedirs(line_dir)
-    # Nested like the TUI flows: design-022 input_history lives beside the
+    # Nested like the TUI flows: design-023 input_history lives beside the
     # session root, so a flat root would share /tmp/input_history across tests.
     line_env = dict(env, MINI_AGENT_SESSION_DIR=line_dir + "/sess")
     proc = subprocess.run([binary, "run", "--new"], input="hi\n/exit\nlate\n",
@@ -984,33 +984,33 @@ def main():
     expect("config 3/3 · ready" in strip_csi(out3), "batched: /model completes the config")
     expect("You: hi" in strip_csi(out3), "batched: chat works after split entry")
 
-    # Design 022 P2: slash lines survive process restarts. A fresh `run --new`
+    # Design 023 P2: slash lines survive process restarts. A fresh `run --new`
     # (empty chat) must still recall the last settings command from the file;
     # resending it re-runs the selection, and adjacent dedup keeps the file
     # unchanged.
     _, recall_out = batch_session(b"\x1b[A\r")
     expect("model=default/mock-large" in strip_csi(recall_out),
-           "022 slash history persists across restarts (Up recalls /model)")
+           "023 slash history persists across restarts (Up recalls /model)")
 
     hist_file = batch_root + "/input_history"
     hist_text = open(hist_file).read() if os.path.exists(hist_file) else ""
     expect(hist_text.splitlines() == ["/session new",
                                       f"/provider http://127.0.0.1:{PORT}/v1",
                                       "/login", "/model mock-large"],
-           "022 batch history file holds sanitized slash lines only")
+           "023 batch history file holds sanitized slash lines only")
     expect("batch-key" not in hist_text and "hi" not in hist_text.splitlines(),
-           "022 batch history never stores the key or chat lines")
+           "023 batch history never stores the key or chat lines")
     expect(os.path.exists(hist_file)
            and (os.stat(hist_file).st_mode & 0o777) == 0o600,
-           "022 batch input_history file mode is 0600")
+           "023 batch input_history file mode is 0600")
 
-    # Design 022: /session switch re-seeds chat history but keeps the slash
+    # Design 023: /session switch re-seeds chat history but keeps the slash
     # recall (UI-level, matches the persisted file). Up twice walks past the
     # just-recorded "/session new" onto "/context" in the composer.
     switch_out = strip_csi(bare_session(b"/context\r/session new\r\x1b[A\x1b[A"))
     expect("[ok] new session" in switch_out
            and any(ln.rstrip().endswith(" /context") for ln in switch_out.splitlines()),
-           "022 session switch keeps slash recall (Up lands on /context)")
+           "023 session switch keeps slash recall (Up lands on /context)")
 
     batched_cfg = json.load(open(batch_env["MINI_AGENT_CONFIG"]))
     # v7 (design 013): the three pieces accumulate in the auto-created

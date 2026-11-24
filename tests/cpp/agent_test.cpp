@@ -3428,7 +3428,7 @@ void test_context_017() {
 
 // 018 (design 018 §4.1): preview pane geometry pure helpers.
 void test_input_history() {
-    // Design 022: sanitized unified ↑/↓ history + slash-line persistence.
+    // Design 023: sanitized unified ↑/↓ history + slash-line persistence.
     using mini_agent::tui::append_slash_history;
     using mini_agent::tui::input_history_path;
     using mini_agent::tui::load_slash_history;

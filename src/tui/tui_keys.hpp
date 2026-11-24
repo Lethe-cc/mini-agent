@@ -356,7 +356,7 @@ LoopCtl dispatch_input_impl(Ctx& S, const char* buf, ssize_t n) {
                     if (line.empty()) {
                         // menu selection consumed the input
                     } else {
-                        // Unified history (design 022): slash lines are
+                        // Unified history (design 023): slash lines are
                         // recorded too, sanitized (/login keys stripped,
                         // /exit dropped); slash lines also persist across
                         // restarts. Queued lines record now, same as before;

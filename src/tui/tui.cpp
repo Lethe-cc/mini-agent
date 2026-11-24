@@ -95,9 +95,9 @@ int run_loop(AppConfig& config, Session& session, SessionStore& store, const Tui
     for (const auto& m : session.chat.messages())
         if (m.role == Role::User && !m.content.empty() && m.content.front() != '/')
             history.push_back(m.content);
-    // Design 022 (P2): persisted sanitized slash lines join recall after
+    // Design 023 (P2): persisted sanitized slash lines join recall after
     // the chat seed (exact interleaving with old chat lines is not
-    // recoverable; time-order approximation documented in 022 §4).
+    // recoverable; time-order approximation documented in 023 §4).
     {
         std::vector<std::string> names;
         names.reserve(config.providers.size());

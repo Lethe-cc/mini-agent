@@ -577,7 +577,7 @@ bool handle_slash_impl(Ctx& S, std::string_view line) {
             S.config_snapshot = S.config; // worker turn snapshot refresh (same as /cwd)
             S.reset_usage_readings();   // usage belongs to the new session
             // Re-seed ↑/↓ history from the new chat (same rule as launch).
-            // Design 022: slash recall is UI-level, not session-scoped --
+            // Design 023: slash recall is UI-level, not session-scoped --
             // keep the sanitized slash lines across the switch (matches
             // the persisted file; no rewrite needed).
             std::vector<std::string> slash_recall;
