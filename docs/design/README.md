@@ -11,7 +11,8 @@
 | [003：Go/Rust](003-go-rust-profiles.md) | 0.3 工具回归测试通过；实际工具链限制见记录 | Go/Rust 骨架、语言规范、离线质量命令和项目 CI |
 | [004：Linux C++](004-linux-cpp.md) | 0.3.1 已实现；48 个工具测试及 CMake 解析通过，Linux 构建待验证 | GCC/Clang 明确选择、独立构建目录和四组合 CI |
 | [005：macOS 补做验证](005-macos-verification.md) | 已执行；真实 C++/Go/Python 构建与 pi 入口实测通过，Linux/Rust/TypeScript/远端 CI 仍待验证 | 在 macOS arm64 上补做 002/003/004 中标为未执行的项，逐条记录命令、结果与阻塞原因 |
-| [006：移除 Windows 支持](006-drop-windows-support.md) | 0.4 已实现；52 个工具测试通过，C++/Rust/Go/Python 在 macOS arm64 完成真实构建与反证；Linux 四组合、TypeScript 完整门禁、远端 CI 仍待验证 | 目标平台收敛为 Linux 与 macOS；删除 Windows/MSVC presets、`if(MSVC)` 分支、Windows CI 矩阵与 `py -3`/PowerShell 示例；含破坏性迁移步骤 |
+| [006：移除 Windows 支持](006-drop-windows-support.md) | 0.4 已实现；52 个工具测试通过，C++/Rust/Go/Python 在 macOS arm64 完成真实构建与反证；Linux 四组合、TypeScript 完整门禁、远端 CI 仍待验证 | 目标平台收敛为 Linux 与 macOS（0.5 起仅 Linux，见 024）；删除 Windows/MSVC presets、`if(MSVC)` 分支、Windows CI 矩阵与 `py -3`/PowerShell 示例；含破坏性迁移步骤 |
+| [024：移除 macOS 支持，仅支持 Linux](024-drop-macos-support.md) | 0.5 草案（2026-11-24，dev 分支） | 目标平台收敛为仅 Linux；删除 `dev`/`release` presets 与非 Linux 回退，`cpp_check.py` 与 CMake configure 双层拒绝非 Linux；macOS 历史验证记录（005/006 等）仅就地标注、不改写；`template_version` 0.4.0 → 0.5.0（破坏性，含迁移步骤） |
 
 业务功能设计：
 
@@ -35,6 +36,8 @@
 | [023：TUI 输入历史统一与斜杠命令持久化（P1+P2）](023-input-history.md) | 已实现（2026-11-23 实现、2026-11-24 因编号冲突自 022 改号为 023，dev 分支）；待人工评审 | ↑/↓ 统一收录脱敏斜杠行（`/login` key 剥离、`/exit` 不记录），会话切换保留；斜杠行持久化 `input_history`（session 根父目录，0600、cap 200、原子写）跨重启召回；修订 007 §5.6 规则 3；P3 前缀过滤召回明确不做；验证见其 §8（四 preset + tidy/ASan/UBSan + pty 全过；编号 022 已由 `feature/cxxmcp` 的 M2 能力设计占用） |
 
 0.4 将目标平台收敛为 Linux 与 macOS，删除了全部 Windows/MSVC 配置、命令示例与 CI 矩阵；取舍、迁移步骤与完整验证表见 [006](006-drop-windows-support.md)。上表 001–005 中保留的 Windows 相关文字属于当时的真实验证记录，**不代表当前仍支持该平台**；其中描述*当前配置*的段落已就地标注 0.4 变更并回链 006。[005](005-macos-verification.md) 中标为未执行的 Rust 完整门禁与 clang-tidy 正路径，已在 0.4 轮真实跑通并附反证，详见 006 第 8 节。
+
+0.5 进一步将目标平台收敛为**仅 Linux**（**破坏性变更**）：`dev`/`release` preset 与非 Linux 回退已移除，非 Linux 主机在门禁脚本与 CMake configure 两层明确拒绝；取舍、迁移步骤与验证表见 [024](024-drop-macos-support.md)。005/006 及各语言文档中保留的 macOS 相关文字属于当时的真实验证记录，**不代表当前仍支持该平台**；其中描述*当前配置*的段落已就地标注 0.5 变更并回链 024。
 
 新增业务设计时复制 [设计模板](../../templates/design.md)，使用稳定编号和功能名称命名，并在这里登记标题、状态和关联任务。
 
